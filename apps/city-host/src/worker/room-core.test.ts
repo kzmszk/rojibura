@@ -259,3 +259,49 @@ describe("conversation", () => {
 		expect(last(h)).toMatchObject({ t: "NOTICE", kind: "rate_limited" });
 	});
 });
+
+describe("moderation", () => {
+	test("muted speakers are not heard; blocks stop addressing and hide from AI context", () => {
+		const a = conn("a");
+		const b = conn("b");
+		const bot = conn("bot");
+		ctx.room.join(a, human("alice"));
+		ctx.room.join(b, human("bob"));
+		ctx.room.join(bot, ai("mina", "kazu"));
+		ctx.room.setRelations("h_alice", { mutes: ["h_bob"], blocks: ["a_mina"], blockedBy: [] });
+		ctx.room.setRelations("a_mina", { mutes: [], blocks: [], blockedBy: ["h_alice"] });
+		a.inbox.length = 0;
+		ctx.room.handle(b, { t: "SAY", text: "聞こえる？" });
+		expect(a.inbox.some((m) => m.t === "SAID")).toBe(false);
+		// the blocked AI cannot address alice, and alice does not show up in its context
+		ctx.room.handle(bot, { t: "SAY", text: "こんにちは", to: "h_alice" });
+		expect(last(bot)).toMatchObject({ t: "NOTICE", kind: "rejected" });
+		ctx.room.handle(b, { t: "SAY", text: "ミナ、だれがいる？", to: "a_mina" });
+		const addressed = bot.inbox.find((m) => m.t === "ADDRESSED");
+		if (addressed?.t !== "ADDRESSED") throw new Error();
+		expect(addressed.context.nearbyAvatars.map((x) => x.id)).not.toContain("h_alice");
+		// unmute through updateRelation
+		ctx.room.updateRelation("h_alice", "h_bob", "mute", false);
+		ctx.clock.advance(1100);
+		ctx.room.handle(b, { t: "SAY", text: "今度は？" });
+		expect(last(a)).toMatchObject({ t: "SAID", text: "今度は？" });
+	});
+
+	test("moderator mute, kick and the chat excerpt", () => {
+		const a = conn("a");
+		const b = conn("b");
+		ctx.room.join(a, human("alice"));
+		ctx.room.join(b, human("bob"));
+		ctx.room.handle(b, { t: "SAY", text: "ひどい発言" });
+		ctx.clock.advance(1000);
+		ctx.room.handle(a, { t: "SAY", text: "やめて", to: "h_bob" });
+		expect(ctx.room.excerpt("h_bob", 5 * 60_000).map((l) => l.text)).toEqual(["ひどい発言", "やめて"]);
+		expect(ctx.room.muteFor("h_bob", ctx.clock.now() + 60_000)).toBe(true);
+		ctx.clock.advance(1100);
+		ctx.room.handle(b, { t: "SAY", text: "まだ言う" });
+		expect(last(b)).toMatchObject({ t: "NOTICE", kind: "muted_by_moderator" });
+		expect(ctx.room.kick("h_bob")).toBe(true);
+		expect(b.closed).toBe(4003);
+		expect(last(a)).toEqual({ t: "LEFT", id: "h_bob", reason: "kicked" });
+	});
+});

@@ -13,8 +13,16 @@ import {
 	randomToken,
 	verifyAuth,
 } from "@rojibura/protocol";
+import { relationsOf } from "./db.ts";
 import { CLOSING_NOTICE_MS, closingTime, isOpen } from "./hours.ts";
-import { CLOSE_CLOSING, CLOSE_POLICY, type JoinInfo, type Member, RoomCore } from "./room-core.ts";
+import {
+	type ChatLine,
+	CLOSE_CLOSING,
+	CLOSE_POLICY,
+	type JoinInfo,
+	type Member,
+	RoomCore,
+} from "./room-core.ts";
 import { world } from "./world.ts";
 
 /** What the gateway sends with the upgrade request (trusted: the DO is only reachable through it). */
@@ -31,11 +39,20 @@ interface Attachment {
 }
 
 const SWEEP_INTERVAL_MS = 60_000;
+const CHAT_KEEP_MS = 24 * 60 * 60 * 1000;
+
+/** Internal requests from the gateway (moderation and relations, docs/prd.md 4.2). */
+export type RoomCommand =
+	| { op: "relation"; accountId: string; targetId: string; kind: "mute" | "block"; on: boolean }
+	| { op: "kick"; id: string }
+	| { op: "mute"; id: string; until: number }
+	| { op: "excerpt"; id: string; minutes: number };
 
 export class CityRoomDO extends DurableObject<Env> {
 	private readonly core: RoomCore<WebSocket>;
 	private flushed = { inbound: 0, connects: 0, says: 0, rejectedMoves: 0 };
 	private noticeSentFor = 0;
+	private chatFlushedAt = 0;
 
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env);
@@ -50,20 +67,30 @@ export class CityRoomDO extends DurableObject<Env> {
 			() => randomToken(9),
 		);
 		ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(HEARTBEAT_PING, HEARTBEAT_PONG));
+		const restored: string[] = [];
 		for (const ws of ctx.getWebSockets()) {
 			const att = ws.deserializeAttachment() as Attachment | null;
-			if (att?.member) this.core.restore(ws, att.member);
+			if (att?.member) {
+				this.core.restore(ws, att.member);
+				restored.push(att.member.id);
+			}
 		}
 		ctx.blockConcurrencyWhile(async () => {
 			ctx.storage.sql.exec(
 				"CREATE TABLE IF NOT EXISTS stats (day TEXT PRIMARY KEY, inbound INTEGER NOT NULL DEFAULT 0, connects INTEGER NOT NULL DEFAULT 0, says INTEGER NOT NULL DEFAULT 0, rejected INTEGER NOT NULL DEFAULT 0)",
 			);
+			// chat for reports, written in batches (one row per flush keeps rows written low)
+			ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS chat (at INTEGER NOT NULL, lines TEXT NOT NULL)");
+			// mutes and blocks live only in memory; reload them after waking from hibernation
+			for (const id of restored) await this.loadRelations(id);
 		});
 	}
 
 	async fetch(request: Request): Promise<Response> {
 		const url = new URL(request.url);
 		if (url.pathname === "/stats") return Response.json(this.statsSnapshot());
+		if (url.pathname === "/command" && request.method === "POST")
+			return Response.json(await this.command((await request.json()) as RoomCommand));
 		if (request.headers.get("Upgrade") !== "websocket")
 			return new Response("Expected WebSocket", { status: 426 });
 		const join = JSON.parse(request.headers.get("X-RJ-Join") ?? "null") as JoinRequest | null;
@@ -80,6 +107,7 @@ export class CityRoomDO extends DurableObject<Env> {
 			} satisfies Attachment);
 			safeSend(server, { t: "CHALLENGE", nonce });
 		} else {
+			await this.loadRelations(join.info.id);
 			this.core.join(server, join.info);
 		}
 		await this.scheduleAlarm();
@@ -101,6 +129,7 @@ export class CityRoomDO extends DurableObject<Env> {
 				return;
 			}
 			// the nonce is consumed: the attachment is replaced by the member state
+			await this.loadRelations(p.info.id);
 			this.core.join(ws, p.info);
 			return;
 		}
@@ -139,7 +168,58 @@ export class CityRoomDO extends DurableObject<Env> {
 			}
 		}
 		this.flushStats();
+		this.flushChat();
 		await this.scheduleAlarm();
+	}
+
+	private async loadRelations(id: string): Promise<void> {
+		try {
+			this.core.setRelations(id, await relationsOf(this.env.DB, id));
+		} catch {
+			// D1 unavailable: join without personal filters rather than failing
+		}
+	}
+
+	private async command(c: RoomCommand): Promise<unknown> {
+		switch (c.op) {
+			case "relation":
+				this.core.updateRelation(c.accountId, c.targetId, c.kind, c.on);
+				return { ok: true };
+			case "kick":
+				return { ok: this.core.kick(c.id) };
+			case "mute":
+				return { ok: this.core.muteFor(c.id, c.until) };
+			case "excerpt":
+				return { lines: this.excerpt(c.id, c.minutes * 60_000) };
+		}
+	}
+
+	/** Chat lines by or to `id` in the last `ms`: unflushed lines from memory plus the stored batches. */
+	private excerpt(id: string, ms: number): ChatLine[] {
+		this.flushChat();
+		const since = Date.now() - ms;
+		const lines: ChatLine[] = [];
+		for (const row of this.ctx.storage.sql.exec<{ lines: string }>(
+			"SELECT lines FROM chat WHERE at >= ? ORDER BY at",
+			since - SWEEP_INTERVAL_MS,
+		)) {
+			for (const l of JSON.parse(row.lines) as ChatLine[])
+				if (l.at >= since && (l.id === id || l.to === id)) lines.push(l);
+		}
+		return lines.slice(-50);
+	}
+
+	private flushChat(): void {
+		const fresh = this.core.chatLog.filter((l) => l.at > this.chatFlushedAt);
+		if (fresh.length > 0) {
+			this.ctx.storage.sql.exec(
+				"INSERT INTO chat (at, lines) VALUES (?, ?)",
+				Date.now(),
+				JSON.stringify(fresh),
+			);
+			this.chatFlushedAt = fresh[fresh.length - 1]?.at ?? this.chatFlushedAt;
+		}
+		this.ctx.storage.sql.exec("DELETE FROM chat WHERE at < ?", Date.now() - CHAT_KEEP_MS);
 	}
 
 	private async scheduleAlarm(): Promise<void> {

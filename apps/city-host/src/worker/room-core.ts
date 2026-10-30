@@ -81,7 +81,27 @@ export interface Member extends JoinInfo {
 	status: Status;
 	move: MoveState;
 	interest: number;
+	/** Set by a moderator: no SAY until this host time. */
+	mutedUntil?: number;
 }
+
+/** Personal mutes and blocks that concern one avatar (docs/prd.md 4.2). */
+export interface MemberRelations {
+	mutes: Set<AvatarId>;
+	blocks: Set<AvatarId>;
+	/** Accounts that blocked this avatar. */
+	blockedBy: Set<AvatarId>;
+}
+
+export interface ChatLine {
+	at: number;
+	id: AvatarId;
+	name: string;
+	to?: AvatarId;
+	text: string;
+}
+
+const CHAT_LOG_MAX = 2000;
 
 interface Bucket {
 	tokens: number;
@@ -147,6 +167,9 @@ export class RoomCore<C> {
 	private readonly pairCooldown = new Map<string, number>();
 	private readonly humanToAi = new Map<string, number[]>();
 	readonly stats: RoomStats = { inbound: 0, connects: 0, rejectedMoves: 0, says: 0 };
+	private readonly relations = new Map<AvatarId, MemberRelations>();
+	/** Recent chat for reports; the adapter persists it (docs/prd.md 3.3). */
+	readonly chatLog: ChatLine[] = [];
 
 	private readonly transport: Transport<C>;
 	private readonly world: World;
@@ -261,6 +284,68 @@ export class RoomCore<C> {
 		return this.members.size;
 	}
 
+	// ---- moderation -----------------------------------------------------------
+
+	setRelations(id: AvatarId, r: { mutes: string[]; blocks: string[]; blockedBy: string[] }): void {
+		this.relations.set(id, {
+			mutes: new Set(r.mutes),
+			blocks: new Set(r.blocks),
+			blockedBy: new Set(r.blockedBy),
+		});
+	}
+
+	/** Applies a mute/block change made through the API while both may be in the area. */
+	updateRelation(accountId: AvatarId, targetId: AvatarId, kind: "mute" | "block", on: boolean): void {
+		const mine = this.relations.get(accountId);
+		if (mine) (kind === "mute" ? mine.mutes : mine.blocks)[on ? "add" : "delete"](targetId);
+		const theirs = this.relations.get(targetId);
+		if (theirs && kind === "block") theirs.blockedBy[on ? "add" : "delete"](accountId);
+		if (on && kind === "block")
+			for (const c of [...this.convs.values()])
+				if ((c.a === accountId && c.b === targetId) || (c.a === targetId && c.b === accountId))
+					this.endConv(c, "left");
+	}
+
+	/** True if `viewer` does not want to hear from `speaker`. */
+	private silenced(viewer: AvatarId, speaker: AvatarId): boolean {
+		const r = this.relations.get(viewer);
+		return !!r && (r.mutes.has(speaker) || r.blocks.has(speaker));
+	}
+
+	/** True if either side blocked the other. */
+	private blockedBetween(a: AvatarId, b: AvatarId): boolean {
+		return !!(this.relations.get(a)?.blocks.has(b) || this.relations.get(b)?.blocks.has(a));
+	}
+
+	kick(id: AvatarId, reason = "kicked"): boolean {
+		const conn = this.byId.get(id);
+		if (conn === undefined) return false;
+		this.transport.send(conn, { t: "NOTICE", kind: "rejected", message: "モデレーターにより退出しました" });
+		this.removeMember(conn, "kicked");
+		this.transport.close(conn, CLOSE_KICKED, reason);
+		return true;
+	}
+
+	muteFor(id: AvatarId, until: number): boolean {
+		const conn = this.byId.get(id);
+		const m = conn === undefined ? undefined : this.members.get(conn);
+		if (conn === undefined || !m) return false;
+		m.mutedUntil = until;
+		this.transport.persist(conn, m);
+		this.transport.send(conn, {
+			t: "NOTICE",
+			kind: "muted_by_moderator",
+			message: `モデレーターにより ${Math.ceil((until - this.clock()) / 60_000)} 分間発言できません`,
+		});
+		return true;
+	}
+
+	/** Chat lines spoken by or to `id` in the last `ms`. */
+	excerpt(id: AvatarId, ms: number): ChatLine[] {
+		const since = this.clock() - ms;
+		return this.chatLog.filter((l) => l.at >= since && (l.id === id || l.to === id));
+	}
+
 	// ---- messages -----------------------------------------------------------
 
 	handle(conn: C, msg: ClientToHost): void {
@@ -286,7 +371,13 @@ export class RoomCore<C> {
 					return;
 				}
 				if (msg.target && !this.byId.has(msg.target)) return;
-				this.broadcastAbout(m, { t: "ACTED", id: m.id, motion: msg.motion, target: msg.target, at: now });
+				this.broadcastAbout(
+					m,
+					{ t: "ACTED", id: m.id, motion: msg.motion, target: msg.target, at: now },
+					undefined,
+					undefined,
+					true,
+				);
 				return;
 			case "SAY":
 				this.say(conn, m, v, msg, now);
@@ -354,6 +445,10 @@ export class RoomCore<C> {
 	}
 
 	private say(conn: C, m: Member, v: Volatile, msg: Extract<ClientToHost, { t: "SAY" }>, now: number): void {
+		if (m.mutedUntil && m.mutedUntil > now) {
+			this.transport.send(conn, { t: "NOTICE", kind: "muted_by_moderator", message: "いまは発言できません" });
+			return;
+		}
 		// rate limits
 		if (m.kind === "human") {
 			if (!takeToken(v.sayBucket, RATE_SAY_HUMAN.rate, RATE_SAY_HUMAN.burst, now)) {
@@ -381,6 +476,7 @@ export class RoomCore<C> {
 					return;
 				}
 				target = this.memberById(otherId);
+				if (target && this.blockedBetween(m.id, target.id)) target = undefined;
 				if (!target) {
 					this.endConv(c, "left");
 					return;
@@ -389,6 +485,7 @@ export class RoomCore<C> {
 		}
 		if (!conv && msg.to) {
 			target = this.memberById(msg.to);
+			if (target && this.blockedBetween(m.id, target.id)) target = undefined;
 			if (!target || target.id === m.id) {
 				this.notice(conn, "rejected", "相手が見つかりません");
 				return;
@@ -438,7 +535,9 @@ export class RoomCore<C> {
 		const said: HostToClient = { t: "SAID", id: m.id, text: msg.text, at: now };
 		if (target) said.to = target.id;
 		if (conv) said.convId = conv.id;
-		this.broadcastAbout(m, said, undefined, target?.id);
+		this.broadcastAbout(m, said, undefined, target?.id, true);
+		this.chatLog.push({ at: now, id: m.id, name: m.name, to: target?.id, text: msg.text });
+		if (this.chatLog.length > CHAT_LOG_MAX) this.chatLog.splice(0, this.chatLog.length - CHAT_LOG_MAX);
 
 		if (conv && target) {
 			if (target.kind === "ai") {
@@ -523,7 +622,7 @@ export class RoomCore<C> {
 	contextFor(m: Member, now = this.clock()): SpatialContext {
 		const pos = this.positionOf(m, now);
 		const nearbyAvatars = [...this.members.values()]
-			.filter((o) => o.id !== m.id)
+			.filter((o) => o.id !== m.id && !this.blockedBetween(m.id, o.id))
 			.map((o) => ({
 				id: o.id,
 				name: o.name,
@@ -557,11 +656,19 @@ export class RoomCore<C> {
 	 * Sends a message about `subject` to everyone who should see it: humans always (they render the whole
 	 * area), AIs only within their interest radius or when they are `alsoTo`.
 	 */
-	private broadcastAbout(subject: Member, msg: HostToClient, except?: C, alsoTo?: AvatarId): void {
+	private broadcastAbout(
+		subject: Member,
+		msg: HostToClient,
+		except?: C,
+		alsoTo?: AvatarId,
+		/** Chat and gestures: skip recipients who muted or blocked the subject. */
+		social = false,
+	): void {
 		const now = this.clock();
 		const at = this.positionOf(subject, now);
 		for (const [conn, r] of this.members) {
 			if (conn === except) continue;
+			if (social && r.id !== subject.id && this.silenced(r.id, subject.id)) continue;
 			if (r.kind === "ai" && r.id !== subject.id && r.id !== alsoTo) {
 				if (dist(this.positionOf(r, now), at) > r.interest) continue;
 			}
@@ -574,7 +681,10 @@ export class RoomCore<C> {
 		this.volatile.delete(conn);
 		if (!m) return;
 		this.members.delete(conn);
-		if (this.byId.get(m.id) === conn) this.byId.delete(m.id);
+		if (this.byId.get(m.id) === conn) {
+			this.byId.delete(m.id);
+			this.relations.delete(m.id);
+		}
 		for (const c of [...this.convs.values()]) if (c.a === m.id || c.b === m.id) this.endConv(c, "left");
 		this.broadcastAbout(m, { t: "LEFT", id: m.id, reason });
 	}

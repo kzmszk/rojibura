@@ -38,4 +38,19 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #bfd6e8; }
 .rj-login input, .rj-login select, .rj-login button { font-size: 16px; padding: 9px 10px; border-radius: 8px; border: 1px solid #bbc; }
 .rj-login button { background: #2f6fae; color: #fff; border: none; cursor: pointer; }
 .rj-note { font-size: 12px; color: #888 !important; }
+.rj-actions { display: none; gap: 6px; }
+.rj-actions.show { display: flex; }
+.rj-actions button, .rj-report-actions button { font-size: 12px; padding: 4px 10px; border-radius: 8px; border: 1px solid #aab; background: #fff; cursor: pointer; }
+.rj-dialog { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(340px, calc(100% - 32px)); display: flex; flex-direction: column; gap: 8px;
+  padding: 18px; border-radius: 12px; background: #fff; box-shadow: 0 6px 30px rgba(0,0,0,.25); z-index: 10; font-size: 14px; }
+.rj-dialog select, .rj-dialog textarea, .rj-dialog button { font-size: 14px; padding: 8px; border-radius: 8px; border: 1px solid #bbc; }
+.rj-dialog textarea { min-height: 70px; resize: vertical; }
+.rj-dialog button[type=submit], .rj-dialog button:not([type]) { background: #b33; color: #fff; border: none; }
+.rj-dialog .rj-secondary { background: #fff; color: #333; border: 1px solid #bbc; }
+.rj-admin { overflow: auto; background: #f4f5f7; }
+.rj-admin-page { max-width: 760px; margin: 0 auto; padding: 24px 16px; display: flex; flex-direction: column; gap: 12px; font-size: 14px; }
+.rj-report { background: #fff; border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+.rj-excerpt { font-size: 13px; background: #f6f6f8; border-radius: 6px; padding: 6px 8px; overflow-wrap: anywhere; }
+.rj-note-text { color: #444; overflow-wrap: anywhere; }
+.rj-report-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 `;

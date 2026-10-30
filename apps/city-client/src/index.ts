@@ -14,6 +14,7 @@ import {
 } from "@rojibura/protocol";
 import * as THREE from "three";
 import { AvatarView } from "./avatars.ts";
+import { actionBar, Relations, showAdmin } from "./moderation.ts";
 import { CityConnection, type ConnState } from "./net.ts";
 import { CityScene } from "./scene.ts";
 import { STYLES } from "./styles.ts";
@@ -66,6 +67,10 @@ export async function mountApp(root: HTMLElement): Promise<void> {
 		return;
 	}
 	const me = (await meRes.json()) as Me;
+	if (location.pathname === "/admin") {
+		await showAdmin(root);
+		return;
+	}
 	const params = new URLSearchParams(location.search);
 	if (params.get("welcome") === "1") {
 		showWelcome(root, me, params.get("redirect") ?? "/");
@@ -77,7 +82,9 @@ export async function mountApp(root: HTMLElement): Promise<void> {
 interface Me {
 	id: string;
 	name: string;
+	role: string;
 	allowAiApproach: boolean;
+	relations?: { mutes: string[]; blocks: string[] };
 }
 
 function patchMe(body: { name?: string; allowAiApproach?: boolean }): Promise<Response> {
@@ -162,6 +169,11 @@ async function startCity(root: HTMLElement, me: Me): Promise<void> {
 	approach.append(box, document.createTextNode(" AIから話しかけられてもいい"));
 	const logout = el("a", "rj-logout", "ログアウト");
 	logout.href = "/auth/logout";
+	if (me.role === "moderator" || me.role === "admin") {
+		const admin = el("a", "rj-logout", "通報の確認");
+		admin.href = "/admin";
+		right.append(admin);
+	}
 	right.append(approach, logout);
 	hud.append(status, right);
 	const chat = el("div", "rj-chat");
@@ -182,11 +194,14 @@ async function startCity(root: HTMLElement, me: Me): Promise<void> {
 	let talkTo: AvatarId | null = null;
 	let seq = 0;
 
+	const relations = new Relations(me.relations);
+	let bar: ReturnType<typeof actionBar> | null = null;
 	const setTarget = (id: AvatarId | null) => {
 		talkTo = id;
 		const a = id ? avatars.get(id) : undefined;
 		target.textContent = a ? `→ ${a.state.name}` : "みんなへ";
 		target.classList.toggle("on", !!a);
+		bar?.show(a ? a.state.id : null, a?.state.name ?? "");
 	};
 	setTarget(null);
 	target.onclick = () => setTarget(null);
@@ -208,7 +223,19 @@ async function startCity(root: HTMLElement, me: Me): Promise<void> {
 		status.textContent = `${me.name} ｜ ${detail ?? label} ｜ ${avatars.size}人`;
 	};
 
+	bar = actionBar({
+		relations,
+		toast: (t) => showToast(t),
+		onBlocked: (id) => {
+			avatars.get(id)?.dispose();
+			avatars.delete(id);
+			setTarget(null);
+		},
+	});
+	chat.insertBefore(bar.el, form);
+
 	const add = (s: AvatarView["state"]) => {
+		if (relations.blocks.has(s.id)) return;
 		avatars.get(s.id)?.dispose();
 		const v = new AvatarView(s, s.id === myId);
 		avatars.set(s.id, v);
@@ -249,9 +276,10 @@ async function startCity(root: HTMLElement, me: Me): Promise<void> {
 					if (myId) avatars.get(myId)?.setMove(m.move);
 					break;
 				case "ACTED":
-					avatars.get(m.id)?.say(MOTION_EMOJI[m.motion], conn.hostNow());
+					if (!relations.silenced(m.id)) avatars.get(m.id)?.say(MOTION_EMOJI[m.motion], conn.hostNow());
 					break;
 				case "SAID": {
+					if (relations.silenced(m.id)) break;
 					const v = avatars.get(m.id);
 					v?.say(m.text, conn.hostNow());
 					const to = m.to ? avatars.get(m.to)?.state.name : undefined;

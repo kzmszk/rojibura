@@ -12,7 +12,9 @@ import {
 } from "@rojibura/protocol";
 import {
 	type Account,
+	addBan,
 	cleanName,
+	createReport,
 	ensureSchema,
 	findAccount,
 	findOrCreateAccount,
@@ -20,13 +22,19 @@ import {
 	getAgent,
 	isBanned,
 	listAgents,
+	listReports,
+	logModAction,
 	registerAgent,
+	relationsOf,
+	resolveReport,
 	setAgentTrust,
+	setRelation,
+	setRole,
 	updateAccount,
 } from "./db.ts";
 import { isOpen, nextOpening } from "./hours.ts";
 import { authUrl, exchangeCode, googleKeys, newPkce, verifyIdToken } from "./oidc.ts";
-import type { JoinRequest } from "./room.ts";
+import type { JoinRequest, RoomCommand } from "./room.ts";
 import {
 	clearSessionCookie,
 	cookie,
@@ -46,6 +54,22 @@ export { CityRoomDO } from "./room.ts";
 
 const DEV = env.DEV_AUTH === "1";
 const AREA_RE = /^[a-z0-9-]{1,32}$/;
+/** Areas that moderation commands are sent to. */
+const AREAS = ["main"];
+const REPORT_REASONS = ["harassment", "spam", "inappropriate", "other"];
+const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
+
+function roomCommand(areaId: string, c: RoomCommand): Promise<Response> {
+	return env.ROOM.getByName(areaId).fetch(
+		new Request("https://room/command", { method: "POST", body: JSON.stringify(c) }),
+	);
+}
+
+async function broadcastCommand(c: RoomCommand): Promise<void> {
+	await Promise.all(AREAS.map((a) => roomCommand(a, c)));
+}
+
+const isModerator = (a: Account) => a.role === "moderator" || a.role === "admin";
 
 function sessionSecret(): string {
 	if (env.SESSION_SECRET) return env.SESSION_SECRET;
@@ -234,7 +258,160 @@ async function api(request: Request, url: URL): Promise<Response> {
 			role: account.role,
 			allowAiApproach: account.allow_ai_approach === 1,
 			agents: agents.map((a) => ({ id: a.id, name: a.name, runtime: a.runtime, trust: a.trust })),
+			relations: await relationsOf(env.DB, account.id).then((r) => ({ mutes: r.mutes, blocks: r.blocks })),
 		});
+	}
+
+	// ---- moderation (docs/prd.md 4.2) ----
+	if (path === "/api/relations" && request.method === "POST") {
+		const account = await currentAccount(request);
+		if (!account) return error(401, "login required");
+		const b = (await request.json().catch(() => null)) as {
+			targetId?: string;
+			kind?: string;
+			on?: boolean;
+		} | null;
+		if (!b?.targetId || !/^[ha]_[A-Za-z0-9_-]{1,64}$/.test(b.targetId) || b.targetId === account.id)
+			return error(400, "bad target");
+		if (b.kind !== "mute" && b.kind !== "block") return error(400, "bad kind");
+		const on = b.on !== false;
+		await setRelation(env.DB, account.id, b.targetId, b.kind, on);
+		await broadcastCommand({ op: "relation", accountId: account.id, targetId: b.targetId, kind: b.kind, on });
+		return json({ ok: true });
+	}
+
+	if (path === "/api/reports" && request.method === "POST") {
+		const account = await currentAccount(request);
+		if (!account) return error(401, "login required");
+		const b = (await request.json().catch(() => null)) as {
+			targetId?: string;
+			reason?: string;
+			note?: string;
+		} | null;
+		if (!b?.targetId || !/^[ha]_[A-Za-z0-9_-]{1,64}$/.test(b.targetId)) return error(400, "bad target");
+		if (!REPORT_REASONS.includes(b.reason ?? "")) return error(400, "bad reason");
+		const note = (b.note ?? "").slice(0, 500);
+		const excerpts = await Promise.all(
+			AREAS.map((a) =>
+				roomCommand(a, { op: "excerpt", id: b.targetId as string, minutes: 5 })
+					.then((r) => r.json() as Promise<{ lines: unknown[] }>)
+					.catch(() => ({ lines: [] })),
+			),
+		);
+		const id = await createReport(env.DB, {
+			reporterId: account.id,
+			targetId: b.targetId,
+			reason: b.reason as string,
+			note,
+			excerpt: excerpts.flatMap((e) => e.lines),
+		});
+		return json({ id }, 201);
+	}
+
+	if (path === "/api/mod/reports") {
+		const account = await currentAccount(request);
+		if (!account || !isModerator(account)) return error(403, "moderators only");
+		const reports = await listReports(env.DB, url.searchParams.get("status") ?? "open");
+		const names = new Map<string, string>();
+		for (const id of new Set(reports.flatMap((r) => [r.reporter_id, r.target_id]))) {
+			const n = id.startsWith("a_")
+				? (await getAgent(env.DB, id))?.name
+				: (await getAccount(env.DB, id))?.display_name;
+			names.set(id, n ?? id);
+		}
+		return json(
+			reports.map((r) => ({
+				id: r.id,
+				reporter: { id: r.reporter_id, name: names.get(r.reporter_id) },
+				target: { id: r.target_id, name: names.get(r.target_id) },
+				reason: r.reason,
+				note: r.note,
+				excerpt: JSON.parse(r.excerpt_json),
+				createdAt: r.created_at,
+			})),
+		);
+	}
+
+	if (path === "/api/mod/action" && request.method === "POST") {
+		const account = await currentAccount(request);
+		if (!account || !isModerator(account)) return error(403, "moderators only");
+		const b = (await request.json().catch(() => null)) as {
+			action?: string;
+			subjectId?: string;
+			minutes?: number;
+			reason?: string;
+			reportId?: string;
+		} | null;
+		const subject = b?.subjectId ?? "";
+		if (!/^[ha]_[A-Za-z0-9_-]{1,64}$/.test(subject)) return error(400, "bad subject");
+		const reason = (b?.reason ?? "").slice(0, 200) || "モデレーション";
+		const now = Date.now();
+		switch (b?.action) {
+			case "mute": {
+				const minutes = Math.min(Math.max(1, Number(b.minutes) || 10), 24 * 60);
+				await broadcastCommand({ op: "mute", id: subject, until: now + minutes * 60_000 });
+				break;
+			}
+			case "kick": {
+				// kicked avatars cannot come back until the end of the day (JST)
+				const jst = now + JST_OFFSET_MS;
+				const endOfDay = jst - (jst % 86_400_000) + 86_400_000 - JST_OFFSET_MS;
+				await addBan(env.DB, {
+					subjectId: subject,
+					kind: subject.startsWith("a_") ? "agent" : "account",
+					until: endOfDay,
+					reason,
+					by: account.id,
+				});
+				await broadcastCommand({ op: "kick", id: subject });
+				break;
+			}
+			case "ban": {
+				const minutes = Number(b.minutes);
+				await addBan(env.DB, {
+					subjectId: subject,
+					kind: subject.startsWith("a_") ? "agent" : "account",
+					until: minutes > 0 ? now + minutes * 60_000 : null,
+					reason,
+					by: account.id,
+				});
+				await broadcastCommand({ op: "kick", id: subject });
+				// an owner's ban also removes their agents
+				if (subject.startsWith("h_"))
+					for (const a of await listAgents(env.DB, subject)) await broadcastCommand({ op: "kick", id: a.id });
+				break;
+			}
+			case "suspend":
+				if (!subject.startsWith("a_")) return error(400, "only agents can be suspended");
+				await setAgentTrust(env.DB, subject, "suspended");
+				await broadcastCommand({ op: "kick", id: subject });
+				break;
+			case "approve":
+				if (!subject.startsWith("a_") || account.role !== "admin") return error(403, "admins approve agents");
+				await setAgentTrust(env.DB, subject, "approved");
+				break;
+			case "resolve":
+				break;
+			default:
+				return error(400, "bad action");
+		}
+		if (b?.reportId) await resolveReport(env.DB, b.reportId);
+		await logModAction(env.DB, {
+			actorId: account.id,
+			action: b?.action ?? "",
+			subjectId: subject,
+			detail: { minutes: b?.minutes, reason, reportId: b?.reportId },
+		});
+		return json({ ok: true });
+	}
+
+	if (DEV && path === "/api/dev/role" && request.method === "POST") {
+		const account = await currentAccount(request);
+		if (!account) return error(401, "login required");
+		const role = ((await request.json().catch(() => null)) as { role?: string } | null)?.role;
+		if (role !== "admin" && role !== "moderator" && role !== "user") return error(400, "bad role");
+		await setRole(env.DB, account.id, role);
+		return json({ ok: true });
 	}
 
 	if (path === "/api/agents" && request.method === "POST") {

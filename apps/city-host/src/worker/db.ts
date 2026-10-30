@@ -1,7 +1,10 @@
 // D1 access for accounts and agents (docs/prd.md 3.6).
 
 import { MAX_NAME_LENGTH, randomToken, sanitizeText, textLength } from "@rojibura/protocol";
-import schema from "../../migrations/0001_init.sql?raw";
+import init from "../../migrations/0001_init.sql?raw";
+import moderation from "../../migrations/0002_moderation.sql?raw";
+
+const MIGRATIONS = [init, moderation];
 
 export const AGENTS_PER_OWNER = 5;
 
@@ -30,7 +33,7 @@ let schemaReady: Promise<void> | null = null;
 /** Development only: applies the (idempotent) migration on first use. Production uses `cf d1 migrations apply`. */
 export function ensureSchema(db: D1Database): Promise<void> {
 	schemaReady ??= (async () => {
-		const statements = schema
+		const statements = MIGRATIONS.join("\n")
 			.split("\n")
 			.map((l: string) => l.replace(/--.*$/, ""))
 			.join("\n")
@@ -139,4 +142,120 @@ export async function isBanned(db: D1Database, subjectIds: string[], now = Date.
 		.bind(...subjectIds, now)
 		.first();
 	return row !== null;
+}
+
+// ---- moderation (docs/prd.md 4.2) ----------------------------------------------
+
+export type RelationKind = "mute" | "block";
+
+export interface Relations {
+	/** Avatars this account muted or blocked. */
+	mutes: string[];
+	blocks: string[];
+	/** Accounts that blocked this avatar. */
+	blockedBy: string[];
+}
+
+export async function setRelation(
+	db: D1Database,
+	accountId: string,
+	targetId: string,
+	kind: RelationKind,
+	on: boolean,
+): Promise<void> {
+	await (on
+		? db
+				.prepare(
+					"INSERT OR IGNORE INTO relations (account_id, target_id, kind, created_at) VALUES (?, ?, ?, ?)",
+				)
+				.bind(accountId, targetId, kind, Date.now())
+		: db
+				.prepare("DELETE FROM relations WHERE account_id = ? AND target_id = ? AND kind = ?")
+				.bind(accountId, targetId, kind)
+	).run();
+}
+
+/** Relations that matter for one avatar: its own mutes/blocks (if it is a human) and who blocked it. */
+export async function relationsOf(db: D1Database, avatarId: string): Promise<Relations> {
+	const r = await db
+		.prepare(
+			"SELECT account_id, target_id, kind FROM relations WHERE account_id = ? OR (target_id = ? AND kind = 'block')",
+		)
+		.bind(avatarId, avatarId)
+		.all<{ account_id: string; target_id: string; kind: RelationKind }>();
+	const rows = r.results;
+	return {
+		mutes: rows.filter((x) => x.account_id === avatarId && x.kind === "mute").map((x) => x.target_id),
+		blocks: rows.filter((x) => x.account_id === avatarId && x.kind === "block").map((x) => x.target_id),
+		blockedBy: rows.filter((x) => x.target_id === avatarId && x.kind === "block").map((x) => x.account_id),
+	};
+}
+
+export interface Report {
+	id: string;
+	reporter_id: string;
+	target_id: string;
+	reason: string;
+	note: string;
+	excerpt_json: string;
+	status: string;
+	created_at: number;
+}
+
+export async function createReport(
+	db: D1Database,
+	r: { reporterId: string; targetId: string; reason: string; note: string; excerpt: unknown[] },
+): Promise<string> {
+	const id = `r_${randomToken(9)}`;
+	await db
+		.prepare(
+			"INSERT INTO reports (id, reporter_id, target_id, reason, note, excerpt_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		)
+		.bind(id, r.reporterId, r.targetId, r.reason, r.note, JSON.stringify(r.excerpt), Date.now())
+		.run();
+	return id;
+}
+
+export async function listReports(db: D1Database, status = "open"): Promise<Report[]> {
+	const r = await db
+		.prepare("SELECT * FROM reports WHERE status = ? ORDER BY created_at DESC LIMIT 100")
+		.bind(status)
+		.all<Report>();
+	return r.results;
+}
+
+export async function resolveReport(db: D1Database, id: string): Promise<void> {
+	await db.prepare("UPDATE reports SET status = 'resolved' WHERE id = ?").bind(id).run();
+}
+
+export async function addBan(
+	db: D1Database,
+	b: { subjectId: string; kind: "account" | "agent"; until: number | null; reason: string; by: string },
+): Promise<void> {
+	await db
+		.prepare(
+			"INSERT INTO bans (id, subject_id, subject_kind, until, reason, by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		)
+		.bind(`b_${randomToken(9)}`, b.subjectId, b.kind, b.until, b.reason, b.by, Date.now())
+		.run();
+}
+
+export async function logModAction(
+	db: D1Database,
+	a: { actorId: string; action: string; subjectId: string; detail: unknown },
+): Promise<void> {
+	await db
+		.prepare(
+			"INSERT INTO mod_actions (id, actor_id, action, subject_id, detail_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+		)
+		.bind(`m_${randomToken(9)}`, a.actorId, a.action, a.subjectId, JSON.stringify(a.detail), Date.now())
+		.run();
+}
+
+export async function setRole(
+	db: D1Database,
+	id: string,
+	role: "admin" | "moderator" | "user",
+): Promise<void> {
+	await db.prepare("UPDATE accounts SET role = ? WHERE id = ?").bind(role, id).run();
 }
