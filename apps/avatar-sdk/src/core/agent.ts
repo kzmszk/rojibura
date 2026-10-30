@@ -19,6 +19,8 @@ import {
 	FALLBACK_REPLIES,
 	openingPrompt,
 	parseDecision,
+	SUMMARY_SCHEMA,
+	summaryPrompt,
 	systemPrompt,
 	userPrompt,
 } from "./prompt.ts";
@@ -34,6 +36,8 @@ export interface AgentOptions {
 	send: (msg: ClientToHost) => void;
 	/** LLM calls per day before the agent rests (docs/prd.md 3.5.2). */
 	dailyLlmLimit?: number;
+	/** Summarize each finished conversation into memory with one more LLM call (default true). */
+	summarize?: boolean;
 	/** Wander interval range in ms (scaled by the budget level). */
 	wanderMs?: [number, number];
 	random?: () => number;
@@ -142,10 +146,13 @@ export class Agent {
 					maxTurns: msg.maxTurns,
 				});
 				return;
-			case "CONV_END":
+			case "CONV_END": {
+				const conv = this.convs.get(msg.convId);
 				this.convs.delete(msg.convId);
 				this.ended.delete(msg.convId);
+				if (conv && this.o.summarize !== false) void this.summarize(conv);
 				return;
+			}
 			case "SAID":
 				// learn the conversation ID of a conversation this agent started
 				if (msg.id === this.me && msg.to && msg.convId && !this.convs.has(msg.convId))
@@ -318,6 +325,25 @@ export class Agent {
 		}
 	}
 
+	/** Turns a finished conversation into one memory note about the partner. */
+	private async summarize(conv: { with: AvatarId; history: string[] }): Promise<void> {
+		if (conv.history.length < 3 || !this.takeLlmCall()) return;
+		const partner = this.avatars.get(conv.with)?.name ?? "相手";
+		try {
+			const raw = (await this.o.llm.complete({
+				system: systemPrompt(this.o.persona),
+				user: summaryPrompt(partner, conv.history),
+				schema: SUMMARY_SCHEMA,
+			})) as { summary?: unknown };
+			if (typeof raw?.summary === "string" && raw.summary.trim()) {
+				await this.o.memory.remember(conv.with, `会話のまとめ: ${raw.summary.trim().slice(0, 160)}`);
+				this.o.logger.info(`summary with ${partner}: ${raw.summary}`);
+			}
+		} catch (e) {
+			this.o.logger.warn(`summary failed: ${(e as Error).message}`);
+		}
+	}
+
 	walkTo(to: Vec2): boolean {
 		const from = this.me ? this.positionOf(this.me) : null;
 		if (!from) return false;
@@ -358,6 +384,23 @@ export class Agent {
 		if (near && this.budget === 0 && this.random() < 0.6) {
 			void this.initiate(near.a, near.d, here);
 			return;
+		}
+		// approved AIs may greet people who accept it, less often than other AIs (docs/prd.md 3.3)
+		if (me.trust === "approved" && this.budget === 0) {
+			const person = [...this.avatars.values()]
+				.filter(
+					(a) =>
+						a.kind === "human" &&
+						a.acceptsAi !== false &&
+						now - (this.lastTalked.get(a.id) ?? 0) > TALK_AGAIN_MS * 2,
+				)
+				.map((a) => ({ a, d: dist(poseAt(a.move, this.hostNow()).pos, here) }))
+				.filter((x) => x.d <= TALK_RADIUS)
+				.sort((x, y) => x.d - y.d)[0];
+			if (person && this.random() < 0.3) {
+				void this.initiate(person.a, person.d, here);
+				return;
+			}
 		}
 		const friend = others[Math.floor(this.random() * others.length)];
 		if (friend && this.random() < 0.35) {

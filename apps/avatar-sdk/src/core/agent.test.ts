@@ -258,3 +258,86 @@ test("starts a conversation with an AI nearby", async () => {
 		vi.useRealTimers();
 	}
 });
+
+test("summarizes a finished conversation into memory", async () => {
+	const calls: string[] = [];
+	const llm: LLM = {
+		name: "fake",
+		complete: async (req) => {
+			calls.push(req.user);
+			return req.user.includes("メモとして")
+				? { summary: "Kazuはカフェが好き。明日また会う約束。" }
+				: { reply: "いいね", motion: "none", goTo: "stay", endConversation: false };
+		},
+	};
+	const { agent, sent, mem } = setup(llm);
+	for (const text of ["カフェ好き？", "明日また会おう"]) {
+		agent.handle({ t: "ADDRESSED", from: "h_k", text, convId: "c_9", turn: 1, maxTurns: null, context });
+		await until(() => sent.filter((m) => m.t === "SAY").length >= (text === "カフェ好き？" ? 1 : 2));
+	}
+	agent.handle({ t: "CONV_END", convId: "c_9", reason: "timeout" });
+	await until(() => (mem.notes.h_k ?? []).some((n) => n.startsWith("会話のまとめ")));
+	expect(mem.notes.h_k?.at(-1)).toBe("会話のまとめ: Kazuはカフェが好き。明日また会う約束。");
+	expect(calls).toHaveLength(3);
+});
+
+test("an approved AI greets a nearby human who accepts it, never one who does not", async () => {
+	vi.useFakeTimers();
+	try {
+		const run = async (acceptsAi: boolean) => {
+			const sent: ClientToHost[] = [];
+			const agent = new Agent({
+				persona: { name: "ミナ", personality: "" },
+				llm: {
+					name: "fake",
+					complete: async () => ({
+						reply: "こんばんは！",
+						motion: "wave",
+						goTo: "stay",
+						endConversation: false,
+					}),
+				},
+				memory: memory(),
+				nav: { findPath: (a, b) => [a, b] },
+				landmarks: [],
+				logger: { info: () => {}, warn: () => {} },
+				send: (m) => sent.push(m),
+				random: () => 0,
+			});
+			const blank = { thumb: "", lod: "", vrm: "" };
+			agent.handle({
+				t: "WELCOME",
+				you: "a_mina",
+				serverTime: Date.now(),
+				budget: 0,
+				avatars: [
+					{
+						id: "a_mina",
+						kind: "ai",
+						name: "ミナ",
+						trust: "approved",
+						status: "active",
+						assets: blank,
+						move: { kind: "idle", pos: [0, 0], at: 0 },
+					},
+					{
+						id: "h_k",
+						kind: "human",
+						name: "Kazu",
+						acceptsAi,
+						status: "active",
+						assets: blank,
+						move: { kind: "idle", pos: [2, 0], at: 0 },
+					},
+				],
+			});
+			await vi.advanceTimersByTimeAsync(3100);
+			agent.stop();
+			return sent.find((m) => m.t === "SAY");
+		};
+		expect(await run(true)).toEqual({ t: "SAY", text: "こんばんは！", to: "h_k" });
+		expect(await run(false)).toBeUndefined();
+	} finally {
+		vi.useRealTimers();
+	}
+});

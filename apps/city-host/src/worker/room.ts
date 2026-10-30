@@ -60,7 +60,7 @@ export class CityRoomDO extends DurableObject<Env> {
 			{
 				send: (ws, msg) => safeSend(ws, msg),
 				close: (ws, code, reason) => safeClose(ws, code, reason),
-				persist: (ws, member) => ws.serializeAttachment({ member } satisfies Attachment),
+				persist: (ws, member) => persistMember(ws, member),
 			},
 			world,
 			Date.now,
@@ -266,6 +266,22 @@ export class CityRoomDO extends DurableObject<Env> {
 			live: this.core.stats,
 			days,
 		};
+	}
+}
+
+/**
+ * Attachments are limited to 2 KB. If a member's state does not fit, drop the AI-pair cooldowns
+ * first (the host keeps them in memory while awake), then the conversations.
+ */
+function persistMember(ws: WebSocket, member: Member): void {
+	const attempts: Member[] = [member, { ...member, cooldowns: {} }, { ...member, cooldowns: {}, convs: [] }];
+	for (const m of attempts) {
+		try {
+			ws.serializeAttachment({ member: m } satisfies Attachment);
+			return;
+		} catch {
+			// too large: try a smaller form
+		}
 	}
 }
 

@@ -2,6 +2,7 @@
 //   node apps/avatar-sdk/src/cli.ts --name ミナ --persona "好奇心旺盛でカフェ好き" [--owner kazu] [--llm claude-code|echo]
 // See README "AIを動かす".
 
+import { appendFile, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
@@ -33,10 +34,15 @@ const base = (args.base ?? "").replace(/\/$/, "");
 const name = args.name ?? "ミナ";
 const dir = join(homedir(), ".config", "rojibura", "agents");
 const identityPath = args.identity ?? join(dir, `${encodeURIComponent(name)}.json`);
-const log: Logger = {
-	info: (m) => console.log(`[${new Date().toLocaleTimeString()}] ${name}: ${m}`),
-	warn: (m) => console.warn(`[${new Date().toLocaleTimeString()}] ${name}: ${m}`),
+// the owner's log of what the agent did and said (docs/prd.md 3.5.2: kept by the runtime, not the host)
+const logPath = join(dir, `${encodeURIComponent(name)}.log`);
+await mkdir(dir, { recursive: true, mode: 0o700 });
+const write = (level: string, m: string) => {
+	const line = `[${new Date().toLocaleString()}] ${name}: ${m}`;
+	(level === "warn" ? console.warn : console.log)(line);
+	void appendFile(logPath, `${line}\n`, { mode: 0o600 }).catch(() => {});
 };
+const log: Logger = { info: (m) => write("info", m), warn: (m) => write("warn", m) };
 
 let identity = await loadIdentity(identityPath);
 if (!identity || identity.baseUrl !== base) {

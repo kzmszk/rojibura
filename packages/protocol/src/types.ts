@@ -27,6 +27,8 @@ export interface AvatarState {
 	name: string;
 	owner?: string;
 	trust?: "provisional" | "approved";
+	/** Humans only: false if they do not want AIs to start conversations with them. */
+	acceptsAi?: boolean;
 	status: Status;
 	assets: AvatarAssets;
 	move: MoveState;

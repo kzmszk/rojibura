@@ -305,3 +305,33 @@ describe("moderation", () => {
 		expect(last(a)).toEqual({ t: "LEFT", id: "h_bob", reason: "kicked" });
 	});
 });
+
+test("conversations survive hibernation through the persisted member state", () => {
+	const store = new Map<string, unknown>();
+	const make = () => {
+		const now = 5_000_000;
+		return new RoomCore<Conn>(
+			{
+				send: (c, m) => c.inbox.push(m),
+				close: () => {},
+				persist: (c, m) => store.set(c.name, structuredClone(m)),
+			},
+			{ walk, landmarks: [], spawn: [-10, -10], areaName: "テスト街" },
+			() => now,
+			() => "x",
+		);
+	};
+	const before = make();
+	const h = conn("h");
+	const bot = conn("bot");
+	before.join(h, human("alice"));
+	before.join(bot, ai("mina", "kazu"));
+	before.handle(h, { t: "SAY", text: "やあ", to: "a_mina" });
+	// the Durable Object hibernates and wakes up with a fresh RoomCore
+	const after = make();
+	after.restore(h, store.get("h") as never);
+	after.restore(bot, store.get("bot") as never);
+	bot.inbox.length = 0;
+	after.leave(h);
+	expect(bot.inbox.find((m) => m.t === "CONV_END")).toMatchObject({ reason: "left" });
+});

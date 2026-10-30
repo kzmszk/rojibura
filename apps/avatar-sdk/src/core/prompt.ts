@@ -90,6 +90,24 @@ export function openingPrompt(input: OpeningInput): string {
 	].join("\n");
 }
 
+export const SUMMARY_SCHEMA = {
+	type: "object",
+	properties: { summary: { type: "string", maxLength: 160 } },
+	required: ["summary"],
+	additionalProperties: false,
+};
+
+/** Asks for a one-line memory of a finished conversation. */
+export function summaryPrompt(partner: string, history: string[]): string {
+	return [
+		"<city_input>",
+		`会話の相手: ${clean(partner, 24)}`,
+		`会話: ${history.map((h) => clean(h, 160)).join(" / ")}`,
+		"</city_input>",
+		"この会話を、次に会ったときのための自分用のメモとして1〜2文でまとめてください。相手の好みや約束したことがあれば必ず入れてください。",
+	].join("\n");
+}
+
 /** JSON Schema for the decision. goTo is limited to the landmarks in the current context. */
 export function decisionSchema(landmarkIds: string[]): object {
 	return {

@@ -83,6 +83,9 @@ export interface Member extends JoinInfo {
 	interest: number;
 	/** Set by a moderator: no SAY until this host time. */
 	mutedUntil?: number;
+	/** Open conversations and AI-pair cooldowns of this member, so they survive hibernation. */
+	convs?: Conv[];
+	cooldowns?: Record<AvatarId, number>;
 }
 
 /** Personal mutes and blocks that concern one avatar (docs/prd.md 4.2). */
@@ -117,7 +120,7 @@ interface Volatile {
 	lastSeen: number;
 }
 
-interface Conv {
+export interface Conv {
 	id: string;
 	a: AvatarId;
 	b: AvatarId;
@@ -190,6 +193,32 @@ export class RoomCore<C> {
 		this.members.set(conn, member);
 		this.byId.set(member.id, conn);
 		this.volatile.set(conn, this.freshVolatile());
+		for (const c of member.convs ?? []) if (!this.convs.has(c.id)) this.convs.set(c.id, { ...c });
+		for (const [other, until] of Object.entries(member.cooldowns ?? {}))
+			this.pairCooldown.set(
+				pairKey(member.id, other),
+				Math.max(until, this.pairCooldown.get(pairKey(member.id, other)) ?? 0),
+			);
+	}
+
+	/** Copies the conversation state of `ids` into their persisted member state. */
+	private syncConvs(...ids: AvatarId[]): void {
+		const now = this.clock();
+		for (const id of ids) {
+			const conn = this.byId.get(id);
+			const m = conn === undefined ? undefined : this.members.get(conn);
+			if (conn === undefined || !m) continue;
+			m.convs = [...this.convs.values()].filter((c) => c.a === id || c.b === id).map((c) => ({ ...c }));
+			const cooldowns: Record<AvatarId, number> = {};
+			for (const [key, until] of this.pairCooldown) {
+				if (until <= now) continue;
+				const [x, y] = key.split("|");
+				if (x === id && y) cooldowns[y] = until;
+				else if (y === id && x) cooldowns[x] = until;
+			}
+			m.cooldowns = cooldowns;
+			this.transport.persist(conn, m);
+		}
 	}
 
 	/** Returns a reason when the area cannot take this avatar (docs/prd.md 3.3 item 7). */
@@ -525,6 +554,7 @@ export class RoomCore<C> {
 			}
 			conv.turn++;
 			conv.lastAt = now;
+			this.syncConvs(conv.a, conv.b);
 		}
 		if (m.kind === "ai") {
 			v.aiSays.push(now);
@@ -595,6 +625,7 @@ export class RoomCore<C> {
 			const conn = this.byId.get(id);
 			if (conn !== undefined) this.transport.send(conn, { t: "CONV_END", convId: c.id, reason });
 		}
+		this.syncConvs(c.a, c.b);
 	}
 
 	private violation(conn: C, v: Volatile, now: number): void {
@@ -705,6 +736,7 @@ export class RoomCore<C> {
 		};
 		if (m.ownerName && m.kind === "ai") s.owner = m.ownerName;
 		if (m.trust) s.trust = m.trust;
+		if (m.kind === "human") s.acceptsAi = m.allowAiApproach !== false;
 		return s;
 	}
 
