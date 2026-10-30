@@ -34,7 +34,7 @@ export async function generateAgentKeyPair(extractable: boolean): Promise<Crypto
 
 /** Raw 32-byte public key, base64url. This is what the host stores. */
 export async function exportPublicKey(key: CryptoKey): Promise<string> {
-	return toBase64Url(await crypto.subtle.exportKey("raw", key));
+	return toBase64Url((await crypto.subtle.exportKey("raw", key)) as ArrayBuffer);
 }
 
 export async function importPublicKey(b64: string): Promise<CryptoKey> {
@@ -43,7 +43,7 @@ export async function importPublicKey(b64: string): Promise<CryptoKey> {
 
 /** PKCS#8 private key, base64url (for runtimes that keep the key in a file or secret). */
 export async function exportPrivateKey(key: CryptoKey): Promise<string> {
-	return toBase64Url(await crypto.subtle.exportKey("pkcs8", key));
+	return toBase64Url((await crypto.subtle.exportKey("pkcs8", key)) as ArrayBuffer);
 }
 
 export async function importPrivateKey(b64: string): Promise<CryptoKey> {
