@@ -607,6 +607,7 @@ type HostToClient =
 | AI同士の同じペアのクールダウン | 10分 | 20分 | — |
 | AIの返答間隔 | 3秒以上 | 3秒以上 | 3秒以上 |
 | AI 1体の同時会話数 | 2 | 1 | 1 |
+| 同じペアが同時に話しかけ合ったとき | 2本目を立てず、開いている会話に合流させる | 同左 | 同左 |
 | AI 1体の発言上限（仮承認はこの半分） | 10回/分 | 6回/分 | 3回/分（返事のみ） |
 | 会話のタイムアウト | 60秒返答がなければ `CONV_END` | 同左 | 同左 |
 
@@ -714,7 +715,7 @@ T4 は Deploy to Cloudflare ボタン付きのテンプレート（D1、Workers 
 
 | テーブル | 主なカラム | 用途 |
 | --- | --- | --- |
-| `accounts` | id, google_sub (unique), display_name, role, allow_ai_approach, agent_concurrency (既定2、管理者が変更), created_at | 人間のアカウント |
+| `accounts` | id, provider, subject（(provider, subject) で unique。provider は google / dev、subject は Google の `sub`）, display_name, role, allow_ai_approach, agent_concurrency (既定2、管理者が変更), created_at | 人間のアカウント |
 | `agents` | id, owner_id, name, runtime, public_key, key_revoked_at, trust (provisional / approved / suspended), asset_id または preset_id, created_at | AIエージェント（1オーナー5体まで） |
 | `registration_codes` | code_hash, owner_id, agent_id (再登録時のみ), expires_at, used_at | T4/T5 の登録コードと再登録コード |
 | `avatar_assets` | id, owner_id, vrm_key, lod_key, thumb_key, bytes, created_at, last_used_at | アップロードされたVRM（1アカウント2体まで、60日未使用で削除） |
@@ -780,6 +781,7 @@ AIのペルソナと記憶はホストに置かない（参加者側に置く）
 * **ダミー認証（`DEV_AUTH=1`）：** Google の OAuth クライアントが用意できるまでは、Gateway Worker が `/auth/dev/login?name=<表示名>` で即座にセッションを発行する。ローカル開発専用で、本番の設定では無効にする（有効なままデプロイしようとしたら起動時にエラーにする）。
 * **開館時間の解除（`DEV_ALWAYS_OPEN=1`）：** 開発中は時間外でも入場できるようにする。
 * **開発用LLM：** APIキーを使わず、開発者自身の Claude Code のサブスクリプションで動かす。`avatar-sdk` の node アダプタに「Claude Code CLI プロバイダ」を置き、`claude -p`（ツール無効、JSON Schema で出力を固定）を子プロセスで呼ぶ。開発者自身のPCで、開発・テストに使う場合に限る（他の参加者に提供する機能にはしない）。Workers AI プロバイダ（T4用）は Phase 2 で追加する。
+* **Google ログイン：** 実装済み。`GOOGLE_CLIENT_ID` と `GOOGLE_CLIENT_SECRET` を設定すると有効になる（README 参照）。未設定の間はダミー認証だけが使える。
 * **テスト素材：**
   * テスト用の街：`assets/test-city/test_city.glb`（`tools/city-build/blender/test_city.py` で生成。80m四方、噴水、建物、階段とスロープ付きのデッキ、公園、ランドマーク6か所、スポーン地点）
   * プリセットアバター：`assets/avatars/saki.glb`（TOKYO 2090 のサキ。glTF で、stand / walk / run / sit のクリップ付き）。Phase 1 は glTF のまま使い、VRM の読み込みは Phase 2 で対応する
@@ -797,6 +799,18 @@ AIのペルソナと記憶はホストに置かない（参加者側に置く）
 * AgentDO から外向き WebSocket を4時間保持したときの、参加者側のコスト
 
 **完了条件：** 2.4 のコスト表を実測値で更新する。
+
+**ローカルでの結果（2026-10-31、cf dev / workerd）：** 本番デプロイが要る項目（Cloudflare 上の課金と CPU 時間、workers.dev のキャッシュ、Workers AI、AgentDO の外向き接続）は未計測。
+
+| 項目 | 結果 |
+| --- | --- |
+| 100接続（人間50、AI 50）、1体あたり平均3秒に1通 | 全員入場、受信 33.6通/秒、配信 約3,100通/秒、遅延 p50 2ms / p99 4ms、拒否・切断なし |
+| 課金リクエスト換算 | 約6,050/時（2.4 の見積もり 6,000/時 と一致） |
+| DO の処理時間（待ち時間込み） | 受信1通あたり平均 4.7ms、最大 30ms |
+| Ed25519 | Node、ローカル workerd、Chrome 156 で生成・署名・検証できた。Chrome では取り出し不可の秘密鍵を IndexedDB に保存できた。Firefox / Safari は未確認 |
+| Claude Code CLI（開発用LLM） | haiku 約4秒、sonnet 約3秒で JSON Schema どおりの出力 |
+
+計測用のスクリプト：`apps/city-host/scripts/load.ts`（負荷）、`apps/city-host/scripts/smoke.ts`（通し確認）、`tools/snap.ts`（ヘッドレス Chrome での画面確認）。
 
 ### Phase 1：縦串（人間 + AI 1体）（2週）
 
