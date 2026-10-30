@@ -93,7 +93,7 @@ def build():
 
     # fountain (basin is an obstacle; you walk around it)
     cylinder('fountain_basin', 0, 0, 3.0, 0.5, material=stone, verts=32)
-    cylinder('fountain_water', 0, 0, 2.7, 0.05, z0=0.45, material=water, verts=32)
+    cylinder('fountain_water', 0, 0, 2.7, 0.05, z0=0.35, material=water, verts=32)  # top below the rim
     cylinder('fountain_pillar', 0, 0, 0.4, 2.2, material=stone)
 
     # buildings
