@@ -20,6 +20,9 @@ export default defineConfig(({ mode }) => {
 				ROOM: bindings.durableObject({ worker: "rojibura", exportName: "CityRoomDO" }),
 				DB: bindings.d1({ name: "rojibura" }),
 				SESSION_SECRET: bindings.secret(),
+				// Google OAuth client (docs/prd.md 2.2.3). Login is disabled until both are set.
+				GOOGLE_CLIENT_ID: bindings.secret(),
+				GOOGLE_CLIENT_SECRET: bindings.secret(),
 				// Development switches (docs/prd.md part 5). Never on in production builds.
 				DEV_AUTH: bindings.text(dev ? "1" : "0"),
 				DEV_ALWAYS_OPEN: bindings.text(dev ? "1" : "0"),

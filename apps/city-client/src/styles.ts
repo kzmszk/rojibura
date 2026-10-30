@@ -15,6 +15,9 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #bfd6e8; }
 .rj-hud { position: absolute; top: 12px; left: 12px; right: 12px; display: flex; justify-content: space-between; pointer-events: none; }
 .rj-status, .rj-logout { pointer-events: auto; font-size: 13px; padding: 6px 10px; border-radius: 8px; background: rgba(255,255,255,.8); color: #222; }
 .rj-logout { text-decoration: none; }
+.rj-right { display: flex; gap: 8px; align-items: center; }
+.rj-check { pointer-events: auto; font-size: 12px; padding: 6px 10px; border-radius: 8px; background: rgba(255,255,255,.8); color: #222; cursor: pointer; }
+.rj-google { display: block; text-align: center; font-size: 16px; padding: 10px; border-radius: 8px; border: 1px solid #bbc; color: #222; text-decoration: none; background: #fff; }
 .rj-chat { position: absolute; left: 12px; bottom: 12px; width: min(440px, calc(100% - 24px)); display: flex; flex-direction: column; gap: 6px; }
 .rj-log { max-height: 30vh; overflow-y: auto; font-size: 13px; line-height: 1.5; padding: 6px 10px; border-radius: 8px; background: rgba(255,255,255,.75); }
 .rj-log:empty { display: none; }

@@ -14,6 +14,7 @@ import {
 	type Account,
 	cleanName,
 	ensureSchema,
+	findAccount,
 	findOrCreateAccount,
 	getAccount,
 	getAgent,
@@ -21,14 +22,21 @@ import {
 	listAgents,
 	registerAgent,
 	setAgentTrust,
+	updateAccount,
 } from "./db.ts";
 import { isOpen, nextOpening } from "./hours.ts";
+import { authUrl, exchangeCode, googleKeys, newPkce, verifyIdToken } from "./oidc.ts";
 import type { JoinRequest } from "./room.ts";
 import {
 	clearSessionCookie,
+	cookie,
 	createSessionToken,
+	createSignedToken,
 	getCookie,
+	OAUTH_COOKIE,
+	OAUTH_TTL_MS,
 	readSessionToken,
+	readSignedToken,
 	SESSION_COOKIE,
 	sessionCookie,
 } from "./session.ts";
@@ -62,10 +70,70 @@ async function currentAccount(request: Request): Promise<Account | null> {
 
 async function loginResponse(account: Account, redirect: string): Promise<Response> {
 	const token = await createSessionToken(sessionSecret(), account.id);
+	const headers = new Headers({ Location: redirect });
+	headers.append("Set-Cookie", sessionCookie(token));
+	headers.append("Set-Cookie", cookie(OAUTH_COOKIE, "", 0));
+	return new Response(null, { status: 302, headers });
+}
+
+function safeRedirect(r: string | null | undefined): string {
+	return r?.startsWith("/") && !r.startsWith("//") ? r : "/";
+}
+
+const googleConfigured = () => Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET);
+
+async function googleLogin(url: URL): Promise<Response> {
+	if (!googleConfigured()) return error(503, "Google login is not configured");
+	const { state, verifier } = newPkce();
+	const redirect = safeRedirect(url.searchParams.get("redirect"));
+	const token = await createSignedToken(
+		sessionSecret(),
+		"oauth",
+		{ state, verifier, redirect },
+		OAUTH_TTL_MS,
+	);
+	const location = await authUrl(env.GOOGLE_CLIENT_ID, `${url.origin}/auth/google/callback`, state, verifier);
 	return new Response(null, {
 		status: 302,
-		headers: { Location: redirect, "Set-Cookie": sessionCookie(token) },
+		headers: { Location: location, "Set-Cookie": cookie(OAUTH_COOKIE, token, OAUTH_TTL_MS) },
 	});
+}
+
+async function googleCallback(request: Request, url: URL): Promise<Response> {
+	if (!googleConfigured()) return error(503, "Google login is not configured");
+	const raw = getCookie(request, OAUTH_COOKIE);
+	const saved = raw
+		? await readSignedToken<{ state: string; verifier: string; redirect: string }>(
+				sessionSecret(),
+				"oauth",
+				raw,
+			)
+		: null;
+	const code = url.searchParams.get("code");
+	if (!saved || !code || url.searchParams.get("state") !== saved.state)
+		return error(400, "invalid login state");
+	let sub: string;
+	try {
+		const idToken = await exchangeCode({
+			code,
+			verifier: saved.verifier,
+			clientId: env.GOOGLE_CLIENT_ID,
+			clientSecret: env.GOOGLE_CLIENT_SECRET,
+			redirectUri: `${url.origin}/auth/google/callback`,
+		});
+		const claims = await verifyIdToken(idToken, await googleKeys(), env.GOOGLE_CLIENT_ID);
+		if (typeof claims === "string") return error(401, `login failed: ${claims}`);
+		sub = claims.sub;
+	} catch (e) {
+		return error(502, (e as Error).message);
+	}
+	const existing = await findAccount(env.DB, "google", sub);
+	const account = existing ?? (await findOrCreateAccount(env.DB, "google", sub, `ゲスト${sub.slice(-4)}`));
+	// new accounts choose their display name first (scope is openid only, so Google gives no name)
+	return loginResponse(
+		account,
+		existing ? saved.redirect : `/?welcome=1&redirect=${encodeURIComponent(saved.redirect)}`,
+	);
 }
 
 function openOrError(): Response | null {
@@ -139,8 +207,22 @@ async function devSelftest(): Promise<Response> {
 
 async function api(request: Request, url: URL): Promise<Response> {
 	const path = url.pathname;
-	if (path === "/api/health") return json({ ok: true, dev: DEV, open: isOpen(Date.now()) });
+	if (path === "/api/health")
+		return json({ ok: true, dev: DEV, google: googleConfigured(), open: isOpen(Date.now()) });
 	if (path === "/api/presets") return json(Object.values(PRESETS));
+
+	if (path === "/api/me" && request.method === "PATCH") {
+		const account = await currentAccount(request);
+		if (!account) return error(401, "login required");
+		const body = (await request.json().catch(() => null)) as {
+			name?: string;
+			allowAiApproach?: boolean;
+		} | null;
+		const name = body?.name === undefined ? undefined : cleanName(body.name);
+		if (name === null) return error(400, "bad name");
+		await updateAccount(env.DB, account.id, { name, allowAiApproach: body?.allowAiApproach });
+		return json({ ok: true });
+	}
 
 	if (path === "/api/me") {
 		const account = await currentAccount(request);
@@ -150,6 +232,7 @@ async function api(request: Request, url: URL): Promise<Response> {
 			id: account.id,
 			name: account.display_name,
 			role: account.role,
+			allowAiApproach: account.allow_ai_approach === 1,
 			agents: agents.map((a) => ({ id: a.id, name: a.name, runtime: a.runtime, trust: a.trust })),
 		});
 	}
@@ -190,20 +273,21 @@ async function api(request: Request, url: URL): Promise<Response> {
 	return error(404, "not found");
 }
 
-async function auth(_request: Request, url: URL): Promise<Response> {
+async function auth(request: Request, url: URL): Promise<Response> {
 	if (url.pathname === "/auth/logout") {
 		return new Response(null, {
 			status: 302,
 			headers: { Location: "/", "Set-Cookie": clearSessionCookie() },
 		});
 	}
+	if (url.pathname === "/auth/google/login") return googleLogin(url);
+	if (url.pathname === "/auth/google/callback") return googleCallback(request, url);
 	if (url.pathname === "/auth/dev/login") {
 		if (!DEV) return error(404, "not found");
 		const name = cleanName(url.searchParams.get("name") ?? "");
 		if (!name) return error(400, "name is required (1-24 characters)");
 		const account = await findOrCreateAccount(env.DB, "dev", name, name);
-		const redirect = url.searchParams.get("redirect") ?? "/";
-		return loginResponse(account, redirect.startsWith("/") && !redirect.startsWith("//") ? redirect : "/");
+		return loginResponse(account, safeRedirect(url.searchParams.get("redirect")));
 	}
 	return error(404, "not found");
 }

@@ -1,1 +1,4 @@
 SESSION_SECRET=change-me-to-a-long-random-string
+# Google OAuth client (optional in development; the dev login works without it)
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=

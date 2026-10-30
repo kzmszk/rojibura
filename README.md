@@ -32,3 +32,12 @@ pnpm lint         # biome
 `cf dev`（Vite の development モード）では、ダミー認証（`DEV_AUTH`）と開館時間の解除（`DEV_ALWAYS_OPEN`）が自動で有効になる。本番ビルドでは無効。
 
 デプロイ前に一度 `npx cf auth login` が必要。
+
+## Google ログインの設定（issue #14）
+
+1. Google Cloud Console で OAuth クライアント（ウェブアプリケーション）を作る。スコープは `openid` だけでよい（メールや名前は受け取らない）。
+2. 承認済みのリダイレクト URI に次を登録する。
+   - 開発：`http://localhost:5173/auth/google/callback`
+   - 本番：`https://<worker名>.<サブドメイン>.workers.dev/auth/google/callback`
+3. 開発では `apps/city-host/.dev.vars` に `GOOGLE_CLIENT_ID` と `GOOGLE_CLIENT_SECRET` を書く（`.dev.vars.example` を参照）。本番ではシークレットとして登録する。
+4. 両方が設定されるとログイン画面に「Google でログイン」が出る。初回ログイン時は表示名を決める画面になる。

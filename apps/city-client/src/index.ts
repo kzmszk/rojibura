@@ -48,21 +48,64 @@ export async function mountApp(root: HTMLElement): Promise<void> {
 
 	const [meRes, health] = await Promise.all([
 		fetch("/api/me"),
-		fetch("/api/health").then((r) => r.json() as Promise<{ dev: boolean }>),
+		fetch("/api/health").then((r) => r.json() as Promise<{ dev: boolean; google: boolean }>),
 	]);
 	if (meRes.status === 401) {
-		showLogin(root, health.dev);
+		showLogin(root, health);
 		return;
 	}
-	const me = (await meRes.json()) as { id: string; name: string };
+	const me = (await meRes.json()) as Me;
+	const params = new URLSearchParams(location.search);
+	if (params.get("welcome") === "1") {
+		showWelcome(root, me, params.get("redirect") ?? "/");
+		return;
+	}
 	await startCity(root, me);
 }
 
-function showLogin(root: HTMLElement, dev: boolean): void {
+interface Me {
+	id: string;
+	name: string;
+	allowAiApproach: boolean;
+}
+
+function patchMe(body: { name?: string; allowAiApproach?: boolean }): Promise<Response> {
+	return fetch("/api/me", {
+		method: "PATCH",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(body),
+	});
+}
+
+/** First Google login: Google gives no name (scope is openid only), so the person picks one. */
+function showWelcome(root: HTMLElement, me: Me, redirect: string): void {
+	const box = el("form", "rj-login");
+	const name = el("input", "");
+	name.value = me.name;
+	name.maxLength = 24;
+	name.required = true;
+	const go = el("button", "", "この名前で入る");
+	go.type = "submit";
+	box.append(el("h1", "", "ようこそ"), el("p", "", "街で表示される名前を決めてください。"), name, go);
+	box.onsubmit = async (e) => {
+		e.preventDefault();
+		const r = await patchMe({ name: name.value });
+		if (r.ok) location.replace(redirect.startsWith("/") ? redirect : "/");
+	};
+	root.append(box);
+	name.select();
+}
+
+function showLogin(root: HTMLElement, health: { dev: boolean; google: boolean }): void {
 	const box = el("form", "rj-login");
 	box.append(el("h1", "", "rojibura"), el("p", "", "人間とAIが暮らす街"));
-	if (!dev) {
-		box.append(el("p", "rj-note", "ログインは準備中です（Google ログインは近日対応）。"));
+	if (health.google) {
+		const google = el("a", "rj-google", "Google でログイン");
+		google.href = `/auth/google/login?redirect=${encodeURIComponent("/")}`;
+		box.append(google);
+	}
+	if (!health.dev) {
+		if (!health.google) box.append(el("p", "rj-note", "ログインは準備中です。"));
 		root.append(box);
 		return;
 	}
@@ -91,7 +134,7 @@ function showLogin(root: HTMLElement, dev: boolean): void {
 	name.focus();
 }
 
-async function startCity(root: HTMLElement, me: { id: string; name: string }): Promise<void> {
+async function startCity(root: HTMLElement, me: Me): Promise<void> {
 	const scene = new CityScene(root);
 	const nav = await loadNavigator();
 	await scene.loadCity(`${CITY}/test_city.glb`);
@@ -99,9 +142,17 @@ async function startCity(root: HTMLElement, me: { id: string; name: string }): P
 	// ---- HUD ----
 	const hud = el("div", "rj-hud");
 	const status = el("div", "rj-status", "接続中…");
+	const right = el("div", "rj-right");
+	const approach = el("label", "rj-check");
+	const box = el("input", "");
+	box.type = "checkbox";
+	box.checked = me.allowAiApproach;
+	box.onchange = () => void patchMe({ allowAiApproach: box.checked });
+	approach.append(box, document.createTextNode(" AIから話しかけられてもいい"));
 	const logout = el("a", "rj-logout", "ログアウト");
 	logout.href = "/auth/logout";
-	hud.append(status, logout);
+	right.append(approach, logout);
+	hud.append(status, right);
 	const chat = el("div", "rj-chat");
 	const log = el("div", "rj-log");
 	const form = el("form", "rj-say");

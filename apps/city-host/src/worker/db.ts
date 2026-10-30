@@ -68,6 +68,27 @@ export async function findOrCreateAccount(
 	return created;
 }
 
+export function findAccount(db: D1Database, provider: string, subject: string): Promise<Account | null> {
+	return db
+		.prepare("SELECT * FROM accounts WHERE provider = ? AND subject = ?")
+		.bind(provider, subject)
+		.first<Account>();
+}
+
+export async function updateAccount(
+	db: D1Database,
+	id: string,
+	patch: { name?: string; allowAiApproach?: boolean },
+): Promise<void> {
+	if (patch.name !== undefined)
+		await db.prepare("UPDATE accounts SET display_name = ? WHERE id = ?").bind(patch.name, id).run();
+	if (patch.allowAiApproach !== undefined)
+		await db
+			.prepare("UPDATE accounts SET allow_ai_approach = ? WHERE id = ?")
+			.bind(patch.allowAiApproach ? 1 : 0, id)
+			.run();
+}
+
 export function getAccount(db: D1Database, id: string): Promise<Account | null> {
 	return db.prepare("SELECT * FROM accounts WHERE id = ?").bind(id).first<Account>();
 }
