@@ -1,0 +1,15 @@
+{
+	"name": "@rojibura/avatar-sdk",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"scripts": {
+		"typecheck": "tsc"
+	},
+	"dependencies": {
+		"@rojibura/nav": "workspace:*",
+		"@rojibura/protocol": "workspace:*"
+	}
+}

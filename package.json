@@ -1,0 +1,23 @@
+{
+	"name": "rojibura",
+	"private": true,
+	"type": "module",
+	"packageManager": "pnpm@11.24.0",
+	"engines": {
+		"node": ">=26.8"
+	},
+	"scripts": {
+		"dev": "pnpm --filter @rojibura/city-host dev",
+		"build": "pnpm --filter @rojibura/city-host build",
+		"test": "vitest run",
+		"typecheck": "pnpm -r --no-bail typecheck",
+		"lint": "biome check .",
+		"format": "biome check --write ."
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.6.4",
+		"@types/node": "26.6.6",
+		"typescript": "7.0.2",
+		"vitest": "5.0.5"
+	}
+}

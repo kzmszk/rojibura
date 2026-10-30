@@ -86,8 +86,8 @@ flowchart LR
 | **開館時間** | 毎日 20:00〜24:00 JST（UTC 11:00〜15:00。Cloudflareの日次リセット UTC 0:00 をまたがない） | 時間外は管理者のみ、同時10接続まで |
 | **DO リクエスト** | 無料枠 100,000/日、設計予算 50,000/日 | 経路型Intent、WebSocket 20:1 課金、縮退 |
 | **DO 稼働時間** | 無料枠 13,000 GB-s/日、設計予算 6,500 GB-s/日 | 4時間稼働で約1,800 GB-s |
-| **Workers リクエスト** | 無料枠 100,000/日、設計予算 50,000/日 | 静的ファイルはPages、アセットは immutable キャッシュ |
-| **ホスト帯域** | 0円 | Pages / R2 / Workers はエグレス無料 |
+| **Workers リクエスト** | 無料枠 100,000/日、設計予算 50,000/日 | 静的ファイルは Workers Static Assets（リクエスト無料・無制限）、アセットは immutable キャッシュ |
+| **ホスト帯域** | 0円 | Workers / R2 はエグレス無料 |
 | **クライアントFPS** | 60FPS（PC / モダンブラウザ） | VRM予算、3段LOD、距離別の段階ロード |
 | **入場時の表示** | 入場から10秒以内に近傍アバターが表示され始める | サムネイル → 軽量版 → フルVRM の順に段階表示 |
 
@@ -125,7 +125,7 @@ flowchart LR
 ```mermaid
 flowchart TB
   subgraph HOST["ホスト環境（Cloudflare 無料枠・運営者アカウント）"]
-    PAGES["Pages: Webクライアント / city.glb / navmesh.json / 共通モーション"]
+    PAGES["Static Assets: Webクライアント / city.glb / navmesh.json / 共通モーション"]
     GW["Gateway Worker: 認証 / API / アセット配信 / 開館時間・定員チェック"]
     ROOM["CityRoomDO: 在籍・移動・会話・縮退制御（WebSocket Hibernation）"]
     HD1[("D1: アカウント / エージェント / アセット / 通報・BAN / allowlist")]
@@ -315,7 +315,7 @@ stateDiagram-v2
 | **L1 節約** | 観覧モードを停止 | 散歩間隔45〜120秒、AI同士の会話は最大4ターン、AIの発言上限を6回/分に | WASD送信を2回/秒に間引く |
 | **L2 制限** | AIの新規入場を停止 | AI同士の会話を停止、AIは話しかけられた時だけ返事（3回/分） | 変更なし |
 | **L3 退避** | 新規入場をすべて停止し、閉館予告を出す | AIを全員退場させる | 在籍中の人間はそのまま |
-| **L4 閉館** | 全接続を閉じる | — | Pages 上の静的な「本日の営業は終了しました」ページへ遷移（Pagesは無制限なので必ず表示できる） |
+| **L4 閉館** | 全接続を閉じる | — | 静的アセットの「本日の営業は終了しました」ページへ遷移（静的アセットへのリクエストは無料・無制限なので必ず表示できる） |
 
 * レベルが上がるときは即時、下がるときは10分の猶予（ヒステリシス）を置いて振動を防ぐ。
 * レベルは `BUDGET` メッセージで全員に配る。SDKが従わなくても、ホストが上限を強制する。
@@ -776,7 +776,7 @@ AIのペルソナと記憶はホストに置かない（参加者側に置く）
 
 ### 開発環境
 
-* **Cloudflare：** 既存アカウントを使う。ツールは `cf` CLI（Cloudflare公式、npm の `cf`。現在 beta）。ローカル開発は `cf dev`、デプロイは `cf deploy`。デプロイ前に一度 `cf auth login` が必要。
+* **Cloudflare：** 既存アカウントを使う。Webクライアントは Pages ではなく、Gateway Worker の静的アセット（Workers Static Assets）として同じ Worker から配信する（同一オリジンなので Cookie と WebSocket の扱いが単純になる）。ツールは `cf` CLI（Cloudflare公式、npm の `cf`。現在 beta）。ローカル開発は `cf dev`、デプロイは `cf deploy`。デプロイ前に一度 `cf auth login` が必要。
 * **ダミー認証（`DEV_AUTH=1`）：** Google の OAuth クライアントが用意できるまでは、Gateway Worker が `/auth/dev/login?name=<表示名>` で即座にセッションを発行する。ローカル開発専用で、本番の設定では無効にする（有効なままデプロイしようとしたら起動時にエラーにする）。
 * **開館時間の解除（`DEV_ALWAYS_OPEN=1`）：** 開発中は時間外でも入場できるようにする。
 * **開発用LLM：** APIキーを使わず、開発者自身の Claude Code のサブスクリプションで動かす。`avatar-sdk` の node アダプタに「Claude Code CLI プロバイダ」を置き、`claude -p`（ツール無効、JSON Schema で出力を固定）を子プロセスで呼ぶ。開発者自身のPCで、開発・テストに使う場合に限る（他の参加者に提供する機能にはしない）。Workers AI プロバイダ（T4用）は Phase 2 で追加する。

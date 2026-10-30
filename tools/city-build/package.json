@@ -1,0 +1,11 @@
+{
+	"name": "@rojibura/city-build",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"typecheck": "tsc"
+	},
+	"dependencies": {
+		"@rojibura/nav": "workspace:*"
+	}
+}

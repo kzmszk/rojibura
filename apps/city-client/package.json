@@ -1,0 +1,19 @@
+{
+	"name": "@rojibura/city-client",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"scripts": {
+		"typecheck": "tsc"
+	},
+	"dependencies": {
+		"@rojibura/nav": "workspace:*",
+		"@rojibura/protocol": "workspace:*",
+		"three": "0.187.0"
+	},
+	"devDependencies": {
+		"@types/three": "0.186.0"
+	}
+}
