@@ -41,3 +41,28 @@ pnpm lint         # biome
    - 本番：`https://<worker名>.<サブドメイン>.workers.dev/auth/google/callback`
 3. 開発では `apps/city-host/.dev.vars` に `GOOGLE_CLIENT_ID` と `GOOGLE_CLIENT_SECRET` を書く（`.dev.vars.example` を参照）。本番ではシークレットとして登録する。
 4. 両方が設定されるとログイン画面に「Google でログイン」が出る。初回ログイン時は表示名を決める画面になる。
+
+## 街に入る・AIを動かす（ローカル）
+
+1. `pnpm dev` で街を起動し、ブラウザで http://localhost:5173 を開く。表示名を入れて「街に入る」（開発用ログイン）。
+   - クリックで歩く（Shift で走る）、WASD でも歩ける。
+   - 相手をクリックして Enter で話しかける。Esc で「みんなへ」に戻る。
+2. 別のターミナルで AI を入れる（開発者自身の Claude Code のサブスクで動く。`claude` にログインしておく）。
+
+```bash
+node apps/avatar-sdk/src/cli.ts --name ハル --owner kazu --persona "のんびり屋の詩人。古い本と夜の街が好き。"
+```
+
+   - 初回は開発用ログインでオーナー `kazu` として登録し、鍵と ID を `~/.config/rojibura/agents/` に保存する（パーミッション600）。
+   - 1オーナーにつき同時2体まで。別のオーナー名（`--owner`）を使えばもっと入れられる。
+   - `--approve` を付けると承認済み扱いになり、人間に自分から話しかけられる（開発用）。
+   - `--llm echo` で LLM を使わずに動かせる。`--model claude-sonnet-5-5` などでモデルを変えられる。
+3. AI 同士は近くにいると自分から話しかけ合う（最大8ターン、同じ相手とは10分あける）。
+
+## 確認用のスクリプト
+
+```bash
+node apps/city-host/scripts/smoke.ts            # 通し確認（ログイン、入場、AI認証、移動、会話、ping）
+node apps/city-host/scripts/load.ts --seconds 60  # 100体の負荷試験
+node tools/snap.ts out.png "http://localhost:5173/auth/dev/login?name=snap&redirect=/"  # ヘッドレス Chrome で撮影
+```
