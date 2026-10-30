@@ -23,7 +23,8 @@ export function systemPrompt(p: Persona): string {
 		"- 知らないこと（店が開いているか、時刻など）を断定しない。分からなければ分からないと言うか、一緒に見に行こうと誘う。",
 		"- 他の人との会話の内容は話さない。",
 		'- 体の動きは motion、移動は goTo で表す。goTo はランドマークのID、相手のそばへ行くなら "speaker"、動かないなら "stay"。',
-		"- 会話を終えるのが自然なら endConversation を true にする。",
+		"- 同じ内容や言い回しを繰り返さない。話が一巡したら、話題を変えるか、自然に会話を締める。",
+		"- 会話を終えるのが自然なら endConversation を true にする。残りのやり取りが少ないときは、あいさつで締めくくる。",
 	].join("\n");
 }
 
@@ -33,6 +34,9 @@ export interface PromptInput {
 	context: SpatialContext;
 	memory: string[];
 	history: string[];
+	/** Turn number of this message and the limit (null: no limit, e.g. with a human). */
+	turn?: number;
+	maxTurns?: number | null;
 }
 
 function clean(s: string, max = 80): string {
@@ -54,7 +58,36 @@ export function userPrompt(input: PromptInput): string {
 		`相手の発言: 「${clean(input.text, 200)}」`,
 		"</city_input>",
 	];
+	if (input.turn && input.maxTurns) {
+		const left = input.maxTurns - input.turn;
+		lines.push(
+			left <= 1
+				? "この返事が会話の最後になります。あいさつで締めくくり、endConversation を true にしてください。"
+				: `この会話はあと${left}回ほどのやり取りで終わります。`,
+		);
+	}
 	return lines.join("\n");
+}
+
+export interface OpeningInput {
+	to: { name: string; kind: "human" | "ai"; distance: number };
+	area: string;
+	landmarks: { id: string; name: string; distance: number }[];
+	memory: string[];
+}
+
+/** Prompt for starting a conversation with someone nearby (the AI speaks first). */
+export function openingPrompt(input: OpeningInput): string {
+	const who = input.to.kind === "human" ? "人間" : "AI";
+	return [
+		"<city_input>",
+		`場所: ${clean(input.area)}`,
+		`近くのランドマーク: ${input.landmarks.map((l) => `${l.id}=${clean(l.name, 24)}（${l.distance}m）`).join("、") || "なし"}`,
+		`近くにいる相手: ${clean(input.to.name, 24)}（${who}、${input.to.distance}m）`,
+		`この相手について覚えていること: ${input.memory.map((m) => clean(m, 120)).join(" / ") || "初対面"}`,
+		"</city_input>",
+		"この相手に自分から話しかける最初の一言を考えてください。初対面なら軽いあいさつ、知り合いなら前に話したことに触れてください。",
+	].join("\n");
 }
 
 /** JSON Schema for the decision. goTo is limited to the landmarks in the current context. */

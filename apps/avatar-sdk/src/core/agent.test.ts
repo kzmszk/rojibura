@@ -1,5 +1,5 @@
 import type { ClientToHost, HostToClient } from "@rojibura/protocol";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { Agent } from "./agent.ts";
 import { decisionSchema, parseDecision, userPrompt } from "./prompt.ts";
 import type { LLM, Memory } from "./types.ts";
@@ -187,4 +187,74 @@ describe("Agent", () => {
 		expect(sent.at(-1)).toEqual({ t: "STATUS", status: "resting" });
 		agent.stop();
 	});
+});
+
+test("starts a conversation with an AI nearby", async () => {
+	vi.useFakeTimers();
+	try {
+		const sent: ClientToHost[] = [];
+		let user = "";
+		const agent = new Agent({
+			persona: { name: "ミナ", personality: "" },
+			llm: {
+				name: "fake",
+				complete: async (req) => {
+					user = req.user;
+					return { reply: "こんばんは、いい夜ですね", motion: "wave", goTo: "stay", endConversation: false };
+				},
+			},
+			memory: memory(),
+			nav: { findPath: (a, b) => [a, b] },
+			landmarks: [{ id: "cafe", name: "オープンカフェ", pos: [10, 0] }],
+			logger: { info: () => {}, warn: () => {} },
+			send: (m) => sent.push(m),
+			random: () => 0,
+		});
+		const blank = { thumb: "", lod: "", vrm: "" };
+		agent.handle({
+			t: "WELCOME",
+			you: "a_mina",
+			serverTime: Date.now(),
+			budget: 0,
+			avatars: [
+				{
+					id: "a_mina",
+					kind: "ai",
+					name: "ミナ",
+					status: "active",
+					assets: blank,
+					move: { kind: "idle", pos: [0, 0], at: 0 },
+				},
+				{
+					id: "a_taro",
+					kind: "ai",
+					name: "タロ",
+					status: "active",
+					assets: blank,
+					move: { kind: "idle", pos: [3, 0], at: 0 },
+				},
+			],
+		});
+		await vi.advanceTimersByTimeAsync(3100);
+		expect(sent.find((m) => m.t === "SAY")).toEqual({
+			t: "SAY",
+			text: "こんばんは、いい夜ですね",
+			to: "a_taro",
+		});
+		expect(user).toContain("タロ");
+		// the host echoes SAID with the conversation ID; the agent then knows the conversation
+		agent.handle({
+			t: "SAID",
+			id: "a_mina",
+			to: "a_taro",
+			convId: "c_1",
+			text: "こんばんは、いい夜ですね",
+			at: Date.now(),
+		});
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(sent.filter((m) => m.t === "SAY")).toHaveLength(1); // no second opening while the conversation is open
+		agent.stop();
+	} finally {
+		vi.useRealTimers();
+	}
 });

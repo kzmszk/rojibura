@@ -218,6 +218,20 @@ describe("conversation", () => {
 		expect(last(x)).toMatchObject({ t: "NOTICE", kind: "rejected" });
 	});
 
+	test("two AIs starting at the same time share one conversation", () => {
+		const x = conn("x");
+		const y = conn("y");
+		ctx.room.join(x, ai("x", "o1"));
+		ctx.room.join(y, ai("y", "o2"));
+		ctx.room.handle(x, { t: "SAY", text: "やあ", to: "a_y" });
+		ctx.clock.advance(4000);
+		ctx.room.handle(y, { t: "SAY", text: "こんにちは", to: "a_x" });
+		const ids = new Set([...x.inbox, ...y.inbox].flatMap((m) => (m.t === "ADDRESSED" ? [m.convId] : [])));
+		expect(ids.size).toBe(1);
+		const second = x.inbox.find((m) => m.t === "ADDRESSED");
+		expect(second).toMatchObject({ turn: 2 });
+	});
+
 	test("provisional AI cannot start talking to a human but can reply", () => {
 		const h = conn("h");
 		const bot = conn("bot");

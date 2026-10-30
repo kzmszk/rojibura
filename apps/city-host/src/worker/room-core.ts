@@ -393,6 +393,13 @@ export class RoomCore<C> {
 				this.notice(conn, "rejected", "相手が見つかりません");
 				return;
 			}
+			// both sides may start at the same moment: join the open conversation instead of making a second one
+			const tid = target.id;
+			conv = [...this.convs.values()].find(
+				(c) => (c.a === m.id && c.b === tid) || (c.a === tid && c.b === m.id),
+			);
+		}
+		if (!conv && msg.to && target) {
 			const err = this.canStartConv(m, target, now);
 			if (err) {
 				this.notice(conn, "rejected", err);
