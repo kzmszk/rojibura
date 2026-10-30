@@ -3,6 +3,7 @@
 // Logs in two dev users, registers an agent, connects a human and the agent, and checks
 // movement, conversation and the agent challenge.
 
+import { NavMesh, type NavMeshData } from "@rojibura/nav";
 import {
 	authPayload,
 	encode,
@@ -93,7 +94,7 @@ check(
 );
 
 const alice = await devLogin("alice");
-const kazu = await devLogin("kazu");
+const kazu = await devLogin(`smoke-owner-${Date.now() % 100000}`);
 const me = await (await fetch(`${BASE}/api/me`, { headers: { Cookie: alice } })).json();
 check(me.id?.startsWith("h_"), "dev login and /api/me");
 
@@ -146,9 +147,16 @@ check(true, "agent challenge-response and JOINED");
 // movement
 const mine = welcome.avatars.find((x) => x.id === me.id);
 const start = mine?.move.kind === "idle" ? mine.move.pos : [0, -8];
-h.send({ t: "MOVE_PATH", path: [start as [number, number], [5, -12]], speed: 1.4, seq: 1 });
-await a.waitFor("MOVED", (m) => m.id === me.id);
-check(true, "MOVE_PATH reaches the agent");
+const mesh = NavMesh.fromJSON((await (await fetch(`${BASE}/test-city/navmesh.json`)).json()) as NavMeshData);
+// straight through the fountain (radius 3 m at the origin) must be rejected
+h.send({ t: "MOVE_PATH", path: [start as [number, number], [0, 8]], speed: 1.4, seq: 1 });
+await h.waitFor("CORRECT");
+check(true, "path through the fountain is corrected");
+const around = mesh.findPath(start as [number, number], [0, 8]);
+check(around && around.length > 2, `navmesh path around the fountain (${around?.length} points)`);
+h.send({ t: "MOVE_PATH", path: around ?? [], speed: 1.4, seq: 2 });
+await a.waitFor("MOVED", (m) => m.id === me.id && m.move.kind === "path");
+check(true, "MOVE_PATH along the navmesh reaches the agent");
 
 // conversation
 h.send({ t: "SAY", text: "こんばんは、カフェはどこ？", to: agent.id });

@@ -4,6 +4,7 @@
 // Reports delivery latency (host timestamp -> received), messages received per client, and room stats.
 
 import { parseArgs } from "node:util";
+import { NavMesh, type NavMeshData } from "@rojibura/nav";
 import {
 	authPayload,
 	type ClientToHost,
@@ -11,7 +12,9 @@ import {
 	exportPublicKey,
 	generateAgentKeyPair,
 	type HostToClient,
+	type MoveState,
 	parseHostMessage,
+	positionAt,
 	signAuth,
 	type Vec2,
 } from "@rojibura/protocol";
@@ -34,6 +37,7 @@ const AIS = Number(values.ais);
 const SECONDS = Number(values.seconds);
 const INTERVAL = Number(values.interval);
 const run = Date.now().toString(36);
+const mesh = NavMesh.fromJSON((await (await fetch(`${BASE}/test-city/navmesh.json`)).json()) as NavMeshData);
 
 async function devLogin(name: string): Promise<string> {
 	const r = await fetch(`${BASE}/auth/dev/login?name=${encodeURIComponent(name)}`, { redirect: "manual" });
@@ -49,7 +53,10 @@ let notices = 0;
 const closes: number[] = [];
 
 class Bot {
-	pos: Vec2 = [0, 0];
+	move: MoveState = { kind: "idle", pos: [0, 0], at: 0 };
+	get pos(): Vec2 {
+		return positionAt(this.move, Date.now());
+	}
 	ws!: WebSocket;
 	id = "";
 	others: string[] = [];
@@ -77,18 +84,16 @@ class Bot {
 			} else if (m.t === "WELCOME") {
 				this.id = m.you;
 				const me = m.avatars.find((a) => a.id === m.you);
-				if (me?.move.kind === "idle") this.pos = me.move.pos;
+				if (me) this.move = me.move;
 				this.others = m.avatars.map((a) => a.id).filter((id) => id !== m.you);
 				this.markReady();
 			} else if (m.t === "MOVED") {
 				latencies.push(now - m.move.at);
-				if (m.id === this.id && m.move.kind === "path")
-					this.pos = m.move.path[m.move.path.length - 1] as Vec2;
-				if (m.id === this.id && m.move.kind === "idle") this.pos = m.move.pos;
+				if (m.id === this.id) this.move = m.move;
 			} else if (m.t === "SAID") {
 				latencies.push(now - m.at);
-			} else if (m.t === "CORRECT" && m.move.kind === "idle") {
-				this.pos = m.move.pos;
+			} else if (m.t === "CORRECT") {
+				this.move = m.move;
 			} else if (m.t === "NOTICE") {
 				notices++;
 			} else if (m.t === "JOINED") {
@@ -105,13 +110,13 @@ class Bot {
 		if (Math.random() < 0.15) {
 			msg = { t: "SAY", text: `テスト発言 ${this.seq}` };
 		} else {
-			// short hops near the spawn area keep paths valid in the bounding-box world
-			const to: Vec2 = [
-				Math.max(-30, Math.min(30, this.pos[0] + (Math.random() - 0.5) * 8)),
-				Math.max(-30, Math.min(30, this.pos[1] + (Math.random() - 0.5) * 8)),
-			];
-			msg = { t: "MOVE_PATH", path: [this.pos, to], speed: 4, seq: ++this.seq };
-			this.pos = to;
+			// a short walk to a random nearby point along the navmesh
+			const here = this.pos;
+			const to: Vec2 = [here[0] + (Math.random() - 0.5) * 16, here[1] + (Math.random() - 0.5) * 16];
+			const path = mesh.findPath(mesh.closestPoint(here), mesh.closestPoint(to));
+			if (!path || path.length < 2) return;
+			path[0] = here;
+			msg = { t: "MOVE_PATH", path: path.slice(0, 24), speed: 4, seq: ++this.seq };
 		}
 		this.ws.send(encode(msg));
 		sent++;

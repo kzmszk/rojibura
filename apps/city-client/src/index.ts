@@ -1,5 +1,6 @@
 // rojibura city client (docs/prd.md 3.4): login, the 3D city, click-to-move, chat.
 
+import { NavMesh, type NavMeshData } from "@rojibura/nav";
 import {
 	type AvatarId,
 	type HostToClient,
@@ -37,10 +38,16 @@ function el<K extends keyof HTMLElementTagNameMap>(
 }
 
 async function loadNavigator(): Promise<Navigator> {
-	// TODO(#12): use NavMesh from @rojibura/nav with /test-city/navmesh.json
+	const mesh = NavMesh.fromJSON((await (await fetch(`${CITY}/navmesh.json`)).json()) as NavMeshData);
 	return {
-		findPath: (from, to) => [from, to],
-		isWalkable: (p) => Math.abs(p[0]) <= 39 && Math.abs(p[1]) <= 39,
+		findPath: (from, to) => {
+			const start = mesh.closestPoint(from);
+			const end = mesh.closestPoint(to);
+			// clicking on a building: walk to the nearest walkable point if it is close
+			if (Math.hypot(end[0] - to[0], end[1] - to[1]) > 3) return null;
+			return mesh.findPath(start, end);
+		},
+		isWalkable: (p) => mesh.isWalkable(p),
 	};
 }
 

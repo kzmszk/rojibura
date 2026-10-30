@@ -1,29 +1,29 @@
-// The walkable ground and landmarks of the test city.
-// TODO(#12): replace the bounding-box placeholder with @rojibura/nav and assets/test-city/navmesh.json.
+// The walkable ground and landmarks of the test city, from tools/city-build output (docs/prd.md 2.3).
 
+import { type LandmarksData, NavMesh, validatePath } from "@rojibura/nav";
 import type { Vec2 } from "@rojibura/protocol";
-import type { Landmark, Walkable, World } from "./room-core.ts";
+import landmarksJson from "../../../../assets/test-city/landmarks.json";
+import navmeshJson from "../../../../assets/test-city/navmesh.json";
+import type { Walkable, World } from "./room-core.ts";
 
-const HALF = 39;
-const inside = (p: Vec2) => Math.abs(p[0]) <= HALF && Math.abs(p[1]) <= HALF;
+/** Segments are sampled this densely so a long segment cannot cut across an obstacle. */
+const SAMPLE_SPACING = 0.25;
+
+export const navmesh = NavMesh.fromJSON(navmeshJson);
+const city = landmarksJson as LandmarksData;
 
 const walk: Walkable = {
-	isWalkable: inside,
-	validatePath: (path) => path.every(inside),
-	closestPoint: (p) => [Math.max(-HALF, Math.min(HALF, p[0])), Math.max(-HALF, Math.min(HALF, p[1]))],
+	isWalkable: (p) => navmesh.isWalkable(p),
+	validatePath: (path) => validatePath(navmesh, path, { sampleSpacing: SAMPLE_SPACING }).ok,
+	closestPoint: (p) => navmesh.closestPoint(p),
 };
 
-// glTF coordinates (x, z) of the LM_* nodes in assets/test-city/test_city.glb
-const landmarks: Landmark[] = [
-	{ id: "fountain", name: "中央噴水", pos: [0, -5] },
-	{ id: "cafe", name: "オープンカフェ", pos: [18, -9] },
-	{ id: "station", name: "駅前", pos: [-20, -22] },
-	{ id: "library", name: "図書館の入口", pos: [-18, 14] },
-	{ id: "deck", name: "展望デッキ", pos: [22, 20] },
-	{ id: "park", name: "小さな公園", pos: [-3, 27] },
-];
-
-export const world: World = { walk, landmarks, spawn: [0, -8], areaName: "テストの街" };
+export const world: World = {
+	walk,
+	landmarks: city.landmarks.map((l) => ({ id: l.id, name: l.name, pos: [l.pos[0], l.pos[1]] as Vec2 })),
+	spawn: [city.spawn.pos[0], city.spawn.pos[1]],
+	areaName: "テストの街",
+};
 
 export interface Preset {
 	id: string;

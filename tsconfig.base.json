@@ -12,6 +12,7 @@
 		"verbatimModuleSyntax": true,
 		"erasableSyntaxOnly": true,
 		"noUncheckedIndexedAccess": true,
-		"skipLibCheck": true
+		"skipLibCheck": true,
+		"resolveJsonModule": true
 	}
 }
