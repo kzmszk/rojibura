@@ -19,6 +19,7 @@ import { STYLES } from "./styles.ts";
 
 export interface Navigator {
 	findPath(from: Vec2, to: Vec2): Vec2[] | null;
+	isWalkable(p: Vec2): boolean;
 }
 
 const CITY = "/test-city";
@@ -37,7 +38,10 @@ function el<K extends keyof HTMLElementTagNameMap>(
 
 async function loadNavigator(): Promise<Navigator> {
 	// TODO(#12): use NavMesh from @rojibura/nav with /test-city/navmesh.json
-	return { findPath: (from, to) => [from, to] };
+	return {
+		findPath: (from, to) => [from, to],
+		isWalkable: (p) => Math.abs(p[0]) <= 39 && Math.abs(p[1]) <= 39,
+	};
 }
 
 export async function mountApp(root: HTMLElement): Promise<void> {
@@ -160,7 +164,7 @@ async function startCity(root: HTMLElement, me: Me): Promise<void> {
 	target.type = "button";
 	const input = el("input", "");
 	input.maxLength = MAX_SAY_LENGTH;
-	input.placeholder = "Enter で話す（相手をクリックすると話しかけ）";
+	input.placeholder = "Enter で話す（相手をクリックで話しかけ、WASD で歩く）";
 	form.append(target, input);
 	chat.append(log, form);
 	const toast = el("div", "rj-toast");
@@ -270,7 +274,62 @@ async function startCity(root: HTMLElement, me: Me): Promise<void> {
 		conn.send(talkTo ? { t: "SAY", text, to: talkTo } : { t: "SAY", text });
 		input.value = "";
 	};
+	// WASD: walk relative to the camera; sent as MOVE_VEL only when the direction changes (docs/prd.md 3.2.2)
+	const keys = new Set<string>();
+	let sentVel: { dir: Vec2; speed: number; at: number } | null = null;
+	const steer = (now: number, force = false) => {
+		const mine = myId ? avatars.get(myId) : undefined;
+		if (!mine) return;
+		const f = new THREE.Vector3();
+		scene.camera.getWorldDirection(f);
+		f.y = 0;
+		f.normalize();
+		const r = new THREE.Vector3(-f.z, 0, f.x);
+		const fw = (keys.has("w") ? 1 : 0) - (keys.has("s") ? 1 : 0);
+		const rt = (keys.has("d") ? 1 : 0) - (keys.has("a") ? 1 : 0);
+		const v = f.multiplyScalar(fw).add(r.multiplyScalar(rt));
+		const pos = poseAt(mine.state.move, conn.hostNow()).pos;
+		const wanted = v.lengthSq() > 0;
+		const dir: Vec2 = wanted ? [v.x / v.length(), v.z / v.length()] : [0, 0];
+		const speed = wanted ? (keys.has("shift") ? RUN_SPEED : WALK_SPEED) : 0;
+		// do not walk into walls or off the walkable area
+		const moving = wanted && nav.isWalkable([pos[0] + dir[0] * speed * 0.2, pos[1] + dir[1] * speed * 0.2]);
+		if (!moving && !sentVel) return;
+		if (sentVel && !force) {
+			const same =
+				moving &&
+				Math.abs(sentVel.speed - speed) < 0.01 &&
+				sentVel.dir[0] * dir[0] + sentVel.dir[1] * dir[1] > 0.97;
+			if (same || (moving && now - sentVel.at < 250)) return;
+		}
+		const move = moving
+			? ({ kind: "vel", pos, dir, speed, at: conn.hostNow() } as const)
+			: ({ kind: "idle", pos, at: conn.hostNow() } as const);
+		mine.setMove(move);
+		conn.send({ t: "MOVE_VEL", pos, dir, speed, seq: ++seq });
+		sentVel = moving ? { dir, speed, at: now } : null;
+	};
+	const movementKey = (e: KeyboardEvent) => {
+		const k = e.key.toLowerCase();
+		return ["w", "a", "s", "d", "shift"].includes(k) ? k : null;
+	};
+	addEventListener("keyup", (e) => {
+		const k = movementKey(e);
+		if (!k) return;
+		keys.delete(k);
+		steer(performance.now());
+	});
+	addEventListener("blur", () => {
+		keys.clear();
+		steer(performance.now());
+	});
 	addEventListener("keydown", (e) => {
+		const k = movementKey(e);
+		if (k && document.activeElement !== input) {
+			keys.add(k);
+			steer(performance.now());
+			return;
+		}
 		if (e.key === "Enter" && document.activeElement !== input) {
 			input.focus();
 			e.preventDefault();
@@ -331,6 +390,12 @@ async function startCity(root: HTMLElement, me: Me): Promise<void> {
 		const now = conn.hostNow();
 		for (const v of avatars.values()) v.update(now, dt, scene);
 		const mine = myId ? avatars.get(myId) : undefined;
+		if (keys.size > 0) steer(t);
+		// stop at the edge of the walkable area instead of walking into walls
+		if (mine?.state.move.kind === "vel") {
+			const ahead = poseAt(mine.state.move, now + 150).pos;
+			if (!nav.isWalkable(ahead)) steer(t, true);
+		}
 		if (mine && !placed) {
 			scene.jumpTo(mine.root.position);
 			placed = true;
