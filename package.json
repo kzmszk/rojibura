@@ -9,10 +9,12 @@
 	"scripts": {
 		"dev": "pnpm --filter @rojibura/city-host dev",
 		"build": "pnpm --filter @rojibura/city-host build",
+		"build:city": "node tools/city-build/src/build.ts assets/test-city/test_city.glb assets/test-city",
 		"test": "vitest run",
 		"typecheck": "pnpm -r --no-bail typecheck",
 		"lint": "biome check .",
-		"format": "biome check --write ."
+		"format": "biome check --write .",
+		"bench:nav": "node packages/nav/bench/bench.ts"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.6.4",

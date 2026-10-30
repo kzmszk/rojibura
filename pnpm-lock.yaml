@@ -74,6 +74,12 @@ importers:
 
   tools/city-build:
     dependencies:
+      '@recast-navigation/core':
+        specifier: 0.43.1
+        version: 0.43.1
+      '@recast-navigation/generators':
+        specifier: 0.43.1
+        version: 0.43.1
       '@rojibura/nav':
         specifier: workspace:*
         version: link:../../packages/nav
@@ -399,6 +405,15 @@ packages:
 
   '@poppinss/exception@1.2.3':
     resolution: {integrity: sha512-dCED+QRChTVatE9ibtoaxc+WkdzOSjYTKi/+uacHWIsfodVfpsueo3+DKpgU5Px8qXjgmXkSvhXvSCz3fnP9lw==}
+
+  '@recast-navigation/core@0.43.1':
+    resolution: {integrity: sha512-4igfPgnoV90O92sDSIA0xHa6tanh3z/udlgGmD0SqGQ6PKV4JS2l9jWO8YnxfZuXP/NV52H4c5FU6pSdZc9WDA==}
+
+  '@recast-navigation/generators@0.43.1':
+    resolution: {integrity: sha512-w7r6k/A93wWxuSN+Lg+PmlsUVXq06r5bqXmBglolxqDt2O/Y776BIhYtb6P2P6pbYqDWORu9NCZZJzfY4FNpaA==}
+
+  '@recast-navigation/wasm@0.43.1':
+    resolution: {integrity: sha512-XFL6PhO8JodwXUHBSAkfaLUdUEweIkJsdP3HTmtJvMs5fkqEWxWJmBskZlACHJepv55NAriqWxOtuLlG3t7+Hg==}
 
   '@rolldown/binding-android-arm-eabi@1.2.16':
     resolution: {integrity: sha512-ia3DwAs0OsMGS7+IConptSiyk9pEXkOx/AbJ2n/lAGxH3QkWQus1t8d7gnAT38FCU2sQu8lUbeR6AiZFv4JxaA==}
@@ -1250,6 +1265,17 @@ snapshots:
       supports-color: 10.2.2
 
   '@poppinss/exception@1.2.3': {}
+
+  '@recast-navigation/core@0.43.1':
+    dependencies:
+      '@recast-navigation/wasm': 0.43.1
+
+  '@recast-navigation/generators@0.43.1':
+    dependencies:
+      '@recast-navigation/core': 0.43.1
+      '@recast-navigation/wasm': 0.43.1
+
+  '@recast-navigation/wasm@0.43.1': {}
 
   '@rolldown/binding-android-arm-eabi@1.2.16':
     optional: true

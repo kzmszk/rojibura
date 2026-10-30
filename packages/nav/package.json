@@ -6,6 +6,7 @@
 		".": "./src/index.ts"
 	},
 	"scripts": {
-		"typecheck": "tsc"
+		"typecheck": "tsc && tsc -p bench",
+		"bench": "node bench/bench.ts"
 	}
 }
