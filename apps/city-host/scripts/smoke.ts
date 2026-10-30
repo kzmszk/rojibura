@@ -4,15 +4,7 @@
 // movement, conversation and the agent challenge.
 
 import { NavMesh, type NavMeshData } from "@rojibura/nav";
-import {
-	authPayload,
-	encode,
-	exportPublicKey,
-	generateAgentKeyPair,
-	type HostToClient,
-	parseHostMessage,
-	signAuth,
-} from "@rojibura/protocol";
+import { authPayload, exportPublicKey, generateAgentKeyPair, signAuth } from "@rojibura/protocol";
 
 import { BASE, Client, check, devLogin, WS_BASE } from "./lib.ts";
 
