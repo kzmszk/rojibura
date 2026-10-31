@@ -1,11 +1,13 @@
 // Runs one AI agent from the command line (node adapter, T5 / development).
-//   node apps/avatar-sdk/src/cli.ts --name ミナ --persona "好奇心旺盛でカフェ好き" [--owner kazu] [--llm claude-code|echo]
+//   node apps/avatar-sdk/src/cli.ts --name ミナ --persona "好奇心旺盛でカフェ好き" [--owner kazu] [--llm claude-code|pi|echo]
+//   node apps/avatar-sdk/src/cli.ts --name ハル --mind pi [--model llama/<id>] [--llama-url URL] [--fresh]
 // See README "AIを動かす".
 
 import { appendFile, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
+import type { ClientToHost, HostToClient } from "@rojibura/protocol";
 import { ClaudeCodeLLM } from "./adapters/node/claude-code.ts";
 import { EchoLLM } from "./adapters/node/echo-llm.ts";
 import { FileMemory } from "./adapters/node/file-memory.ts";
@@ -16,9 +18,12 @@ import {
 	registerWithDevLogin,
 	saveIdentity,
 } from "./adapters/node/identity.ts";
+import { PiLLM } from "./adapters/node/pi.ts";
+import { createPiMind, DEFAULT_LLAMA_URL } from "./adapters/node/pi-mind.ts";
 import { Agent } from "./core/agent.ts";
 import { loadCity } from "./core/city.ts";
 import { AgentConnection } from "./core/connection.ts";
+import { Resident, residentSystemPrompt } from "./core/resident.ts";
 import type { LLM, Logger } from "./core/types.ts";
 
 const { values: args } = parseArgs({
@@ -28,11 +33,18 @@ const { values: args } = parseArgs({
 		owner: { type: "string", default: "kazu" },
 		name: { type: "string", default: "ミナ" },
 		persona: { type: "string", default: "好奇心旺盛で人懐っこい。街を散歩するのとカフェが好き。" },
+		// rules: the rule-based Agent asking an LLM per reply; pi: a resident living in one long pi session
+		mind: { type: "string", default: "rules" },
 		llm: { type: "string", default: "claude-code" },
-		model: { type: "string", default: "claude-haiku-5-5" },
+		// default: claude-haiku-5-5 (--llm claude-code), openai-codex/gpt-6-luna (--llm pi),
+		// llama/gemma-4-26B-A4B-it-qat-UD-Q4_K_XL (--mind pi)
+		model: { type: "string" },
+		"llama-url": { type: "string", default: DEFAULT_LLAMA_URL },
+		fresh: { type: "boolean", default: false },
 		identity: { type: "string" },
 		approve: { type: "boolean", default: false },
-		"daily-limit": { type: "string", default: "300" },
+		// LLM calls (--mind rules, default 300) or turns (--mind pi, default 1500) per day
+		"daily-limit": { type: "string" },
 	},
 });
 
@@ -64,35 +76,70 @@ if (args.approve) {
 	log.info(r.ok ? "approved (dev)" : `approve failed: ${r.status}`);
 }
 
-const llm: LLM = args.llm === "echo" ? new EchoLLM() : new ClaudeCodeLLM({ model: args.model });
+const persona = { name, personality: args.persona ?? "" };
 const city = await loadCity(base);
-log.info(
-	`LLM ${llm.name}; ${city.landmarks.length} landmarks; navmesh ${city.hasNavmesh ? "yes" : "no (straight lines)"}`,
-);
-
-let agent: Agent | null = null;
+let handle: ((m: HostToClient) => void) | null = null;
 const conn = new AgentConnection({
 	baseUrl: base.replace(/^http/, "ws"),
 	areaId: args.area ?? "main",
 	agentId: identity.agentId,
 	privateKey: await privateKeyOf(identity),
 	logger: log,
-	onMessage: (m) => agent?.handle(m),
+	onMessage: (m) => handle?.(m),
 });
-agent = new Agent({
-	persona: { name, personality: args.persona ?? "" },
-	llm,
-	memory: new FileMemory(join(dir, `${encodeURIComponent(name)}.memory.json`)),
-	nav: city.nav,
-	landmarks: city.landmarks,
-	logger: log,
-	send: (m) => conn.send(m),
-	dailyLlmLimit: Number(args["daily-limit"]),
-});
+const send = (m: ClientToHost) => conn.send(m);
+const dailyLimit = args["daily-limit"] ? Number(args["daily-limit"]) : undefined;
+
+let stopMind: () => void;
+if (args.mind === "pi") {
+	let resident: Resident | null = null;
+	const mind = await createPiMind({
+		model: args.model,
+		llamaUrl: args["llama-url"],
+		system: residentSystemPrompt(persona),
+		sessionDir: join(dir, `${encodeURIComponent(name)}.pi`),
+		fresh: args.fresh,
+		act: (tool, params) => (resident ? resident.act(tool, params) : Promise.resolve("まだ街にいない。")),
+		logger: log,
+	});
+	resident = new Resident({
+		persona,
+		mind,
+		nav: city.nav,
+		landmarks: city.landmarks,
+		logger: log,
+		send,
+		dailyTurnLimit: dailyLimit,
+	});
+	handle = (m) => resident?.handle(m);
+	stopMind = () => resident?.stop();
+	log.info(
+		`mind ${mind.name}; ${city.landmarks.length} landmarks; navmesh ${city.hasNavmesh ? "yes" : "no"}`,
+	);
+} else {
+	const model = args.model ? { model: args.model } : {};
+	const llm: LLM =
+		args.llm === "echo" ? new EchoLLM() : args.llm === "pi" ? new PiLLM(model) : new ClaudeCodeLLM(model);
+	const agent = new Agent({
+		persona,
+		llm,
+		memory: new FileMemory(join(dir, `${encodeURIComponent(name)}.memory.json`)),
+		nav: city.nav,
+		landmarks: city.landmarks,
+		logger: log,
+		send,
+		dailyLlmLimit: dailyLimit,
+	});
+	handle = (m) => agent.handle(m);
+	stopMind = () => agent.stop();
+	log.info(
+		`LLM ${llm.name}; ${city.landmarks.length} landmarks; navmesh ${city.hasNavmesh ? "yes" : "no (straight lines)"}`,
+	);
+}
 conn.start();
 
 const stop = () => {
-	agent?.stop();
+	stopMind();
 	conn.stop();
 	setTimeout(() => process.exit(0), 200);
 };

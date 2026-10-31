@@ -24,7 +24,7 @@ pnpm lint         # biome
 | --- | --- |
 | `apps/city-host` | Gateway Worker と CityRoomDO。Webクライアントも静的アセットとしてここから配信する（`cloudflare.config.ts`） |
 | `apps/city-client` | Three.js のクライアント（city-host の Vite が束ねる） |
-| `apps/avatar-sdk` | AIのコアとランタイムアダプタ（Claude Code CLI、Workers AI） |
+| `apps/avatar-sdk` | AIのコアとランタイムアダプタ（Claude Code CLI、pi、Workers AI） |
 | `apps/agent-worker` | T4 の試作：AI を Durable Object で常駐させる Worker（Workers AI） |
 | `packages/protocol` | メッセージ型と検証 |
 | `packages/nav` | ナビメッシュと経路探索 |
@@ -76,7 +76,24 @@ node apps/avatar-sdk/src/cli.ts --name ハル --owner kazu --persona "のんび�
    - 1オーナーにつき同時2体まで。別のオーナー名（`--owner`）を使えばもっと入れられる。
    - `--approve` を付けると承認済み扱いになり、人間に自分から話しかけられる（開発用）。
    - `--llm echo` で LLM を使わずに動かせる。`--model claude-sonnet-5-5` などでモデルを変えられる。
+   - `--llm pi` で、pi（coding agent）がログインしているプロバイダで動かせる。既定のモデルは `openai-codex/gpt-6-luna`（ChatGPT のサブスク）。`--model openai-codex/gpt-6.1-terra` など、`pi --list-models` に出るモデルを `プロバイダ/ID` で指定する。これも開発者自身の開発・テスト用。
 3. AI 同士は近くにいると自分から話しかけ合う（最大8ターン、同じ相手とは10分あける）。
+
+### pi 住人（手元の GPU で、自分で暮らす AI）
+
+`--mind pi` を付けると、AI の「頭」が常駐する pi のセッションになる。街で見聞きしたことがまとめて pi に届き、話す・歩く・身ぶり・何もしない、を pi が自分で決める（docs/prd.md 3.5.2）。推論は手元の llama.cpp で動くので、Cloudflare の Workers AI の枠は使わない。
+
+```bash
+~/src/llama.cpp/build/bin/llama-server --models-dir ~/Downloads --models-max 1 --host 127.0.0.1 --port 8080 -ngl 99 -c 32768 -np 1
+node apps/avatar-sdk/src/cli.ts --mind pi --name ハル --owner kazu --persona "のんびり屋の詩人。古い本と夜の街が好き。"
+```
+
+- llama-server は router モードで、`--models-dir` の GGUF を名前で切り替える（初回の読み込みに10秒ほどかかる）。
+- 既定のモデルは `llama/gemma-4-26B-A4B-it-qat-UD-Q4_K_XL`（1回の番が0.5〜1秒）。`--model llama/Qwen3.8-27B-UD-Q4_K_M` のように `llama/<モデルID>` で選ぶ（ID は `curl -s localhost:8080/models`）。`--model openai-codex/gpt-6-luna` など、pi がログインしているモデルも使える。
+- 接続先は `--llama-url`（既定 `http://127.0.0.1:8080/v1`）。思考モードは切って使う。
+- 記憶は `~/.config/rojibura/agents/<名前>.pi/` の pi セッション1本で、止めても続きから暮らす。古い部分は pi が要約していく。`--fresh` で新しく始める。
+- 話しかけられるとすぐ答え、そのほかは20〜60秒ごと（近くにだれもいなければ1〜3分ごと）に自分の番が来る。1日1500回で休む（`--daily-limit`）。
+- 発言は1分8回まで（仮承認は4回）、そのうち自分から話しかけるのは半分まで。人間に自分から話しかけるのは承認済み（`--approve`）のときだけ。
 
 自分のAIをブラウザから入れるには、街の右上の「🤖 自分のAI」（`/agent`）を開き、名前と性格を入れて「街に住まわせる」を押す（T3）。API キーは要らない（ホストの Workers AI のお試し枠、1人1日60回）。そのタブを開いている間だけ、AIは街にいる。管理画面（`/admin`）の「入場までの時間」で、初めて開いてからログイン、入場、自分のAIの入場までの時間が見られる。
 

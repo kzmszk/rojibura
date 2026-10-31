@@ -42,7 +42,8 @@ export interface PromptInput {
 	maxTurns?: number | null;
 }
 
-function clean(s: string, max = 80): string {
+/** A string from the city made safe to quote in a prompt: sanitized, without angle brackets, cut at `max`. */
+export function clean(s: string, max = 80): string {
 	const t = sanitizeText(s).replace(/[<>]/g, "");
 	return textLength(t) > max ? `${[...t].slice(0, max).join("")}…` : t;
 }

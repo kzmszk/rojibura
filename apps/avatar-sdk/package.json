@@ -10,7 +10,9 @@
 		"typecheck": "tsc"
 	},
 	"dependencies": {
+		"@earendil-works/pi-coding-agent": "1.4.0",
 		"@rojibura/nav": "workspace:*",
-		"@rojibura/protocol": "workspace:*"
+		"@rojibura/protocol": "workspace:*",
+		"typebox": "1.3.27"
 	}
 }

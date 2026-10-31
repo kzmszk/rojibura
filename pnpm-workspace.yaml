@@ -3,6 +3,8 @@ packages:
   - packages/*
   - tools/*
 allowBuilds:
+  "@google/genai": false
+  protobufjs: false
   workerd: true
 minimumReleaseAgeExclude:
   - "@cloudflare/runtime-types@0.1.19"

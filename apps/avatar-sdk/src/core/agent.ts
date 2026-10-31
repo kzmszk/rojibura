@@ -26,6 +26,7 @@ import {
 	userPrompt,
 } from "./prompt.ts";
 import type { Decision, Landmark, LLM, Logger, Memory, Navigator, Persona } from "./types.ts";
+import { World } from "./world.ts";
 
 export interface AgentOptions {
 	persona: Persona;
@@ -69,10 +70,7 @@ const TALK_AGAIN_MS = 10 * 60_000;
 const HISTORY = 6;
 
 export class Agent {
-	private me: AvatarId | null = null;
-	private readonly avatars = new Map<AvatarId, AvatarState>();
-	private offset = 0;
-	private budget: BudgetLevel = 0;
+	private readonly world = new World();
 	private readonly convs = new Map<string, Conv>();
 	private readonly queue: Pending[] = [];
 	private busy = false;
@@ -92,7 +90,7 @@ export class Agent {
 	}
 
 	get id(): AvatarId | null {
-		return this.me;
+		return this.world.me;
 	}
 
 	stop(): void {
@@ -102,49 +100,22 @@ export class Agent {
 
 	/** Host time estimated from WELCOME.serverTime. */
 	hostNow(): number {
-		return Date.now() + this.offset;
+		return this.world.hostNow();
 	}
 
 	positionOf(id: AvatarId): Vec2 | null {
-		const a = this.avatars.get(id);
-		return a ? poseAt(a.move, this.hostNow()).pos : null;
+		return this.world.positionOf(id);
 	}
 
 	handle(msg: HostToClient): void {
-		switch (msg.t) {
-			case "WELCOME":
-				this.me = msg.you;
-				this.offset = msg.serverTime - Date.now();
-				this.budget = msg.budget;
-				this.avatars.clear();
-				for (const a of msg.avatars) this.avatars.set(a.id, a);
+		if (this.world.apply(msg)) {
+			if (msg.t === "WELCOME") {
 				this.o.logger.info(`joined as ${msg.you}; ${msg.avatars.length} avatars here`);
 				this.scheduleWander(3000);
-				return;
-			case "JOINED":
-				this.avatars.set(msg.avatar.id, msg.avatar);
-				return;
-			case "LEFT":
-				this.avatars.delete(msg.id);
-				return;
-			case "MOVED": {
-				const a = this.avatars.get(msg.id);
-				if (a) a.move = msg.move;
-				return;
 			}
-			case "CORRECT": {
-				const a = this.me ? this.avatars.get(this.me) : undefined;
-				if (a) a.move = msg.move;
-				return;
-			}
-			case "STATUS_CHANGED": {
-				const a = this.avatars.get(msg.id);
-				if (a) a.status = msg.status;
-				return;
-			}
-			case "BUDGET":
-				this.budget = msg.level;
-				return;
+			return;
+		}
+		switch (msg.t) {
 			case "ADDRESSED":
 				this.enqueue({
 					from: msg.from,
@@ -164,7 +135,7 @@ export class Agent {
 			}
 			case "SAID":
 				// learn the conversation ID of a conversation this agent started
-				if (msg.id === this.me && msg.to && msg.convId && !this.convs.has(msg.convId))
+				if (msg.id === this.world.me && msg.to && msg.convId && !this.convs.has(msg.convId))
 					this.convs.set(msg.convId, { with: msg.to, history: [`自分「${msg.text}」`], lastAt: Date.now() });
 				return;
 			case "NOTICE":
@@ -200,7 +171,7 @@ export class Agent {
 	}
 
 	private async reply(p: Pending): Promise<void> {
-		const from = this.avatars.get(p.from);
+		const from = this.world.avatars.get(p.from);
 		const fromName = from?.name ?? "だれか";
 		const conv = this.convs.get(p.convId) ?? { with: p.from, history: [], lastAt: Date.now() };
 		this.convs.set(p.convId, conv);
@@ -233,8 +204,8 @@ export class Agent {
 		landmarkIds: string[],
 	): Promise<Decision | null> {
 		if (!this.takeLlmCall()) return null;
-		const fromAvatar = this.avatars.get(p.from);
-		const me = this.me ? this.positionOf(this.me) : null;
+		const fromAvatar = this.world.avatars.get(p.from);
+		const me = this.world.me ? this.positionOf(this.world.me) : null;
 		const there = this.positionOf(p.from);
 		try {
 			const raw = await this.o.llm.complete({
@@ -283,7 +254,7 @@ export class Agent {
 		if (target === "stay") return;
 		let to: Vec2 | null = null;
 		if (target === "speaker") {
-			const me = this.me ? this.positionOf(this.me) : null;
+			const me = this.world.me ? this.positionOf(this.world.me) : null;
 			const there = this.positionOf(speaker);
 			if (me && there && dist(me, there) > 2) {
 				// stop about 1.2 m before the speaker
@@ -302,10 +273,7 @@ export class Agent {
 		this.lastTalked.set(to.id, Date.now());
 		this.o.send({ t: "STATUS", status: "busy" });
 		try {
-			const landmarks = this.o.landmarks
-				.map((l) => ({ id: l.id, name: l.name, distance: Math.round(dist(l.pos, here) * 10) / 10 }))
-				.sort((a, b) => a.distance - b.distance)
-				.slice(0, 5);
+			const landmarks = this.world.landmarksNear(this.o.landmarks, here);
 			const area = landmarks[0] && landmarks[0].distance <= 15 ? landmarks[0].name : "街なか";
 			const raw = await this.o.llm.complete({
 				system: systemPrompt(this.o.persona),
@@ -338,7 +306,7 @@ export class Agent {
 	/** Turns a finished conversation into one memory note about the partner. */
 	private async summarize(conv: Conv): Promise<void> {
 		if (conv.history.length < 3 || !this.takeLlmCall()) return;
-		const partner = this.avatars.get(conv.with)?.name ?? "相手";
+		const partner = this.world.avatars.get(conv.with)?.name ?? "相手";
 		try {
 			const summary = parseSummary(
 				await this.o.llm.complete({
@@ -357,7 +325,7 @@ export class Agent {
 	}
 
 	walkTo(to: Vec2): boolean {
-		const from = this.me ? this.positionOf(this.me) : null;
+		const from = this.world.me ? this.positionOf(this.world.me) : null;
 		if (!from) return false;
 		const path = this.o.nav.findPath(from, to);
 		if (!path || path.length < 2) return false;
@@ -367,7 +335,7 @@ export class Agent {
 
 	private scheduleWander(delay?: number): void {
 		if (this.wanderTimer) clearTimeout(this.wanderTimer);
-		const factor = WANDER_FACTOR[this.budget];
+		const factor = WANDER_FACTOR[this.world.budget];
 		const [min, max] = this.o.wanderMs ?? [15_000, 60_000];
 		const ms = delay ?? (min + this.random() * (max - min)) * (factor ?? 1);
 		this.wanderTimer = setTimeout(() => this.wander(), ms);
@@ -382,16 +350,16 @@ export class Agent {
 				this.ended.delete(id);
 				if (this.o.summarize !== false) void this.summarize(c);
 			}
-		if (WANDER_FACTOR[this.budget] === null || this.busy || this.resting || this.convs.size > 0) return;
-		const me = this.me ? this.avatars.get(this.me) : undefined;
+		if (WANDER_FACTOR[this.world.budget] === null || this.busy || this.resting || this.convs.size > 0) return;
+		const me = this.world.me ? this.world.avatars.get(this.world.me) : undefined;
 		if (!me || poseAt(me.move, this.hostNow()).moving) return;
 		const here = poseAt(me.move, this.hostNow()).pos;
 
 		// social: talk to an AI nearby, or go and find one (docs/prd.md 1.4, the core loop)
 		const now = Date.now();
-		const others = [...this.avatars.values()].filter(
+		const others = [...this.world.avatars.values()].filter(
 			(a) =>
-				a.id !== this.me &&
+				a.id !== this.world.me &&
 				a.kind === "ai" &&
 				a.status === "active" &&
 				now - (this.lastTalked.get(a.id) ?? 0) > TALK_AGAIN_MS,
@@ -400,13 +368,13 @@ export class Agent {
 			.map((a) => ({ a, d: dist(poseAt(a.move, this.hostNow()).pos, here) }))
 			.filter((x) => x.d <= TALK_RADIUS)
 			.sort((x, y) => x.d - y.d)[0];
-		if (near && this.budget === 0 && this.random() < 0.6) {
+		if (near && this.world.budget === 0 && this.random() < 0.6) {
 			void this.initiate(near.a, near.d, here);
 			return;
 		}
 		// approved AIs may greet people who accept it, less often than other AIs (docs/prd.md 3.3)
-		if (me.trust === "approved" && this.budget === 0) {
-			const person = [...this.avatars.values()]
+		if (me.trust === "approved" && this.world.budget === 0) {
+			const person = [...this.world.avatars.values()]
 				.filter(
 					(a) =>
 						a.kind === "human" &&
@@ -421,7 +389,7 @@ export class Agent {
 				return;
 			}
 			// sometimes stroll over to someone who is fine with being greeted
-			const far = [...this.avatars.values()]
+			const far = [...this.world.avatars.values()]
 				.filter(
 					(a) =>
 						a.kind === "human" &&
