@@ -306,7 +306,8 @@ export class RoomCore<C> {
 		return null;
 	}
 
-	join(conn: C, info: JoinInfo): boolean {
+	/** `arrive`: through a portal, the landmark or portal to appear at instead of the spawn point (docs/prd.md 3.8). */
+	join(conn: C, info: JoinInfo, arrive?: string): boolean {
 		const now = this.clock();
 		const old = this.byId.get(info.id);
 		if (old !== undefined && old !== conn) {
@@ -322,7 +323,7 @@ export class RoomCore<C> {
 		const member: Member = {
 			...info,
 			status: "active",
-			move: { kind: "idle", pos: this.spawnPoint(), at: now },
+			move: { kind: "idle", pos: this.spawnPoint(arrive), at: now },
 			interest: INTEREST_RADIUS_DEFAULT,
 		};
 		this.members.set(conn, member);
@@ -991,14 +992,20 @@ export class RoomCore<C> {
 		return context;
 	}
 
-	private spawnPoint(): Vec2 {
-		for (let i = 0; i < 10; i++) {
+	/** Near the spawn point, or a step away from the landmark or portal someone arrives at. */
+	private spawnPoint(arrive?: string): Vec2 {
+		const at = arrive ? this.world.landmarks.find((l) => l.id === arrive) : undefined;
+		const [cx, cz] = at?.pos ?? this.world.spawn;
+		// not on the portal itself: arriving there should not look like leaving again
+		const [r0, r1] = at ? [1.5, 3] : [0, 2.5];
+		for (let i = 0; i < 16; i++) {
 			const a = Math.random() * Math.PI * 2;
-			const r = Math.random() * 2.5;
-			const p: Vec2 = [this.world.spawn[0] + Math.cos(a) * r, this.world.spawn[1] + Math.sin(a) * r];
-			if (this.walk.isWalkable(p)) return [round1(p[0]), round1(p[1])];
+			const r = r0 + Math.random() * (r1 - r0);
+			// rounded first: at the water's edge the rounded point can be off the walkable area
+			const p: Vec2 = [round1(cx + Math.cos(a) * r), round1(cz + Math.sin(a) * r)];
+			if (this.walk.isWalkable(p)) return p;
 		}
-		return this.world.spawn;
+		return at && this.walk.isWalkable(at.pos) ? at.pos : this.world.spawn;
 	}
 
 	/**

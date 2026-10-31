@@ -262,6 +262,7 @@ flowchart LR
 * 同じ `packages/nav` を、クライアント（クリック移動）、AI（全ランタイム）、ホスト（点の内外判定だけ）で共有する。
 * AIは座標を直接決めず、「ランドマークID」か「話し相手のそば」を目標にする。座標への変換はSDKが行う。これはプロンプトインジェクションの影響を狭める意味もある。
 * 自由モード（3.7）で建物を建てると、歩ける場所は `packages/nav` の `applyBuilds` で作り直す。
+* エリアごとに navmesh を持つ（3.8）。ヴェネツィアの navmesh は、3D の形ではなく VENEZIA の歩行ラスタから作る（3.8.3）。
 
 ### 2.4 開館時間と無料枠コストモデル
 
@@ -359,7 +360,8 @@ stateDiagram-v2
 | `apps/city-host` | Gateway Worker、CityRoomDO、D1マイグレーション |
 | `apps/city-client` | Three.js クライアント（観覧・入場、`/agent` AIタブ、`/portal` オーナーポータル、`/admin` 管理画面） |
 | `apps/avatar-sdk` | AIコアとランタイムアダプタ（browser / worker / node）、Deploy to Cloudflare テンプレート |
-| `tools/city-build` | city.glb から navmesh.json と landmarks.json を生成 |
+| `tools/city-build` | city.glb から navmesh.json と landmarks.json を生成。歩行ラスタからも navmesh を作る（3.8.3） |
+| `assets/areas.json` | エリアの一覧と、エリアの間の門（3.8） |
 
 ### 3.1 シーケンス図
 
@@ -983,6 +985,74 @@ flowchart LR
   * ローカルの `builds` テーブルを初めて作るとき（まっさらな状態）に、`builds.json` の建物を入れる。別の PC で始めても、公開した状態から続けられる。
   * 公開済みの登録モデルは、ローカルに登録していなくても使える。nav は `builds.json` から読み、`/api/models/<id>.glb` などは静的ファイルの `/models/<id>.glb` に転送する。
 * **テスト**：`build.test.ts`（`navmesh.json` が base + `builds.json` と一致し、スポーンから全ランドマークへ行ける）、`room-build.test.ts`（本番のルールでも公開した建物が AI の文脈に入り、消せない）。
+
+### 3.8 エリアと門（ほかの街へ行く）
+
+街は複数のエリアからなり、門（ポータル）でつながる。最初の別のエリアは、demos の VENEZIA（`~/work/demos/venice`）のサン・マルコ周辺。ゆくゆくは、参加者が持ち込んだ3Dモデルもエリアにして、テストの街から行けるようにする（3.8.4）。
+
+#### 3.8.1 エリアの一覧
+
+* 1エリア = 1つの CityRoomDO（`/ws/area/<id>`。DO は `getByName(id)` で、自分の名前 `ctx.id.name` からエリアを決める）。定員（100）はエリアごと。
+* 一覧は `assets/areas.json`（`AreasData`、`packages/protocol`）。最初のエリアがメイン（`main`、テストの街）で、建築（3.7）、登録モデル、利用状況のまとめはメインの DO に置く。一覧にないエリアへの接続は 404。
+
+| 項目 | 中身 |
+| --- | --- |
+| `name` | エリアの名前（ステータス表示、AI の空間の文脈） |
+| `dir` | ホストの静的パス。`landmarks.json`、`navmesh.json`、`places.json` を置く（メインは `/test-city`） |
+| `assets` | 3D（glb）の置き場。省くと `dir`。外のオリジンなら、承認したもの（2.1）で CORS を返すこと |
+| `scene` | 描く glb のファイル名（`assets` からの相対） |
+| `build` | 自由モードで建てられる（いまはメインだけ） |
+| `view` | 空の色、霧、カメラの描画距離、水面の高さ、影の範囲（広いエリアは影がカメラについていく） |
+| `credit` | 画面の隅に出す表記（地図データのライセンスなど） |
+| `portals` | 門（3.8.2） |
+
+* ホストが持つのは歩ける場所と場所の名前だけ（2.3）。3D はブラウザだけが読み、ホストは外のオリジンに通信しない。エリアの navmesh と landmarks は Worker に同梱する（venezia の navmesh は 470KB、gzip で 119KB。無料プランの Worker は圧縮後 3MB まで。エリアが増えたら、DO が静的アセットから読むようにする）。
+* 開発ビルドでは `?assets=<URL>` で3Dの置き場を差し替えられる（デプロイ前の書き出しを、手元の CORS 付きサーバーから読む）。
+
+#### 3.8.2 門と移動
+
+```typescript
+interface Portal {
+  id: string;     // エリアのランドマークの ID も兼ねる
+  name: string;   // "ヴェネツィアへの門"
+  pos: Vec2;
+  to: AreaId;     // 行き先のエリア
+  at: string;     // 行き先のランドマークか門。そのそばに出る
+}
+```
+
+* 門はエリアのランドマークとしても扱う。AI も歩いて行け、`SpatialContext.nearbyLandmarks` に入る。建築は門のそばを空ける（ランドマークと同じ）。
+* ブラウザは門を光るアーチと名前で描く。門から3m以内に立つと「🚪 〜へ行く」が出て、押すと今の接続を閉じ、`/?area=<to>&at=<at>` を開く（ページごと読み直す。エリアごとに3Dも navmesh も違うため）。アーチをクリックすると、そこまで歩く。
+* 着いた側のホストは、`/ws/area/<id>?at=<at>` の `at` が自分のランドマークか門なら、その1.5〜3m先の歩ける所に出す（門の上に出すと、すぐ引き返したように見える）。知らない `at` はスポーン地点。どのエリアにもスポーンから入れるので、門を通ってきたかは確かめない。
+* テスト：`areas.test.ts`（どの門も歩けてスポーンから行け、行き先のエリアに `at` がある。門から着くと1.5〜3m先に出る）。
+
+#### 3.8.3 ヴェネツィア（`venezia`）
+
+* **範囲**：鐘楼を原点に400m四方（VENEZIA の200mタイル `t_16_7`、`t_16_8`、`t_17_7`、`t_17_8`）。広場、寺院（中も歩ける）、鐘楼、ピアツェッタ、ドゥカーレ宮殿の回廊、モーロ、藁の橋、北の路地。門はモーロ（`gate_main`）とテストの街の駅前（`gate_venezia`）。
+* **3D**：VENEZIA の描画は WebGPU の専用シェーダーで、ファサードの細部は JS が描画時に作る。rojibura（WebGL と GLTFLoader）ではそのまま読めないので、venice の `tools/rj_export.mjs` が同じタイルとファサードの作り方から glb を書き出す。
+  * 静的メッシュ（地面、護岸、橋、名所）と、全部のファサードを近景と同じ細かさで。色は頂点カラー＝材料の色 ×（漆喰などは）色味 × 焼き込んだ昼の光から求めた陰り。太陽と影は rojibura のものを使うので、焼いた光そのものは入れない。テクスチャ、小物（街灯、舟）、夜の光は入れていない。
+  * Y 上（VENEZIA の (x, y, z) を (x, z, -y)）。50m 角ごとのメッシュに分ける（画面外と影の範囲外を描かない。街なかの視点で、影を含めて1フレーム約500万三角形）。量子化と meshopt 圧縮（GLTFLoader の `MeshoptDecoder`）。
+  * 4タイルで約54MB、430万三角形。1ファイルは25MiB未満（Workers の静的アセットの上限）。
+  * 置き場は `https://demos.polynous.io/venice/rj/<版>/`。版ごとにパスを変え、中身は変えない（`immutable`）。demos のビルドが venice の `public/_headers` を `site/_headers` に入れ、`/venice/rj/*` に `Access-Control-Allow-Origin: *` を付ける。
+* **歩ける場所**：VENEZIA の歩行ラスタ（`t_i_j.walk.png`、0.25m、R = 歩ける面の高さ、G = 水）から作る（`tools/city-build/src/build-raster.ts`）。歩けるセルを行ごとに同じ高さでまとめた面にして Recast にかけ（テストの街と同じ設定）、頂点の高さはラスタから取る。3D の形に Recast をかけないのは、岸の階段から水面に降りられてしまい、橋や私有の橋の扱いもラスタのほうが正しいため。4,908ポリゴン、約1.5秒。
+* **場所**：`assets/areas/venezia/landmarks.json` は手で書く（VENEZIA の座標 (x, y) を (x, -y) に）。高さは `build-raster.ts` がラスタから入れ、スポーンから全部へ行けることを確かめる。説明は `places.json`。
+* **表記**：建物は OpenStreetMap から作ったものなので、`credit` で「地図データ © OpenStreetMap contributors（ODbL）」を出す。
+
+#### 3.8.4 自分の3Dモデルを取り込む（後で）
+
+3.7 の建築と同じ順にする。
+
+1. 自由モード（ローカル）で glb を取り込み、自分の PC で Recast をかけて navmesh を作る（`model-cli check` と同じ。歩ける面の約束も 3.7.4 と同じ）。ランドマークと門の位置を置く。
+2. 公開（3.7.8 と同じ）：navmesh、landmarks、`areas.json` の項目をリポジトリに入れてデプロイする。テストの街に、そのエリアへの門を置く。
+3. 3D の置き場は、作者のオリジン（承認して CORS を返す）か R2。R2 は 10GB で VRM と取り合うので、大きいワールドは作者のオリジンに置く。VENEZIA は、作者のオリジンに置く形の最初の例。
+4. 本番でだれでも取り込めるようにするなら（未決）：ホストで Recast を動かせないので navmesh の形と範囲だけ確かめる、取り込める数と大きさ、通報、門を建築で置けるようにする（`BUILD` に行き先を足す）。
+
+#### 3.8.5 まだのこと
+
+* AI の移動：avatar-sdk に `travel` ツールを足す（接続を閉じて、行き先のエリアに `at` 付きでつなぎ直す）。いまの AI は門まで歩けるだけ。`loadCity(base, area)` で、どのエリアの landmarks と navmesh も読める。
+* エリアをまたいだ上限：オーナーごとの同時2体と仮承認の枠は、いまは DO ごとに数えている。エリアが増えたら、D1 か、メインの DO で数える。
+* 描画の重さ：venezia は高い。遠くのかたまりを間引いた LOD（meshopt の simplify）、ファサードの細部を近くだけにする、など。
+* 遠景：4タイルの外は水と霧。VENEZIA の遠景（`lite`、島全体で17MB）を書き出せば、島全体が見える。
 
 ---
 

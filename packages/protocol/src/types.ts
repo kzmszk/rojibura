@@ -94,6 +94,59 @@ export interface PublishedBuilds<Nav = unknown> {
 	models: Record<ModelId, { info: ModelInfo; nav: Nav }>;
 }
 
+// ---- areas and portals (docs/prd.md 3.8) ----
+
+/** An area of the city: one Durable Object, one /ws/area/<id>. */
+export type AreaId = string;
+
+/** assets/areas.json: every area and the portals between them. The first area is the main one. */
+export interface AreasData {
+	version: 1;
+	areas: Record<AreaId, AreaInfo>;
+}
+
+export interface AreaInfo {
+	name: string;
+	/** Static path of the area's own files (landmarks.json, navmesh.json, places.json), on the host. */
+	dir: string;
+	/**
+	 * Base URL of the 3D files: the area's `dir` when omitted, or an approved external origin that sends CORS
+	 * headers (docs/prd.md 2.1). The host itself never fetches from it.
+	 */
+	assets?: string;
+	/** glb files drawn as the area, relative to `assets`. */
+	scene: string[];
+	/** Free play builds here (docs/prd.md 3.7). */
+	build?: boolean;
+	view?: AreaView;
+	/** Shown in a corner while in the area: the licences of what is drawn. */
+	credit?: string;
+	portals?: Portal[];
+}
+
+export interface AreaView {
+	/** "#rrggbb" */
+	sky?: string;
+	/** Fog from, to (metres). */
+	fog?: [near: number, far: number];
+	/** Camera far plane (metres). */
+	far?: number;
+	/** A water plane at this height, out to the fog. */
+	water?: number;
+	/** Half the size of the sun's shadow (metres around the camera). */
+	shadow?: number;
+}
+
+/** A way to another area. People walk up to it and travel; it is also one of the area's landmarks. */
+export interface Portal {
+	id: string;
+	name: string;
+	pos: Vec2;
+	to: AreaId;
+	/** A landmark or portal of `to` where travellers appear. */
+	at: string;
+}
+
 /** GET /api/models: what can be built. */
 export interface ModelInfo {
 	id: ModelId;

@@ -16,12 +16,14 @@ import {
 import * as THREE from "three";
 import { showAgentPage } from "./agent-page.ts";
 import { api, onApiUsage } from "./api.ts";
+import { currentArea, travelUrl } from "./areas.ts";
 import { AvatarView } from "./avatars.ts";
 import { BuildPanel } from "./build-ui.ts";
 import { BuildsView, makeObject, modelsFromHost } from "./builds.ts";
 import { actionBar, Relations, showAdmin } from "./moderation.ts";
 import { CityConnection, type ConnState } from "./net.ts";
 import { rememberFirstVisit, reportFirstVisit } from "./onboarding.ts";
+import { PortalsView } from "./portals.ts";
 import { CityScene } from "./scene.ts";
 import { STYLES } from "./styles.ts";
 import { UsagePanel } from "./usage-panel.ts";
@@ -31,7 +33,6 @@ export interface Navigator {
 	isWalkable(p: Vec2): boolean;
 }
 
-const CITY = "/test-city";
 const MOTION_EMOJI: Record<Motion, string> = { wave: "👋", nod: "🙂", bow: "🙇", jump: "⤴️", sit: "🪑" };
 
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -46,12 +47,12 @@ function el<K extends keyof HTMLElementTagNameMap>(
 }
 
 /**
- * The city's navmesh: with the published builds baked in, or in free play the city alone (the area's own
- * builds, which include the published ones, are applied on top).
+ * The area's navmesh: with the published builds baked in, or where free play builds the city alone (the
+ * area's own builds, which include the published ones, are applied on top).
  */
-async function loadNavMesh(freePlay: boolean): Promise<NavMeshData> {
+async function loadNavMesh(dir: string, building: boolean): Promise<NavMeshData> {
 	return (await (
-		await fetch(`${CITY}/${freePlay ? "navmesh.base.json" : "navmesh.json"}`)
+		await fetch(`${dir}/${building ? "navmesh.base.json" : "navmesh.json"}`)
 	).json()) as NavMeshData;
 }
 
@@ -184,18 +185,36 @@ function showLogin(root: HTMLElement, health: { dev: boolean; google: boolean })
 }
 
 async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay: boolean): Promise<void> {
+	const params = new URLSearchParams(location.search);
+	const avatarParam = params.get("avatar") ?? "saki";
+	// the area this page is in (docs/prd.md 3.8): ?area=, and ?at= when arriving through a portal
+	const { area, all: areas } = await currentArea(params, devBuild);
+	/** Free play builds only in areas that allow it (the main one). */
+	const building = freePlay && area.build === true;
 	const scene = new CityScene(root);
-	const base = await loadNavMesh(freePlay);
+	scene.applyView(area.view);
+	const loading = el("div", "rj-toast show", `${area.name}を読み込んでいます…`);
+	root.append(loading);
+	const base = await loadNavMesh(area.dir, building);
 	let mesh = NavMesh.fromJSON(base);
 	let nav = navigatorFor(mesh);
 	scene.heightHint = (x, z) => mesh.heightAt([x, z]);
-	await scene.loadCity(`${CITY}/test_city.glb`);
+	const sceneUrls = area.scene.map((f) => new URL(f, new URL(area.assetBase, location.href)).href);
+	await scene.loadCity(sceneUrls, (n) => {
+		loading.textContent = `${area.name}を読み込んでいます…（${n}/${sceneUrls.length}）`;
+	});
+	loading.remove();
+	const portals = new PortalsView(
+		scene.scene,
+		area.portals ?? [],
+		(x, z) => mesh.heightAt([x, z]) ?? scene.heightAt(x, z),
+	);
 	// free play (docs/prd.md 3.7): what has been built, and the walkable area with it
 	let navVersion = 0;
-	modelsFromHost(freePlay);
+	modelsFromHost(building);
 	const builds = new BuildsView(scene, () => {
 		// outside free play the builds are published ones, already in navmesh.json
-		if (!freePlay) return;
+		if (!building) return;
 		const v = ++navVersion;
 		void builds.placed().then((placed) => {
 			if (v !== navVersion) return;
@@ -204,8 +223,8 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 		});
 	});
 	// published builds are part of the city everyone sees (docs/prd.md 3.7.8)
-	if (!freePlay)
-		void fetch(`${CITY}/builds.json`)
+	if (!freePlay && area.build)
+		void fetch(`${area.dir}/builds.json`)
 			.then((r) => (r.ok ? (r.json() as Promise<PublishedBuilds>) : null))
 			.then((p) => p && builds.set(p.builds))
 			.catch(() => {});
@@ -236,10 +255,13 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 	if (freePlay) {
 		const badge = el("span", "rj-free", "🧪 自由モード");
 		badge.title = "ローカルで、無料枠の制限なしに遊んでいます（pnpm dev:free）";
+		right.prepend(badge);
+	}
+	if (building) {
 		const buildButton = el("button", "rj-logout", "🧱 建てる");
 		buildButton.type = "button";
 		buildButton.onclick = () => panel.toggle();
-		right.prepend(badge, buildButton);
+		right.prepend(buildButton);
 		root.append(panel.el);
 	}
 	hud.append(status, right);
@@ -266,7 +288,12 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 	form.append(target, input);
 	chat.append(log, form);
 	const toast = el("div", "rj-toast");
-	root.append(hud, chat, toast);
+	// standing at a portal: the way to the other area (docs/prd.md 3.8)
+	const travel = el("button", "rj-travel");
+	travel.type = "button";
+	travel.hidden = true;
+	root.append(hud, chat, toast, travel);
+	if (area.credit) root.append(el("div", "rj-credit", area.credit));
 
 	const avatars = new Map<AvatarId, AvatarView>();
 	let myId: AvatarId | null = null;
@@ -299,7 +326,7 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 	};
 	const updateStatus = (state: ConnState, detail?: string) => {
 		const label = { connecting: "接続中…", open: "接続済み", closed: "切断" }[state];
-		status.textContent = `${me.name} ｜ ${detail ?? label} ｜ ${avatars.size}人`;
+		status.textContent = `${me.name} ｜ ${area.name} ｜ ${detail ?? label} ｜ ${avatars.size}人`;
 	};
 
 	bar = actionBar({
@@ -328,8 +355,9 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 	};
 
 	const conn = new CityConnection({
-		areaId: "main",
-		avatar: new URLSearchParams(location.search).get("avatar") ?? "saki",
+		areaId: area.id,
+		...(params.get("at") ? { at: params.get("at") as string } : {}),
+		avatar: avatarParam,
 		onState: (s, d) => {
 			updateStatus(s, d);
 			if (s === "closed" && d) showToast(d);
@@ -411,6 +439,7 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 				builds,
 				panel,
 				walkTo: (x: number, z: number, speed = WALK_SPEED) => walkTo([x, z], speed),
+				area,
 				mesh: () => mesh,
 				me: () => (myId ? avatars.get(myId) : undefined),
 				/** Stops following your avatar and looks at (x, z) from `dist` away. */
@@ -618,6 +647,13 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 				return;
 			}
 		}
+		// a click on a portal walks up to it
+		const gate = portals.portalOf(ray.intersectObjects(portals.objects, true)[0]?.object ?? null);
+		if (gate) {
+			stopFollow();
+			if (!walkTo(gate.pos, e.shiftKey ? RUN_SPEED : WALK_SPEED)) showToast("そこへは行けません");
+			return;
+		}
 		// a click on something built walks up to it
 		const p = scene.pickGround(ndc, builds.objects);
 		if (!p) return;
@@ -688,6 +724,7 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 	let placed = false;
 	/** __rj.look() stops the camera from following your avatar (for screenshots). */
 	let followCamera = true;
+	let shownGate: ReturnType<PortalsView["near"]> = null;
 	const frame = (t: number) => {
 		const dt = Math.min(0.1, (t - last) / 1000);
 		last = t;
@@ -704,6 +741,19 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 		if (mine && !placed) {
 			scene.jumpTo(mine.root.position);
 			placed = true;
+		}
+		// at a portal: offer the way through
+		const gateHere = mine ? portals.near(poseAt(mine.state.move, now).pos) : null;
+		if (gateHere !== shownGate) {
+			shownGate = gateHere;
+			travel.hidden = !gateHere;
+			if (gateHere) {
+				travel.textContent = `🚪 ${areas.areas[gateHere.to]?.name ?? gateHere.name}へ行く`;
+				travel.onclick = () => {
+					conn.stop();
+					location.href = travelUrl(gateHere, avatarParam);
+				};
+			}
 		}
 		if (mine && followCamera) scene.follow(mine.root.position, dt);
 		else scene.controls.update();

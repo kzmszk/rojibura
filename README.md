@@ -30,6 +30,7 @@ pnpm lint         # biome
 | `packages/protocol` | メッセージ型と検証 |
 | `packages/nav` | ナビメッシュと経路探索 |
 | `tools/city-build` | 街の glb からナビメッシュとランドマークを生成。建築用のモデル（Blender）を作って検査・登録する CLI |
+| `assets/areas.json` | エリアの一覧と門。ヴェネツィアの歩ける場所と場所は `assets/areas/venezia/`（3D は demos から読む） |
 
 `cf dev`（Vite の development モード）では、ダミー認証（`DEV_AUTH`）が自動で有効になる。本番ビルドでは無効。
 
@@ -95,7 +96,7 @@ node apps/avatar-sdk/src/cli.ts --mind pi --name ハル --owner kazu --persona "
 - 記憶は `~/.config/rojibura/agents/<名前>.pi/` の pi セッション1本で、止めても続きから暮らす。古い部分は pi が要約していく。`--fresh` で新しく始める。
 - 人ごとのメモは `<名前>.memory.json`。会話が終わると相手の言葉が残り、住人が書き留めたこと（`remember`）も入る。その人が話しかけてきたときだけ思い出す。
 - ほかの人から聞いた言葉が入った発言は、送る前に止めて言い直させる（オーナー用のログに `held back` と出る）。
-- 街の場所の説明は `assets/test-city/places.json`。住人が場所を話題にするときに使う。
+- 街の場所の説明は `assets/test-city/places.json`（ヴェネツィアは `assets/areas/venezia/places.json`）。住人が場所を話題にするときに使う。`--area venezia` でヴェネツィアに住まわせられる。
 - 話しかけられるとすぐ答え、そのほかは20〜60秒ごと（近くにだれもいなければ1〜3分ごと）に自分の番が来る。1日1500回で休む（`--daily-limit`）。
 - 発言は1分8回まで（仮承認は4回）、そのうち自分から話しかけるのは半分まで。人間に自分から話しかけるのは承認済み（`--approve`）のときだけ。
 
@@ -108,6 +109,27 @@ node apps/avatar-sdk/scripts/eval-resident.ts --models llama/gemma-4-26B-A4B-it-
 自分のAIをブラウザから入れるには、街の右上の「🤖 自分のAI」（`/agent`）を開き、名前と性格を入れて「街に住まわせる」を押す（T3）。API キーは要らない（ホストの Workers AI のお試し枠、1人1日60回）。そのタブを開いている間だけ、AIは街にいる。管理画面（`/admin`）の「入場までの時間」で、初めて開いてからログイン、入場、自分のAIの入場までの時間が見られる。
 
 街にはいつも案内役のAI「シルベ」がいる（ホストが動かす。docs/prd.md 3.5.3）。入ってきた人に1日1回あいさつし、遊び方を聞けば答え、話しかければ雑談する。人ごとに、直近の発言、日ごとの要約、望んでいることを覚えている（開発環境では `/api/dev/rooms/main/stats?person=<ID>` で見られる）。LLM はホストの Workers AI で、1日400回を超えたら定型文で答える。部屋の stats（`/api/dev/rooms/main/stats`）の `guide.llmCallsToday` で、その日の回数が見られる。
+
+## エリアと門（ヴェネツィアへ行く）
+
+街は複数のエリアからなる（docs/prd.md 3.8）。一覧は `assets/areas.json`。テストの街の駅前にある「ヴェネツィアへの門」に立つと「🚪 ヴェネツィア（サン・マルコ）へ行く」が出て、押すとヴェネツィアのモーロに着く。直接開くなら http://localhost:5173/?area=venezia 。
+
+- ヴェネツィアの3D（glb）は demos の VENEZIA（`~/work/demos/venice`）のデプロイから読む（`https://demos.polynous.io/venice/rj/<版>/`）。rojibura に置くのは `assets/areas/venezia/` の `navmesh.json`、`landmarks.json`、`places.json` だけ。
+- glb の書き出しは venice 側で（`tools/rj_export.mjs`、venice の README）。版を変えたら `assets/areas.json` の `assets` を書き換える。
+- デプロイ前の書き出しを試すときは、venice の `public/` を CORS 付きで配って、開発ビルドの `?assets=` で差し替える。
+
+```bash
+node tools/serve-cors.ts ~/work/demos/venice/public 8418
+```
+
+  そのうえで http://localhost:5173/?area=venezia&assets=http://127.0.0.1:8418/rj/2026-11-01/ を開く。
+- 歩ける場所は VENEZIA の歩行ラスタから作る。場所（`landmarks.json`）を変えたら作り直す（約1.5秒。高さはラスタから入り、スポーンから全部の場所へ行けるかを確かめる）。
+
+```bash
+node tools/city-build/src/build-raster.ts ~/work/demos/venice/public/data/island assets/areas/venezia t_16_7 t_16_8 t_17_7 t_17_8
+```
+
+  ラスタは、デプロイ済みの `https://demos.polynous.io/venice/data/island` からも読める（手元に venice のデータがないとき）。
 
 ## 確認用のスクリプト
 

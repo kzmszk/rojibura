@@ -1,0 +1,25 @@
+{
+	"version": 1,
+	"areas": {
+		"main": {
+			"name": "テストの街",
+			"dir": "/test-city",
+			"scene": ["test_city.glb"],
+			"build": true,
+			"portals": [
+				{ "id": "gate_venezia", "name": "ヴェネツィアへの門", "pos": [-28, -24], "to": "venezia", "at": "gate_main" }
+			]
+		},
+		"venezia": {
+			"name": "ヴェネツィア（サン・マルコ）",
+			"dir": "/areas/venezia",
+			"assets": "https://demos.polynous.io/venice/rj/2026-11-01/",
+			"scene": ["t_16_7.glb", "t_16_8.glb", "t_17_7.glb", "t_17_8.glb"],
+			"view": { "sky": "#c9dbe8", "fog": [90, 380], "far": 450, "water": 0, "shadow": 70 },
+			"credit": "地図データ © OpenStreetMap contributors（ODbL） ｜ 3D：VENEZIA（demos.polynous.io/venice）",
+			"portals": [
+				{ "id": "gate_main", "name": "テストの街への門", "pos": [30, 102], "to": "main", "at": "gate_venezia" }
+			]
+		}
+	}
+}

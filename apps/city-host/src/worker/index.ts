@@ -62,7 +62,7 @@ import {
 	sessionCookie,
 } from "./session.ts";
 import { meteredD1 } from "./usage.ts";
-import { DEFAULT_PRESET, PRESETS, world } from "./world.ts";
+import { ALL_LANDMARK_IDS, AREA_IDS, AREAS, DEFAULT_PRESET, MAIN_AREA, PRESETS } from "./world.ts";
 
 export { CityRoomDO } from "./room.ts";
 
@@ -126,8 +126,8 @@ function withUsageHeader(response: Response, cost: Partial<Usage>, label: string
 /** Parsed at startup: a malformed OPEN_HOURS fails the deploy instead of going live. Free play is always open. */
 const HOURS = FREE_PLAY ? "always" : parseHours(env.OPEN_HOURS);
 const AREA_RE = /^[a-z0-9-]{1,32}$/;
-/** Areas that moderation commands are sent to. */
-const AREAS = ["main"];
+/** A landmark or portal ID to arrive at (landmarks.json, areas.json). */
+const ARRIVE_RE = /^[A-Za-z0-9_-]{1,32}$/;
 const REPORT_REASONS = ["harassment", "spam", "inappropriate", "other"];
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
@@ -138,7 +138,7 @@ function roomCommand(areaId: string, c: RoomCommand): Promise<Response> {
 }
 
 async function broadcastCommand(c: RoomCommand): Promise<void> {
-	await Promise.all(AREAS.map((a) => roomCommand(a, c)));
+	await Promise.all(AREA_IDS.map((a) => roomCommand(a, c)));
 }
 
 const isModerator = (a: Account) => a.role === "moderator" || a.role === "admin";
@@ -272,6 +272,9 @@ async function wsGateway(request: Request, areaId: string): Promise<Response> {
 	if (closed) return closed;
 	const url = new URL(request.url);
 	const agentId = url.searchParams.get("agent");
+	// through a portal (docs/prd.md 3.8): the room checks it is one of its landmarks or portals
+	const at = url.searchParams.get("at");
+	const arrive = at && ARRIVE_RE.test(at) ? { arrive: at } : {};
 	let join: JoinRequest;
 	if (agentId) {
 		const agent = await getAgent(DB, agentId);
@@ -283,6 +286,7 @@ async function wsGateway(request: Request, areaId: string): Promise<Response> {
 		await markOnboarding(DB, owner.id, "ai_at");
 		join = {
 			areaId,
+			...arrive,
 			publicKey: agent.public_key,
 			info: {
 				id: agent.id,
@@ -304,6 +308,7 @@ async function wsGateway(request: Request, areaId: string): Promise<Response> {
 		const preset = PRESETS[url.searchParams.get("avatar") ?? ""] ?? DEFAULT_PRESET;
 		join = {
 			areaId,
+			...arrive,
 			info: {
 				id: account.id,
 				kind: "human",
@@ -433,7 +438,7 @@ async function api(request: Request, url: URL): Promise<Response> {
 		if (!REPORT_REASONS.includes(b.reason ?? "")) return error(400, "bad reason");
 		const note = (b.note ?? "").slice(0, 500);
 		const excerpts = await Promise.all(
-			AREAS.map((a) =>
+			AREA_IDS.map((a) =>
 				roomCommand(a, { op: "excerpt", id: b.targetId as string, minutes: 5 })
 					.then((r) => r.json() as Promise<{ lines: unknown[] }>)
 					.catch(() => ({ lines: [] })),
@@ -609,7 +614,7 @@ async function api(request: Request, url: URL): Promise<Response> {
  */
 async function models(request: Request, path: string): Promise<Response> {
 	if (!FREE_PLAY) return error(403, "building is only in free play");
-	const room = env.ROOM.getByName(AREAS[0] ?? "main");
+	const room = env.ROOM.getByName(MAIN_AREA);
 	const inner = `https://room${path.slice("/api".length)}`;
 	if (request.method === "POST" && path === "/api/models") {
 		const account = await currentAccount(request);
@@ -656,7 +661,7 @@ async function trialLlm(request: Request): Promise<Response> {
 	if (remaining <= 0) return json({ error: "limit", remaining: 0 }, 429);
 	if (!env.AI) return error(503, "Workers AI is not available");
 	// the system prompt and the output schema are built here: the endpoint only plays a resident of the city
-	const landmarkIds = world.landmarks.map((l) => l.id).filter((id) => b.landmarkIds?.includes(id) ?? true);
+	const landmarkIds = ALL_LANDMARK_IDS.filter((id) => b.landmarkIds?.includes(id) ?? true);
 	const llm = new WorkersAiLLM(env.AI);
 	const result = await llm.complete({
 		system: systemPrompt({ name: agent.name, personality: String(b.personality ?? "").slice(0, 400) }),
@@ -695,7 +700,7 @@ async function route(request: Request, url: URL): Promise<Response> {
 	if (url.pathname.startsWith("/api/")) return api(request, url);
 	if (url.pathname.startsWith("/auth/")) return auth(request, url);
 	const ws = url.pathname.match(/^\/ws\/area\/([^/]+)$/);
-	if (ws?.[1] && AREA_RE.test(ws[1])) return wsGateway(request, ws[1]);
+	if (ws?.[1] && AREA_RE.test(ws[1]) && AREAS.areas[ws[1]]) return wsGateway(request, ws[1]);
 	return error(404, "not found");
 }
 
@@ -712,7 +717,7 @@ export default {
 			unreported = [];
 			reportedAt = Date.now();
 			ctx.waitUntil(
-				env.ROOM.getByName(AREAS[0] ?? "main")
+				env.ROOM.getByName(MAIN_AREA)
 					.fetch(new Request("https://room/usage", { method: "POST", body: JSON.stringify(events) }))
 					.catch(() => {}),
 			);

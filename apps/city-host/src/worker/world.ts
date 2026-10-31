@@ -1,4 +1,5 @@
-// The walkable ground and landmarks of the test city, from tools/city-build output (docs/prd.md 2.3).
+// The walkable ground and landmarks of each area, from tools/city-build output (docs/prd.md 2.3, 3.8). The host
+// only has these; the 3D files are for browsers, and may be on another origin.
 
 import {
 	applyBuilds,
@@ -8,7 +9,18 @@ import {
 	type NavMeshData,
 	validatePath,
 } from "@rojibura/nav";
-import type { ModelId, ModelInfo, PublishedBuilds, Vec2 } from "@rojibura/protocol";
+import type {
+	AreaId,
+	AreaInfo,
+	AreasData,
+	ModelId,
+	ModelInfo,
+	PublishedBuilds,
+	Vec2,
+} from "@rojibura/protocol";
+import veneziaLandmarksJson from "../../../../assets/areas/venezia/landmarks.json";
+import veneziaNavmeshJson from "../../../../assets/areas/venezia/navmesh.json";
+import areasJson from "../../../../assets/areas.json";
 import benchNav from "../../../../assets/models/bench.nav.json";
 import bridgeNav from "../../../../assets/models/bridge.nav.json";
 import deckNav from "../../../../assets/models/deck.nav.json";
@@ -25,6 +37,19 @@ import type { BuildWorld, Walkable, World } from "./room-core.ts";
 
 /** Segments are sampled this densely so a long segment cannot cut across an obstacle. */
 const SAMPLE_SPACING = 0.25;
+
+/** Every area and the portals between them (docs/prd.md 3.8). The first is the main one. */
+export const AREAS = areasJson as unknown as AreasData;
+export const AREA_IDS = Object.keys(AREAS.areas);
+export const MAIN_AREA: AreaId = AREA_IDS[0] ?? "main";
+
+/** What the host has of each area besides areas.json (the main area's are the test city's, below). */
+const AREA_FILES: Record<AreaId, { navmesh: NavMeshData; landmarks: LandmarksData }> = {
+	venezia: {
+		navmesh: veneziaNavmeshJson as NavMeshData,
+		landmarks: veneziaLandmarksJson as LandmarksData,
+	},
+};
 
 /** The city with the published builds baked in (docs/prd.md 3.7.8): production and `pnpm dev`. */
 export const navmesh = NavMesh.fromJSON(navmeshJson);
@@ -67,19 +92,69 @@ function buildWorld(registered: (id: ModelId) => ModelNav | undefined): BuildWor
 	};
 }
 
-/** The city as everyone sees it: published builds are part of it (fixed). */
+/** The area's landmarks, then its portals: people and AIs can walk to a portal like to any landmark. */
+function landmarksOf(data: LandmarksData, area: AreaInfo): World["landmarks"] {
+	return [
+		...data.landmarks.map((l) => ({ id: l.id, name: l.name, pos: [l.pos[0], l.pos[1]] as Vec2 })),
+		...(area.portals ?? []).map((p) => ({ id: p.id, name: p.name, pos: [p.pos[0], p.pos[1]] as Vec2 })),
+	];
+}
+
+function areaOf(id: AreaId): AreaInfo {
+	const area = AREAS.areas[id];
+	if (!area) throw new Error(`no area ${id} in areas.json`);
+	return area;
+}
+
+/** The main area as everyone sees it: published builds are part of it (fixed). */
 export const world: World = {
 	walk,
-	landmarks: city.landmarks.map((l) => ({ id: l.id, name: l.name, pos: [l.pos[0], l.pos[1]] as Vec2 })),
+	landmarks: landmarksOf(city, areaOf(MAIN_AREA)),
 	spawn: [city.spawn.pos[0], city.spawn.pos[1]],
-	areaName: "テストの街",
+	areaName: areaOf(MAIN_AREA).name,
 	fixedBuilds: PUBLISHED.builds,
 };
 
-/** Free play: the city alone, with building on it (the published builds come as the area's own builds). */
-export function freePlayWorld(registered: (id: ModelId) => ModelNav | undefined): World {
+const worlds = new Map<AreaId, World>([[MAIN_AREA, world]]);
+
+/** The area as everyone sees it, or undefined if there is no such area. Made once per isolate. */
+export function worldOf(id: AreaId): World | undefined {
+	const known = worlds.get(id);
+	if (known) return known;
+	const area = AREAS.areas[id];
+	const files = AREA_FILES[id];
+	if (!area || !files) return undefined;
+	const made: World = {
+		walk: walkFor(NavMesh.fromJSON(files.navmesh)),
+		landmarks: landmarksOf(files.landmarks, area),
+		spawn: [files.landmarks.spawn.pos[0], files.landmarks.spawn.pos[1]],
+		areaName: area.name,
+	};
+	worlds.set(id, made);
+	return made;
+}
+
+/**
+ * Free play: in an area where building is possible (the main one), the city alone with building on it (the
+ * published builds come as the area's own builds); elsewhere the area as it is.
+ */
+export function freePlayWorld(
+	id: AreaId,
+	registered: (id: ModelId) => ModelNav | undefined,
+): World | undefined {
+	if (id !== MAIN_AREA || !areaOf(MAIN_AREA).build) return worldOf(id);
 	return { ...world, walk: walkFor(baseNavmesh), fixedBuilds: undefined, build: buildWorld(registered) };
 }
+
+/** Landmark IDs of every area (the trial LLM's output schema, which does not know the area). */
+export const ALL_LANDMARK_IDS = [
+	...new Set(
+		AREA_IDS.flatMap((id) => {
+			const data = id === MAIN_AREA ? city : AREA_FILES[id]?.landmarks;
+			return data ? landmarksOf(data, areaOf(id)).map((l) => l.id) : [];
+		}),
+	),
+];
 
 export interface Preset {
 	id: string;

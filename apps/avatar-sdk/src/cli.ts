@@ -77,7 +77,7 @@ if (args.approve) {
 }
 
 const persona = { name, personality: args.persona ?? "" };
-const city = await loadCity(base);
+const city = await loadCity(base, args.area);
 let handle: ((m: HostToClient) => void) | null = null;
 const conn = new AgentConnection({
 	baseUrl: base.replace(/^http/, "ws"),

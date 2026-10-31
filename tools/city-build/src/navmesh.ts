@@ -25,6 +25,11 @@ export interface NavMeshBuildOptions {
 	 * to one of them are kept, which drops roofs, the top of the fountain and other unreachable islands.
 	 */
 	seeds: [number, number, number][];
+	/**
+	 * Height of the walkable surface under a polygon vertex at (x, z), Recast having put it at `top`. Without
+	 * it, vertices are snapped onto the input triangles (fine for a small city, too slow for a large soup).
+	 */
+	heightAt?: (x: number, z: number, top: number) => number;
 }
 
 export const defaultBuildOptions: Omit<NavMeshBuildOptions, "seeds"> = {
@@ -81,7 +86,11 @@ export async function buildNavMesh(
 		const vertCount = header.vertCount();
 		const verts: number[] = [];
 		for (let i = 0; i < vertCount * 3; i++) verts.push(tile.verts(i));
-		snapHeights(verts, soup, ch, agent.maxClimb);
+		const { heightAt } = options;
+		if (heightAt)
+			for (let v = 0; v < verts.length; v += 3)
+				verts[v + 1] = heightAt(verts[v] as number, verts[v + 2] as number, verts[v + 1] as number);
+		else snapHeights(verts, soup, ch, agent.maxClimb);
 		const polys: { verts: number[]; neighbors: number[] }[] = [];
 		for (let p = 0; p < polyCount; p++) {
 			const poly = tile.polys(p);

@@ -15,6 +15,8 @@ export type ConnState = "connecting" | "open" | "closed";
 
 export interface CityConnectionOptions {
 	areaId: string;
+	/** Arriving through a portal: the landmark or portal to appear at (docs/prd.md 3.8). */
+	at?: string;
 	avatar: string;
 	onMessage: (msg: HostToClient) => void;
 	onState: (state: ConnState, detail?: string) => void;
@@ -91,9 +93,8 @@ export class CityConnection {
 
 	private open(): void {
 		const proto = location.protocol === "https:" ? "wss" : "ws";
-		const ws = new WebSocket(
-			`${proto}://${location.host}/ws/area/${this.o.areaId}?avatar=${encodeURIComponent(this.o.avatar)}`,
-		);
+		const q = new URLSearchParams({ avatar: this.o.avatar, ...(this.o.at ? { at: this.o.at } : {}) });
+		const ws = new WebSocket(`${proto}://${location.host}/ws/area/${this.o.areaId}?${q}`);
 		this.ws = ws;
 		this.o.onState("connecting");
 		ws.onmessage = (e) => {

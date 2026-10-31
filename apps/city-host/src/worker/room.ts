@@ -32,10 +32,11 @@ import {
 	type JoinInfo,
 	type Member,
 	RoomCore,
+	type World,
 } from "./room-core.ts";
 import { FREE_PLAY_RULES, PRODUCTION_RULES } from "./rules.ts";
 import { meteredD1, type SavedUsage, UsageMeter } from "./usage.ts";
-import { BUILTIN_MODELS, freePlayWorld, PUBLISHED, world } from "./world.ts";
+import { BUILTIN_MODELS, freePlayWorld, MAIN_AREA, PUBLISHED, worldOf } from "./world.ts";
 
 /** The guide's connection: the room routes its messages to the Guide instead of a socket. */
 const GUIDE_CONN = { guide: true } as const;
@@ -46,13 +47,15 @@ const isGuide = (c: Conn): c is typeof GUIDE_CONN => c === GUIDE_CONN;
 export interface JoinRequest {
 	areaId: string;
 	info: JoinInfo;
+	/** Arriving through a portal: the landmark or portal of this area to appear at (docs/prd.md 3.8). */
+	arrive?: string;
 	/** Agents only: registered public key to verify the challenge with. */
 	publicKey?: string;
 }
 
 interface Attachment {
 	member?: Member;
-	pending?: { info: JoinInfo; publicKey: string; nonce: string; areaId: string; at: number };
+	pending?: { info: JoinInfo; publicKey: string; nonce: string; areaId: string; at: number; arrive?: string };
 }
 
 const SWEEP_INTERVAL_MS = 60_000;
@@ -112,6 +115,11 @@ export class CityRoomDO extends DurableObject<Env> {
 		super(ctx, env);
 		const freePlay = freePlayOn(env);
 		this.freePlay = freePlay;
+		// which area this is: the gateway gets it by name (/ws/area/<id>, docs/prd.md 3.8)
+		const areaId = ctx.id.name ?? MAIN_AREA;
+		const registered = (id: ModelId) => this.models.get(id)?.nav;
+		const world =
+			(freePlay ? freePlayWorld(areaId, registered) : worldOf(areaId)) ?? (worldOf(MAIN_AREA) as World);
 		this.hours = freePlay ? "always" : parseHours(env.OPEN_HOURS);
 		this.meter = new UsageMeter({
 			saved: ctx.storage.kv.get<SavedUsage>("usage"),
@@ -135,7 +143,7 @@ export class CityRoomDO extends DurableObject<Env> {
 				close: (c, code, reason) => !isGuide(c) && safeClose(c, code, reason),
 				persist: (c, member) => (isGuide(c) ? this.guide.persist(member) : persistMember(c, member)),
 			},
-			freePlay ? freePlayWorld((id) => this.models.get(id)?.nav) : world,
+			world,
 			Date.now,
 			() => randomToken(9),
 			freePlay
@@ -188,8 +196,8 @@ export class CityRoomDO extends DurableObject<Env> {
 			ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS chat (at INTEGER NOT NULL, lines TEXT NOT NULL)");
 			// mutes and blocks live only in memory; reload them after waking from hibernation
 			for (const id of restored) await this.loadRelations(id);
-			// free play only: production never creates or reads these
-			if (freePlay) this.loadBuilding();
+			// free play, where building is possible: production never creates or reads these
+			if (freePlay && world.build) this.loadBuilding();
 		});
 	}
 
@@ -238,13 +246,20 @@ export class CityRoomDO extends DurableObject<Env> {
 			if (!join.publicKey) return new Response("No key", { status: 400 });
 			const nonce = randomToken(18);
 			server.serializeAttachment({
-				pending: { info: join.info, publicKey: join.publicKey, nonce, areaId: join.areaId, at: Date.now() },
+				pending: {
+					info: join.info,
+					publicKey: join.publicKey,
+					nonce,
+					areaId: join.areaId,
+					at: Date.now(),
+					...(join.arrive ? { arrive: join.arrive } : {}),
+				},
 			} satisfies Attachment);
 			safeSend(server, { t: "CHALLENGE", nonce });
 		} else {
 			await this.loadRelations(join.info.id);
 			this.guide.ensurePresent();
-			this.core.join(server, join.info);
+			this.core.join(server, join.info, join.arrive);
 		}
 		await this.scheduleAlarm();
 		return new Response(null, { status: 101, webSocket: pair[0] });
@@ -279,7 +294,7 @@ export class CityRoomDO extends DurableObject<Env> {
 			// the nonce is consumed: the attachment is replaced by the member state
 			await this.loadRelations(p.info.id);
 			this.guide.ensurePresent();
-			this.core.join(ws, p.info);
+			this.core.join(ws, p.info, p.arrive);
 			return;
 		}
 		if (!parsed.ok) {
