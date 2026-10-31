@@ -24,22 +24,38 @@ pnpm lint         # biome
 | --- | --- |
 | `apps/city-host` | Gateway Worker と CityRoomDO。Webクライアントも静的アセットとしてここから配信する（`cloudflare.config.ts`） |
 | `apps/city-client` | Three.js のクライアント（city-host の Vite が束ねる） |
-| `apps/avatar-sdk` | AIのコアとランタイムアダプタ |
+| `apps/avatar-sdk` | AIのコアとランタイムアダプタ（Claude Code CLI、Workers AI） |
+| `apps/agent-worker` | T4 の試作：AI を Durable Object で常駐させる Worker（Workers AI） |
 | `packages/protocol` | メッセージ型と検証 |
 | `packages/nav` | ナビメッシュと経路探索 |
 | `tools/city-build` | 街の glb からナビメッシュとランドマークを生成 |
 
 `cf dev`（Vite の development モード）では、ダミー認証（`DEV_AUTH`）と開館時間の解除（`DEV_ALWAYS_OPEN`）が自動で有効になる。本番ビルドでは無効。
 
+## デプロイ
+
 デプロイ前に一度 `npx cf auth login` が必要。
+
+| 環境 | URL | デプロイ（`apps/city-host` で） |
+| --- | --- | --- |
+| 本番 | https://rojibura.kazumasa.workers.dev | `npx cf deploy` |
+| ステージング | https://rojibura-staging.kazumasa.workers.dev | `npx cf deploy --mode staging` |
+
+- 本番は JST 20〜24時だけ開いていて、ログインは Google だけ（設定するまではログインできない）。
+- ステージングはいつでも開いていて、ダミー認証が使える。ただし `DEV_TOKEN` が必要。
+  - 値は `apps/city-host/.dev.vars.staging`（git に入れない）。スクリプトには `RJ_DEV_TOKEN` で渡す。
+  - ブラウザで使うときは、`rj_dev=<DEV_TOKEN>` の Cookie を付けてからダミーログインする。
+- 初回のデプロイでは、シークレットを `--secrets-file` で一緒に送る（`SESSION_SECRET`、`GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`、`DEV_TOKEN`。使わないものは空でよい）。以降のデプロイでは引き継がれる。
+- D1 は初回のデプロイで自動で作られる。スキーマは `npx cf d1 migrations apply <データベースID>` で当てる（ID は `npx cf d1 list`）。
 
 ## Google ログインの設定（issue #14）
 
 1. Google Cloud Console で OAuth クライアント（ウェブアプリケーション）を作る。スコープは `openid` だけでよい（メールや名前は受け取らない）。
 2. 承認済みのリダイレクト URI に次を登録する。
    - 開発：`http://localhost:5173/auth/google/callback`
-   - 本番：`https://<worker名>.<サブドメイン>.workers.dev/auth/google/callback`
-3. 開発では `apps/city-host/.dev.vars` に `GOOGLE_CLIENT_ID` と `GOOGLE_CLIENT_SECRET` を書く（`.dev.vars.example` を参照）。本番ではシークレットとして登録する。
+   - 本番：`https://rojibura.kazumasa.workers.dev/auth/google/callback`
+   - ステージング（必要なら）：`https://rojibura-staging.kazumasa.workers.dev/auth/google/callback`
+3. 開発では `apps/city-host/.dev.vars` に `GOOGLE_CLIENT_ID` と `GOOGLE_CLIENT_SECRET` を書く（`.dev.vars.example` を参照）。本番ではシークレットとして登録する（`npx cf workers secrets update` か、次のデプロイで `--secrets-file`）。
 4. 両方が設定されるとログイン画面に「Google でログイン」が出る。初回ログイン時は表示名を決める画面になる。
 
 ## 街に入る・AIを動かす（ローカル）
@@ -63,6 +79,31 @@ node apps/avatar-sdk/src/cli.ts --name ハル --owner kazu --persona "のんび�
 
 ```bash
 node apps/city-host/scripts/smoke.ts            # 通し確認（ログイン、入場、AI認証、移動、会話、ping）
+node apps/city-host/scripts/moderation.ts       # ミュート、通報、追放
 node apps/city-host/scripts/load.ts --seconds 60  # 100体の負荷試験
 node tools/snap.ts out.png "http://localhost:5173/auth/dev/login?name=snap&redirect=/"  # ヘッドレス Chrome で撮影
 ```
+
+ステージングに向けるときは、URL を渡して `RJ_DEV_TOKEN` を設定する（`load.ts` と `heartbeat.ts` は `--base`）。
+
+```bash
+set -a; . apps/city-host/.dev.vars.staging; set +a; export RJ_DEV_TOKEN=$DEV_TOKEN
+node apps/city-host/scripts/smoke.ts https://rojibura-staging.kazumasa.workers.dev
+node apps/city-host/scripts/load.ts --base https://rojibura-staging.kazumasa.workers.dev --seconds 300
+node tools/snap.ts out.png "https://rojibura-staging.kazumasa.workers.dev/auth/dev/login?name=snap&redirect=/" --cookie "rj_dev=$DEV_TOKEN"
+```
+
+Cloudflare 上の使用量（課金の基準）は分析APIで見る。数分遅れで反映される。API のレート制限が厳しいので、続けて何度も呼ばない。
+
+```bash
+node apps/city-host/scripts/usage.ts --script rojibura-staging --since 2026-10-31T00:00:00Z --object main --minutes
+node apps/avatar-sdk/scripts/workers-ai-bench.ts   # Workers AI のモデル比較（Neurons を消費する）
+```
+
+## T4 の試作（apps/agent-worker）
+
+AI を参加者自身の Cloudflare アカウントの Durable Object で常駐させる（docs/prd.md 3.5）。LLM は Workers AI（既定は Gemma 4 26B）。
+
+1. 街にエージェントを登録し、`apps/agent-worker/.dev.vars` に `AGENT_ID`、`AGENT_KEY`（秘密鍵）、`CONTROL_TOKEN` を書く。
+2. `cd apps/agent-worker && npx cf deploy --secrets-file .dev.vars`。
+3. `curl -X POST -H "Authorization: Bearer $CONTROL_TOKEN" https://rojibura-agent.<サブドメイン>.workers.dev/start` で入場する。`/status` で接続状態、LLM の呼び出し回数と Neurons、ログが見られる。`/stop` で退場する。

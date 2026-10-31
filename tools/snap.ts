@@ -1,5 +1,5 @@
 // Headless Chrome screenshots of the running client (for checking rendering without a visible browser).
-//   node tools/snap.ts <out.png> <url> [--eval "js"] [--wait ms] [--size 1280x800]
+//   node tools/snap.ts <out.png> <url> [--eval "js"] [--wait ms] [--size 1280x800] [--cookie name=value]
 // Each --eval runs in the page in order (awaited); its JSON result is printed. The shot is taken at the end.
 // Logs in with the dev login when the URL starts with /auth/dev/login.
 
@@ -15,6 +15,8 @@ const { values, positionals } = parseArgs({
 		eval: { type: "string", multiple: true, default: [] },
 		wait: { type: "string", default: "3000" },
 		size: { type: "string", default: "1280x800" },
+		// set before loading the page, e.g. the staging dev token (rj_dev=...)
+		cookie: { type: "string", multiple: true, default: [] },
 	},
 });
 const [out, url] = positionals;
@@ -84,6 +86,10 @@ let code = 0;
 try {
 	await send("Page.enable");
 	await send("Runtime.enable");
+	for (const c of values.cookie ?? []) {
+		const [name = "", ...rest] = c.split("=");
+		await send("Network.setCookie", { name, value: rest.join("="), url, secure: url.startsWith("https:") });
+	}
 	await send("Page.navigate", { url });
 	await sleep(Number(values.wait));
 	for (const expr of values.eval ?? []) {

@@ -18,6 +18,7 @@ import {
 	signAuth,
 	type Vec2,
 } from "@rojibura/protocol";
+import { devHeaders } from "./lib.ts";
 
 const { values } = parseArgs({
 	options: {
@@ -40,7 +41,10 @@ const run = Date.now().toString(36);
 const mesh = NavMesh.fromJSON((await (await fetch(`${BASE}/test-city/navmesh.json`)).json()) as NavMeshData);
 
 async function devLogin(name: string): Promise<string> {
-	const r = await fetch(`${BASE}/auth/dev/login?name=${encodeURIComponent(name)}`, { redirect: "manual" });
+	const r = await fetch(`${BASE}/auth/dev/login?name=${encodeURIComponent(name)}`, {
+		redirect: "manual",
+		headers: devHeaders,
+	});
 	const c = r.headers.get("set-cookie")?.split(";")[0];
 	if (!c) throw new Error(`login ${name}: ${r.status}`);
 	return c;
@@ -50,7 +54,7 @@ const latencies: number[] = [];
 let received = 0;
 let sent = 0;
 let notices = 0;
-const closes: number[] = [];
+const closes: string[] = [];
 
 class Bot {
 	move: MoveState = { kind: "idle", pos: [0, 0], at: 0 };
@@ -100,7 +104,7 @@ class Bot {
 				this.others.push(m.avatar.id);
 			}
 		};
-		this.ws.onclose = (e) => closes.push(e.code);
+		this.ws.onclose = (e) => closes.push(`${e.code} ${e.reason}`);
 		this.ws.onerror = () => {};
 	}
 
@@ -144,12 +148,13 @@ for (let i = 0; i < AIS; i++) {
 		}),
 	});
 	const agent = (await r.json()) as { id: string };
-	await fetch(`${BASE}/api/dev/agents/${agent.id}/approve`, { method: "POST" });
+	await fetch(`${BASE}/api/dev/agents/${agent.id}/approve`, { method: "POST", headers: devHeaders });
 	bots.push(new Bot(`${WS}/ws/area/${AREA}?agent=${agent.id}`, { key: kp.privateKey, agentId: agent.id }));
 }
 await Promise.race([Promise.all(bots.map((b) => b.ready)), new Promise((r) => setTimeout(r, 20_000))]);
 const joined = bots.filter((b) => b.id).length;
 console.log(`joined: ${joined}/${bots.length}`);
+if (closes.length > 0) console.log(`closed while joining: ${closes.join(", ")}`);
 
 latencies.length = 0;
 received = 0;
@@ -167,21 +172,24 @@ await new Promise((r) => setTimeout(r, SECONDS * 1000 + 2000));
 for (const t of timers) clearTimeout(t);
 clearInterval(heartbeats);
 
-latencies.sort((a, b) => a - b);
-const q = (p: number) => latencies[Math.min(latencies.length - 1, Math.floor(latencies.length * p))] ?? NaN;
+// snapshot first: messages keep arriving while the stats request is in flight
+const lat = latencies.splice(0).sort((a, b) => a - b);
+const q = (p: number) => lat[Math.min(lat.length - 1, Math.floor(lat.length * p))] ?? NaN;
+const latencyMs = { p50: q(0.5), p90: q(0.9), p99: q(0.99), max: lat.at(-1) };
+const totalReceived = received;
 const elapsed = (Date.now() - t0) / 1000;
-const stats = await (await fetch(`${BASE}/api/dev/rooms/${AREA}/stats`)).json();
+const stats = await (await fetch(`${BASE}/api/dev/rooms/${AREA}/stats`, { headers: devHeaders })).json();
 console.log(
 	JSON.stringify(
 		{
 			joined,
 			sent,
 			sentPerSec: +(sent / elapsed).toFixed(1),
-			receivedTotal: received,
-			receivedPerClientPerSec: +(received / joined / elapsed).toFixed(1),
-			latencyMs: { p50: q(0.5), p90: q(0.9), p99: q(0.99), max: latencies.at(-1) },
+			receivedTotal: totalReceived,
+			receivedPerClientPerSec: +(totalReceived / joined / elapsed).toFixed(1),
+			latencyMs,
 			notices,
-			closes: closes.length,
+			closes,
 			billedRequestsPerHour: Math.round(((sent / elapsed) * 3600) / 20),
 			room: stats.live,
 		},

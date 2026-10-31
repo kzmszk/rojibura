@@ -175,6 +175,22 @@ describe("movement", () => {
 		ctx.room.handle(a, { t: "ACTION", motion: "wave" });
 		expect(types(bot)).not.toContain("ACTED");
 	});
+
+	test("AIs hear about arrivals and departures anywhere in the area", () => {
+		const bot = conn("bot");
+		const a = conn("a");
+		const b = conn("b");
+		joinAt(bot, ai("bot", "kazu"));
+		const pos = joinAt(a, human("alice"));
+		ctx.room.handle(bot, { t: "INTEREST", radius: 5 });
+		ctx.room.handle(a, { t: "MOVE_PATH", path: [pos, [-18, -18]], speed: 4, seq: 1 });
+		ctx.clock.advance(60_000);
+		bot.inbox.length = 0;
+		ctx.room.join(b, human("bob"));
+		expect(bot.inbox).toContainEqual(expect.objectContaining({ t: "JOINED" }));
+		ctx.room.leave(a, "quit");
+		expect(last(bot)).toMatchObject({ t: "LEFT", id: "h_alice" });
+	});
 });
 
 describe("conversation", () => {

@@ -1,7 +1,7 @@
 // End-to-end check of moderation (docs/prd.md 4.2) against a running city-host in development.
 //   node apps/city-host/scripts/moderation.ts [baseUrl]
 
-import { BASE, Client, check, devLogin, WS_BASE } from "./lib.ts";
+import { BASE, Client, check, devHeaders, devLogin, WS_BASE } from "./lib.ts";
 
 const run = Date.now() % 100000;
 const alice = await devLogin(`mod-alice-${run}`);
@@ -11,7 +11,7 @@ const me = async (cookie: string) => (await fetch(`${BASE}/api/me`, { headers: {
 const post = (cookie: string, path: string, body: unknown) =>
 	fetch(`${BASE}${path}`, {
 		method: "POST",
-		headers: { Cookie: cookie, "Content-Type": "application/json" },
+		headers: { Cookie: cookie, "Content-Type": "application/json", ...devHeaders },
 		body: JSON.stringify(body),
 	});
 const aliceId = (await me(alice)).id as string;

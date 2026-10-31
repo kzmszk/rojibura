@@ -60,8 +60,9 @@ export class AgentConnection {
 		const url = `${baseUrl}/ws/area/${areaId}?agent=${encodeURIComponent(agentId)}`;
 		const ws = new WebSocket(url);
 		this.ws = ws;
-		ws.onopen = () => logger.info(`connected to ${areaId}`);
-		ws.onmessage = (e) => {
+		// addEventListener rather than on* handlers: the Workers runtime only has the former
+		ws.addEventListener("open", () => logger.info(`connected to ${areaId}`));
+		ws.addEventListener("message", (e) => {
 			if (e.data === HEARTBEAT_PONG) return;
 			const msg = parseHostMessage(String(e.data));
 			if (!msg) return;
@@ -77,8 +78,8 @@ export class AgentConnection {
 				this.opts.onWelcome?.();
 			}
 			this.opts.onMessage(msg);
-		};
-		ws.onclose = (e) => {
+		});
+		ws.addEventListener("close", (e) => {
 			this.clearHeartbeat();
 			if (this.ws !== ws) return;
 			this.ws = null;
@@ -90,10 +91,10 @@ export class AgentConnection {
 			logger.warn(`disconnected (${e.code}); reconnecting in ${this.retryMs / 1000}s`);
 			setTimeout(() => !this.stopped && this.open(), this.retryMs);
 			this.retryMs = Math.min(this.retryMs * 2, 60_000);
-		};
-		ws.onerror = () => {
-			// onclose follows
-		};
+		});
+		ws.addEventListener("error", () => {
+			// close follows
+		});
 	}
 
 	private startHeartbeat(): void {

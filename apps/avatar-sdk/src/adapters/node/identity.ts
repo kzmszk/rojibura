@@ -34,6 +34,10 @@ export function privateKeyOf(id: IdentityFile): Promise<CryptoKey> {
 	return importPrivateKey(id.privateKey);
 }
 
+/** Dev endpoints on a deployed dev build (staging) need its token (docs/prd.md part 5). */
+export const devHeaders = (): Record<string, string> =>
+	process.env.RJ_DEV_TOKEN ? { "X-RJ-Dev-Token": process.env.RJ_DEV_TOKEN } : {};
+
 /**
  * Development registration: logs in as `owner` with the host's dummy login (cf dev only) and registers
  * a new agent. Production registration uses a one-time code from the owner portal (Phase 2).
@@ -45,6 +49,7 @@ export async function registerWithDevLogin(
 ): Promise<IdentityFile> {
 	const login = await fetch(`${baseUrl}/auth/dev/login?name=${encodeURIComponent(owner)}`, {
 		redirect: "manual",
+		headers: devHeaders(),
 	});
 	const cookie = login.headers.get("set-cookie")?.split(";")[0];
 	if (!cookie) throw new Error(`dev login failed (${login.status}); is the host running with cf dev?`);

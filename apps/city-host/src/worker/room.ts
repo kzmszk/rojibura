@@ -53,6 +53,8 @@ export class CityRoomDO extends DurableObject<Env> {
 	private flushed = { inbound: 0, connects: 0, says: 0, rejectedMoves: 0 };
 	private noticeSentFor = 0;
 	private chatFlushedAt = 0;
+	/** When this instance was created: a later value than the last activity means it hibernated. */
+	private readonly startedAt = Date.now();
 
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env);
@@ -263,6 +265,7 @@ export class CityRoomDO extends DurableObject<Env> {
 		return {
 			members: this.core.size,
 			sockets: this.ctx.getWebSockets().length,
+			instanceStartedAt: this.startedAt,
 			live: this.core.stats,
 			days,
 		};

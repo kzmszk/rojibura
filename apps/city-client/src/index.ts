@@ -76,7 +76,7 @@ export async function mountApp(root: HTMLElement): Promise<void> {
 		showWelcome(root, me, params.get("redirect") ?? "/");
 		return;
 	}
-	await startCity(root, me);
+	await startCity(root, me, health.dev);
 }
 
 interface Me {
@@ -142,7 +142,12 @@ function showLogin(root: HTMLElement, health: { dev: boolean; google: boolean })
 	}
 	const go = el("button", "", "街に入る");
 	go.type = "submit";
-	box.append(name, avatar, go, el("p", "rj-note", "開発用のダミーログインです（cf dev のときだけ有効）。"));
+	box.append(
+		name,
+		avatar,
+		go,
+		el("p", "rj-note", "開発用のダミーログインです（cf dev とステージングだけ）。"),
+	);
 	box.onsubmit = (e) => {
 		e.preventDefault();
 		const redirect = `/?avatar=${encodeURIComponent(avatar.value)}`;
@@ -152,7 +157,7 @@ function showLogin(root: HTMLElement, health: { dev: boolean; google: boolean })
 	name.focus();
 }
 
-async function startCity(root: HTMLElement, me: Me): Promise<void> {
+async function startCity(root: HTMLElement, me: Me, devBuild: boolean): Promise<void> {
 	const scene = new CityScene(root);
 	const nav = await loadNavigator();
 	await scene.loadCity(`${CITY}/test_city.glb`);
@@ -299,7 +304,8 @@ async function startCity(root: HTMLElement, me: Me): Promise<void> {
 		},
 	});
 	conn.start();
-	if (location.hostname === "localhost") Object.assign(globalThis, { __rj: { avatars, scene, conn } });
+	// debug hook for tools/snap.ts on development builds (cf dev and staging)
+	if (devBuild) Object.assign(globalThis, { __rj: { avatars, scene, conn, setTarget } });
 
 	// ---- input ----
 	form.onsubmit = (e) => {

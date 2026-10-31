@@ -141,6 +141,19 @@ export function parseDecision(raw: unknown, landmarkIds: string[]): Decision | n
 	};
 }
 
+/**
+ * Validates a summary output. Some models append markup after the text (`</summary> <motion>…`), so
+ * everything from the first tag, brace or code fence on is dropped.
+ */
+export function parseSummary(raw: unknown): string | null {
+	const text = (raw as { summary?: unknown } | null)?.summary;
+	if (typeof text !== "string") return null;
+	const cut = text.search(/<|\{|```/);
+	const clean = sanitizeText(cut >= 0 ? text.slice(0, cut) : text).trim();
+	if (clean.length === 0) return null;
+	return textLength(clean) > 160 ? [...clean].slice(0, 160).join("") : clean;
+}
+
 export const FALLBACK_REPLIES = [
 	"ちょっと考え中です…",
 	"ごめんなさい、うまく言葉が出てきません。",

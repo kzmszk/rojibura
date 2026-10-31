@@ -5,6 +5,11 @@ import { type ClientToHost, encode, type HostToClient, parseHostMessage } from "
 export const BASE = process.argv[2] ?? "http://localhost:5173";
 export const WS_BASE = BASE.replace(/^http/, "ws");
 
+/** Dev endpoints on a deployed dev build (staging) need the token from apps/city-host/.dev.vars.staging. */
+export const devHeaders: Record<string, string> = process.env.RJ_DEV_TOKEN
+	? { "X-RJ-Dev-Token": process.env.RJ_DEV_TOKEN }
+	: {};
+
 export function check(cond: unknown, label: string): void {
 	if (!cond) {
 		console.error(`FAIL ${label}`);
@@ -14,7 +19,10 @@ export function check(cond: unknown, label: string): void {
 }
 
 export async function devLogin(name: string): Promise<string> {
-	const r = await fetch(`${BASE}/auth/dev/login?name=${encodeURIComponent(name)}`, { redirect: "manual" });
+	const r = await fetch(`${BASE}/auth/dev/login?name=${encodeURIComponent(name)}`, {
+		redirect: "manual",
+		headers: devHeaders,
+	});
 	const cookie = r.headers.get("set-cookie")?.split(";")[0];
 	if (!cookie) throw new Error(`login failed for ${name}: ${r.status}`);
 	return cookie;

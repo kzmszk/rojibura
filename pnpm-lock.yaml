@@ -21,6 +21,25 @@ importers:
         specifier: 5.0.5
         version: 5.0.5(@types/node@26.6.6)(vite@8.3.5(@types/node@26.6.6))
 
+  apps/agent-worker:
+    dependencies:
+      '@rojibura/avatar-sdk':
+        specifier: workspace:*
+        version: link:../avatar-sdk
+      '@rojibura/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
+    devDependencies:
+      '@cloudflare/vite-plugin':
+        specifier: 2.0.0-beta.v.8
+        version: 2.0.0-beta.v.8(@types/node@26.6.6)(vite@8.3.5(@types/node@26.6.6))(workerd@1.20261023.1)
+      cf:
+        specifier: 1.0.0-beta.26
+        version: 1.0.0-beta.26(@types/node@26.6.6)
+      vite:
+        specifier: 8.3.5
+        version: 8.3.5(@types/node@26.6.6)
+
   apps/avatar-sdk:
     dependencies:
       '@rojibura/nav':

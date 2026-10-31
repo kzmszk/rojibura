@@ -71,9 +71,24 @@ async function broadcastCommand(c: RoomCommand): Promise<void> {
 
 const isModerator = (a: Account) => a.role === "moderator" || a.role === "admin";
 
+const DEV_TOKEN_HEADER = "X-RJ-Dev-Token";
+const DEV_TOKEN_COOKIE = "rj_dev";
+
+/** Dev endpoints: free on localhost; on a deployed dev build (staging) only with DEV_TOKEN. */
+function devAllowed(request: Request, url: URL): boolean {
+	if (!DEV) return false;
+	if (url.hostname === "localhost" || url.hostname === "127.0.0.1") return true;
+	const given = request.headers.get(DEV_TOKEN_HEADER) ?? getCookie(request, DEV_TOKEN_COOKIE);
+	if (!env.DEV_TOKEN || !given) return false;
+	const a = new TextEncoder().encode(env.DEV_TOKEN);
+	const b = new TextEncoder().encode(given);
+	return a.byteLength === b.byteLength && crypto.subtle.timingSafeEqual(a, b);
+}
+
 function sessionSecret(): string {
 	if (env.SESSION_SECRET) return env.SESSION_SECRET;
-	if (DEV) return "dev-only-insecure-session-secret";
+	// the fallback is for local development only: deployed dev builds have a DEV_TOKEN
+	if (DEV && !env.DEV_TOKEN) return "dev-only-insecure-session-secret";
 	throw new Error("SESSION_SECRET is not set");
 }
 
@@ -405,7 +420,7 @@ async function api(request: Request, url: URL): Promise<Response> {
 		return json({ ok: true });
 	}
 
-	if (DEV && path === "/api/dev/role" && request.method === "POST") {
+	if (devAllowed(request, url) && path === "/api/dev/role" && request.method === "POST") {
 		const account = await currentAccount(request);
 		if (!account) return error(401, "login required");
 		const role = ((await request.json().catch(() => null)) as { role?: string } | null)?.role;
@@ -438,15 +453,16 @@ async function api(request: Request, url: URL): Promise<Response> {
 	}
 
 	const stats = path.match(/^\/api\/dev\/rooms\/([a-z0-9-]{1,32})\/stats$/);
-	if (DEV && stats?.[1]) return env.ROOM.getByName(stats[1]).fetch(new Request("https://room/stats"));
+	if (stats?.[1] && devAllowed(request, url))
+		return env.ROOM.getByName(stats[1]).fetch(new Request("https://room/stats"));
 
 	const approve = path.match(/^\/api\/dev\/agents\/(a_[A-Za-z0-9_-]+)\/approve$/);
-	if (DEV && approve?.[1] && request.method === "POST") {
+	if (approve?.[1] && request.method === "POST" && devAllowed(request, url)) {
 		await setAgentTrust(env.DB, approve[1], "approved");
 		return json({ ok: true });
 	}
 
-	if (DEV && path === "/api/dev/selftest") return devSelftest();
+	if (path === "/api/dev/selftest" && devAllowed(request, url)) return devSelftest();
 	return error(404, "not found");
 }
 
@@ -460,7 +476,7 @@ async function auth(request: Request, url: URL): Promise<Response> {
 	if (url.pathname === "/auth/google/login") return googleLogin(url);
 	if (url.pathname === "/auth/google/callback") return googleCallback(request, url);
 	if (url.pathname === "/auth/dev/login") {
-		if (!DEV) return error(404, "not found");
+		if (!devAllowed(request, url)) return error(404, "not found");
 		const name = cleanName(url.searchParams.get("name") ?? "");
 		if (!name) return error(400, "name is required (1-24 characters)");
 		const account = await findOrCreateAccount(env.DB, "dev", name, name);

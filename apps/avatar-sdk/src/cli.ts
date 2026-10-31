@@ -9,7 +9,13 @@ import { parseArgs } from "node:util";
 import { ClaudeCodeLLM } from "./adapters/node/claude-code.ts";
 import { EchoLLM } from "./adapters/node/echo-llm.ts";
 import { FileMemory } from "./adapters/node/file-memory.ts";
-import { loadIdentity, privateKeyOf, registerWithDevLogin, saveIdentity } from "./adapters/node/identity.ts";
+import {
+	devHeaders,
+	loadIdentity,
+	privateKeyOf,
+	registerWithDevLogin,
+	saveIdentity,
+} from "./adapters/node/identity.ts";
 import { Agent } from "./core/agent.ts";
 import { loadCity } from "./core/city.ts";
 import { AgentConnection } from "./core/connection.ts";
@@ -51,7 +57,10 @@ if (!identity || identity.baseUrl !== base) {
 	log.info(`registered as ${identity.agentId} (identity saved to ${identityPath})`);
 }
 if (args.approve) {
-	const r = await fetch(`${base}/api/dev/agents/${identity.agentId}/approve`, { method: "POST" });
+	const r = await fetch(`${base}/api/dev/agents/${identity.agentId}/approve`, {
+		method: "POST",
+		headers: devHeaders(),
+	});
 	log.info(r.ok ? "approved (dev)" : `approve failed: ${r.status}`);
 }
 

@@ -19,6 +19,7 @@ import {
 	FALLBACK_REPLIES,
 	openingPrompt,
 	parseDecision,
+	parseSummary,
 	SUMMARY_SCHEMA,
 	summaryPrompt,
 	systemPrompt,
@@ -339,14 +340,16 @@ export class Agent {
 		if (conv.history.length < 3 || !this.takeLlmCall()) return;
 		const partner = this.avatars.get(conv.with)?.name ?? "相手";
 		try {
-			const raw = (await this.o.llm.complete({
-				system: systemPrompt(this.o.persona),
-				user: summaryPrompt(partner, conv.history),
-				schema: SUMMARY_SCHEMA,
-			})) as { summary?: unknown };
-			if (typeof raw?.summary === "string" && raw.summary.trim()) {
-				await this.o.memory.remember(conv.with, `会話のまとめ: ${raw.summary.trim().slice(0, 160)}`);
-				this.o.logger.info(`summary with ${partner}: ${raw.summary}`);
+			const summary = parseSummary(
+				await this.o.llm.complete({
+					system: systemPrompt(this.o.persona),
+					user: summaryPrompt(partner, conv.history),
+					schema: SUMMARY_SCHEMA,
+				}),
+			);
+			if (summary) {
+				await this.o.memory.remember(conv.with, `会話のまとめ: ${summary}`);
+				this.o.logger.info(`summary with ${partner}: ${summary}`);
 			}
 		} catch (e) {
 			this.o.logger.warn(`summary failed: ${(e as Error).message}`);

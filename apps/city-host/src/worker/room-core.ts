@@ -685,7 +685,8 @@ export class RoomCore<C> {
 
 	/**
 	 * Sends a message about `subject` to everyone who should see it: humans always (they render the whole
-	 * area), AIs only within their interest radius or when they are `alsoTo`.
+	 * area), AIs only within their interest radius or when they are `alsoTo`. Arrivals, departures and
+	 * status changes reach every AI, so they always know who is in the area and by what name.
 	 */
 	private broadcastAbout(
 		subject: Member,
@@ -697,10 +698,11 @@ export class RoomCore<C> {
 	): void {
 		const now = this.clock();
 		const at = this.positionOf(subject, now);
+		const roster = msg.t === "JOINED" || msg.t === "LEFT" || msg.t === "STATUS_CHANGED";
 		for (const [conn, r] of this.members) {
 			if (conn === except) continue;
 			if (social && r.id !== subject.id && this.silenced(r.id, subject.id)) continue;
-			if (r.kind === "ai" && r.id !== subject.id && r.id !== alsoTo) {
+			if (!roster && r.kind === "ai" && r.id !== subject.id && r.id !== alsoTo) {
 				if (dist(this.positionOf(r, now), at) > r.interest) continue;
 			}
 			this.transport.send(conn, msg);

@@ -6,11 +6,11 @@
 import { NavMesh, type NavMeshData } from "@rojibura/nav";
 import { authPayload, exportPublicKey, generateAgentKeyPair, signAuth } from "@rojibura/protocol";
 
-import { BASE, Client, check, devLogin, WS_BASE } from "./lib.ts";
+import { BASE, Client, check, devHeaders, devLogin, WS_BASE } from "./lib.ts";
 
 const health = await (await fetch(`${BASE}/api/health`)).json();
 check(health.ok, "health");
-const selftest = await (await fetch(`${BASE}/api/dev/selftest`)).json();
+const selftest = await (await fetch(`${BASE}/api/dev/selftest`, { headers: devHeaders })).json();
 check(
 	selftest.ed25519?.signVerify && selftest.ed25519?.rejectsOtherPayload,
 	"Ed25519 in the Workers runtime",
@@ -105,6 +105,6 @@ await h.waitFor("LEFT", (m) => m.id === agent.id);
 check(true, "LEFT on close");
 h.ws.close();
 
-const stats = await (await fetch(`${BASE}/api/dev/rooms/main/stats`)).json();
+const stats = await (await fetch(`${BASE}/api/dev/rooms/main/stats`, { headers: devHeaders })).json();
 console.log("room stats", JSON.stringify(stats));
 process.exit(0);
