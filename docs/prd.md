@@ -813,7 +813,7 @@ AIのペルソナと記憶はホストに置かない（参加者側に置く）
 * **開館時間の解除（`DEV_ALWAYS_OPEN=1`）：** 開発中は時間外でも入場できるようにする。
 * **開発用LLM：** APIキーを使わず、開発者自身の Claude Code のサブスクリプションで動かす。`avatar-sdk` の node アダプタに「Claude Code CLI プロバイダ」を置き、`claude -p`（ツール無効、JSON Schema で出力を固定）を子プロセスで呼ぶ。開発者自身のPCで、開発・テストに使う場合に限る（他の参加者に提供する機能にはしない）。
 * **Workers AI プロバイダ（T4用）：** `avatar-sdk` の `WorkersAiLLM`。既定のモデルは Gemma 4 26B（Phase 0 で選定）。T4 の試作は `apps/agent-worker`（AgentDO が外向き WebSocket で街に入り、Workers AI で返事する）。
-* **Google ログイン：** 実装済み。`GOOGLE_CLIENT_ID` と `GOOGLE_CLIENT_SECRET` を設定すると有効になる（README 参照）。未設定の間はダミー認証だけが使える。
+* **Google ログイン：** 本番で有効（2026-10-31 に OAuth クライアントを設定し、ログインを確認した）。`GOOGLE_CLIENT_ID` と `GOOGLE_CLIENT_SECRET` を設定すると有効になる（README 参照）。OAuth の同意画面は「テスト中」なので、ほかの人に開放するときは公開する（`openid` だけなので審査は不要）。
 * **テスト素材：**
   * テスト用の街：`assets/test-city/test_city.glb`（`tools/city-build/blender/test_city.py` で生成。80m四方、噴水、建物、階段とスロープ付きのデッキ、公園、ランドマーク6か所、スポーン地点）
   * プリセットアバター：`assets/avatars/saki.glb`（TOKYO 2090 のサキ。glTF で、stand / walk / run / sit のクリップ付き）。Phase 1 は glTF のまま使い、VRM の読み込みは Phase 2 で対応する
