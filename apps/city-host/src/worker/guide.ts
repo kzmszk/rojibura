@@ -66,7 +66,9 @@ export interface GuideDeps<C> {
 	clock?: () => number;
 	random?: () => number;
 	/** One-off delay (a short timer is fine; only recurring ones keep the room awake). */
-	defer?: (fn: () => void, ms: number) => void;
+	defer?: (fn: () => unknown, ms: number) => void;
+	/** Runs async work as a named action for the usage meter (usage.ts). */
+	track?: <T>(label: string, fn: () => T) => T;
 }
 
 export function guideInfo(): JoinInfo {
@@ -120,7 +122,8 @@ export class Guide<C> {
 	private readonly d: GuideDeps<C>;
 	private readonly clock: () => number;
 	private readonly random: () => number;
-	private readonly defer: (fn: () => void, ms: number) => void;
+	private readonly defer: (fn: () => unknown, ms: number) => void;
+	private readonly track: <T>(label: string, fn: () => T) => T;
 	private saved: GuideSaved;
 	private readonly lastVisit = new Map<AvatarId, number>();
 	private inFlight = 0;
@@ -131,6 +134,7 @@ export class Guide<C> {
 		this.clock = deps.clock ?? Date.now;
 		this.random = deps.random ?? Math.random;
 		this.defer = deps.defer ?? ((fn, ms) => setTimeout(fn, ms));
+		this.track = deps.track ?? ((_label, fn) => fn());
 		this.saved = deps.load() ?? { day: jstDay(this.clock()), llmCalls: 0, greeted: [] };
 	}
 
@@ -166,11 +170,11 @@ export class Guide<C> {
 					!this.greetedToday(msg.avatar.id)
 				) {
 					const id = msg.avatar.id;
-					this.defer(() => void this.greet(id), GREET_DELAY_MS);
+					this.defer(() => this.greet(id), GREET_DELAY_MS);
 				}
 				return;
 			case "ADDRESSED":
-				void this.reply(msg);
+				void this.track("シルベの返事", () => this.reply(msg));
 				return;
 			default:
 				return;
@@ -186,7 +190,7 @@ export class Guide<C> {
 		// conversations that have settled become the day's summary and the person's wishes
 		const job = this.d.memory.nextToSummarize(now);
 		if (job) {
-			void this.summarize(job);
+			void this.track("シルベの記憶の整理", () => this.summarize(job));
 			return;
 		}
 		// a lone visitor who is standing still: walk over so they are not alone (without talking to them)

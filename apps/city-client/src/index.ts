@@ -13,11 +13,13 @@ import {
 	WALK_SPEED,
 } from "@rojibura/protocol";
 import * as THREE from "three";
+import { api, onApiUsage } from "./api.ts";
 import { AvatarView } from "./avatars.ts";
 import { actionBar, Relations, showAdmin } from "./moderation.ts";
 import { CityConnection, type ConnState } from "./net.ts";
 import { CityScene } from "./scene.ts";
 import { STYLES } from "./styles.ts";
+import { UsagePanel } from "./usage-panel.ts";
 
 export interface Navigator {
 	findPath(from: Vec2, to: Vec2): Vec2[] | null;
@@ -59,8 +61,8 @@ export async function mountApp(root: HTMLElement): Promise<void> {
 	root.classList.add("rj-root");
 
 	const [meRes, health] = await Promise.all([
-		fetch("/api/me"),
-		fetch("/api/health").then((r) => r.json() as Promise<{ dev: boolean; google: boolean }>),
+		api("/api/me"),
+		api("/api/health").then((r) => r.json() as Promise<{ dev: boolean; google: boolean }>),
 	]);
 	if (meRes.status === 401) {
 		showLogin(root, health);
@@ -88,7 +90,7 @@ interface Me {
 }
 
 function patchMe(body: { name?: string; allowAiApproach?: boolean }): Promise<Response> {
-	return fetch("/api/me", {
+	return api("/api/me", {
 		method: "PATCH",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify(body),
@@ -181,6 +183,18 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean): Promise<
 	}
 	right.append(approach, logout);
 	hud.append(status, right);
+	// free-tier usage for admins, moderators and development builds (docs/prd.md 2.5)
+	let usage: UsagePanel | null = null;
+	if (devBuild || me.role === "moderator" || me.role === "admin") {
+		const panel = new UsagePanel((on) => conn.send({ t: "WATCH_USAGE", on }));
+		const toggle = el("button", "rj-logout", "📊 利用状況");
+		toggle.type = "button";
+		toggle.onclick = () => panel.toggle();
+		right.prepend(toggle);
+		root.append(panel.el);
+		onApiUsage((label, cost) => panel.addOwn(label, cost));
+		usage = panel;
+	}
 	const chat = el("div", "rj-chat");
 	const log = el("div", "rj-log");
 	const form = el("form", "rj-say");
@@ -258,6 +272,8 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean): Promise<
 			switch (m.t) {
 				case "WELCOME":
 					myId = m.you;
+					// (re)subscribe after every (re)connect
+					if (usage?.isShown) conn.send({ t: "WATCH_USAGE", on: true });
 					for (const v of avatars.values()) v.dispose();
 					avatars.clear();
 					for (const a of m.avatars) add(a);
@@ -297,6 +313,9 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean): Promise<
 				case "NOTICE":
 					showToast(m.message);
 					break;
+				case "USAGE":
+					usage?.onUsage(m);
+					break;
 				default:
 					break;
 			}
@@ -304,6 +323,7 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean): Promise<
 		},
 	});
 	conn.start();
+	usage?.restore();
 	// debug hook for tools/snap.ts on development builds (cf dev and staging)
 	if (devBuild) Object.assign(globalThis, { __rj: { avatars, scene, conn, setTarget } });
 

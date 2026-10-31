@@ -1,5 +1,7 @@
 // Avatar Protocol v2 message types (docs/prd.md 3.2.2).
 
+import type { Usage, UsageEvent } from "./usage.ts";
+
 /** Host-issued immutable ID: "h_..." for humans, "a_..." for AI agents. */
 export type AvatarId = string;
 /** A point on the walkable plane. Paths are horizontal; renderers decide the height. */
@@ -49,7 +51,9 @@ export type ClientToHost =
 	| { t: "ACTION"; motion: Motion; target?: AvatarId }
 	| { t: "SAY"; text: string; to?: AvatarId; convId?: string }
 	| { t: "STATUS"; status: Status }
-	| { t: "INTEREST"; radius: number };
+	| { t: "INTEREST"; radius: number }
+	/** Admins and development: live free-tier usage of the area (docs/prd.md 2.5). */
+	| { t: "WATCH_USAGE"; on: boolean };
 
 export type LeaveReason = "quit" | "timeout" | "kicked" | "closing";
 export type ConvEndReason = "max_turns" | "timeout" | "left" | "budget";
@@ -77,7 +81,9 @@ export type HostToClient =
 	| { t: "CONV_END"; convId: string; reason: ConvEndReason }
 	| { t: "STATUS_CHANGED"; id: AvatarId; status: Status }
 	| { t: "BUDGET"; level: BudgetLevel }
-	| { t: "NOTICE"; kind: NoticeKind; message: string };
+	| { t: "NOTICE"; kind: NoticeKind; message: string }
+	/** To watchers: today's totals (UTC day) and what used them since the last push. */
+	| { t: "USAGE"; day: string; totals: Usage; events: UsageEvent[] };
 
 export type ClientMessageType = ClientToHost["t"];
 export type HostMessageType = HostToClient["t"];

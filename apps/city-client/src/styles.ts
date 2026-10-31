@@ -53,4 +53,27 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #bfd6e8; }
 .rj-excerpt { font-size: 13px; background: #f6f6f8; border-radius: 6px; padding: 6px 8px; overflow-wrap: anywhere; }
 .rj-note-text { color: #444; overflow-wrap: anywhere; }
 .rj-report-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.rj-usage { display: none; position: fixed; top: 52px; right: 12px; width: 380px; max-width: calc(100vw - 24px); max-height: calc(100vh - 200px); overflow-y: auto; box-sizing: border-box; padding: 10px 12px; border-radius: 10px; background: rgba(255,255,255,.94); color: #222; font-size: 12px; box-shadow: 0 2px 10px rgba(0,0,0,.15); pointer-events: auto; z-index: 5; }
+.rj-usage.show { display: block; }
+.rj-usage-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 13px; }
+.rj-usage-close { border: none; background: none; font-size: 18px; line-height: 1; cursor: pointer; color: #555; padding: 0 4px; }
+.rj-usage-bars { display: flex; flex-direction: column; gap: 4px; }
+.rj-usage-top { display: flex; justify-content: space-between; }
+.rj-usage-pct { font-variant-numeric: tabular-nums; color: #444; }
+.rj-usage-bar { height: 5px; border-radius: 3px; background: #e6e8ec; overflow: hidden; margin: 1px 0; }
+.rj-usage-fill { height: 100%; background: #3a7bd5; }
+.rj-usage-fill.warm { background: #e0a020; }
+.rj-usage-fill.hot { background: #d64545; }
+.rj-usage-nums { color: #666; font-size: 11px; font-variant-numeric: tabular-nums; }
+.rj-usage-sub { display: block; margin: 10px 0 4px; font-size: 12px; }
+.rj-usage-events { display: flex; flex-direction: column; gap: 3px; }
+.rj-usage-event { display: grid; grid-template-columns: auto 1fr; column-gap: 6px; row-gap: 2px; padding: 3px 4px; border-radius: 4px; }
+.rj-usage-event.mine { background: #eef4ff; }
+.rj-usage-time { color: #888; font-variant-numeric: tabular-nums; }
+.rj-usage-label { overflow-wrap: anywhere; }
+.rj-usage-chips { grid-column: 2; display: flex; flex-wrap: wrap; gap: 3px; }
+.rj-chip { font-size: 10px; padding: 1px 5px; border-radius: 8px; background: #eceff3; color: #333; font-variant-numeric: tabular-nums; }
+.rj-chip-neurons { background: #f3e8ff; }
+.rj-chip-sqlRowsWritten, .rj-chip-d1RowsWritten { background: #ffefe0; }
+.rj-chip-workerRequests, .rj-chip-doRequests { background: #e5f2ff; }
 `;

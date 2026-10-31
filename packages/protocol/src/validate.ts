@@ -129,6 +129,9 @@ export function parseClientMessage(raw: string | ArrayBuffer): Parsed<ClientToHo
 		case "INTEREST":
 			if (!isNum(v.radius, INTEREST_RADIUS_MIN, INTEREST_RADIUS_MAX)) return fail("bad radius");
 			return { ok: true, msg: { t: "INTEREST", radius: v.radius } };
+		case "WATCH_USAGE":
+			if (typeof v.on !== "boolean") return fail("bad on");
+			return { ok: true, msg: { t: "WATCH_USAGE", on: v.on } };
 		default:
 			return fail("unknown type");
 	}

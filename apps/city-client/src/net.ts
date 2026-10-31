@@ -9,6 +9,7 @@ import {
 	type HostToClient,
 	parseHostMessage,
 } from "@rojibura/protocol";
+import { api } from "./api.ts";
 
 export type ConnState = "connecting" | "open" | "closed";
 
@@ -69,7 +70,7 @@ export class CityConnection {
 	private async enter(): Promise<void> {
 		let entry: Entry = { ok: true };
 		try {
-			entry = (await (await fetch("/api/entry")).json()) as Entry;
+			entry = (await (await api("/api/entry")).json()) as Entry;
 		} catch {
 			// host unreachable: let the socket attempt fail and retry with backoff
 		}

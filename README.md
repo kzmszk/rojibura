@@ -97,7 +97,17 @@ node apps/city-host/scripts/load.ts --base https://rojibura-staging.kazumasa.wor
 node tools/snap.ts out.png "https://rojibura-staging.kazumasa.workers.dev/auth/dev/login?name=snap&redirect=/" --cookie "rj_dev=$DEV_TOKEN"
 ```
 
-Cloudflare 上の使用量（課金の基準）は分析APIで見る。数分遅れで反映される。API のレート制限が厳しいので、続けて何度も呼ばない。
+ゲーム画面の「📊 利用状況」（管理者、モデレーター、開発環境だけに出る）で、今日の無料枠の使用率と、操作ごとの消費がリアルタイムに見られる。数字はホストが自分で数えた推定値。アカウント全体の公式の値も出すには、Cloudflare のダッシュボードで「Account Analytics: Read」の権限だけを持つ API トークンを作り、本番の Worker に登録する。
+
+```bash
+cd ~/work/rojibura/apps/city-host && read -rsp "Analytics token: " V && echo && npx cf workers secrets update CF_ANALYTICS_TOKEN --worker rojibura --type secret_text --text "$V"; unset V
+```
+
+```bash
+cd ~/work/rojibura/apps/city-host && npx cf workers secrets update CF_ACCOUNT_ID --worker rojibura --type secret_text --text "$(npx cf auth whoami 2>/dev/null | python3 -c 'import sys,json; t=sys.stdin.read(); print(json.loads(t[t.index("{"):])["accounts"][0]["id"])')"
+```
+
+Cloudflare 上の使用量（課金の基準）は、スクリプトからも分析APIで見られる。数分遅れで反映される。API のレート制限が厳しいので、続けて何度も呼ばない。
 
 ```bash
 node apps/city-host/scripts/usage.ts --script rojibura-staging --since 2026-10-31T00:00:00Z --object main --minutes

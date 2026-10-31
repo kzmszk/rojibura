@@ -1,6 +1,7 @@
 // Personal safety tools and the moderator page (docs/prd.md 4.2).
 
 import type { AvatarId } from "@rojibura/protocol";
+import { api } from "./api.ts";
 
 function el<K extends keyof HTMLElementTagNameMap>(
 	tag: K,
@@ -14,7 +15,7 @@ function el<K extends keyof HTMLElementTagNameMap>(
 }
 
 function post(path: string, body: unknown): Promise<Response> {
-	return fetch(path, {
+	return api(path, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify(body),
@@ -145,7 +146,7 @@ export async function showAdmin(root: HTMLElement): Promise<void> {
 	page.append(el("h1", "", "通報の確認"), el("a", "", "← 街に戻る"));
 	(page.lastChild as HTMLAnchorElement).href = "/";
 	root.append(page);
-	const r = await fetch("/api/mod/reports");
+	const r = await api("/api/mod/reports");
 	if (!r.ok) {
 		page.append(el("p", "", "モデレーターだけが見られます。"));
 		return;

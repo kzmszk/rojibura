@@ -2,10 +2,11 @@
 // agent challenge-response and alarms; the area logic lives in RoomCore.
 
 import { DurableObject } from "cloudflare:workers";
-import { WorkersAiLLM } from "@rojibura/avatar-sdk";
+import { type LLM, WorkersAiLLM } from "@rojibura/avatar-sdk";
 import {
 	AUTH_TIMEOUT_MS,
 	authPayload,
+	type ClientToHost,
 	encode,
 	HEARTBEAT_PING,
 	HEARTBEAT_PONG,
@@ -16,7 +17,7 @@ import {
 } from "@rojibura/protocol";
 import { relationsOf } from "./db.ts";
 import { GUIDE_NAME, Guide, type GuideSaved } from "./guide.ts";
-import { GuideMemory } from "./guide-memory.ts";
+import { GuideMemory, type Kv } from "./guide-memory.ts";
 import { CLOSING_NOTICE_MS, closingTime, describeHours, type Hours, isOpen, parseHours } from "./hours.ts";
 import {
 	type ChatLine,
@@ -26,6 +27,7 @@ import {
 	type Member,
 	RoomCore,
 } from "./room-core.ts";
+import { meteredD1, type SavedUsage, UsageMeter } from "./usage.ts";
 import { navmesh, world } from "./world.ts";
 
 /** The guide's connection: the room routes its messages to the Guide instead of a socket. */
@@ -47,6 +49,21 @@ interface Attachment {
 }
 
 const SWEEP_INTERVAL_MS = 60_000;
+/** Usage is pushed to watchers at most this often. */
+const USAGE_PUSH_MS = 1000;
+/** An incoming WebSocket message is billed as 1/20 of a request. */
+const WS_MESSAGE = 1 / 20;
+
+const MESSAGE_LABELS: Record<ClientToHost["t"], string> = {
+	AUTH: "AIの認証",
+	MOVE_PATH: "移動",
+	MOVE_VEL: "移動（キー）",
+	ACTION: "動作",
+	SAY: "発言",
+	STATUS: "状態の変更",
+	INTEREST: "購読範囲の変更",
+	WATCH_USAGE: "利用状況の表示",
+};
 const CHAT_KEEP_MS = 24 * 60 * 60 * 1000;
 
 /** Internal requests from the gateway (moderation and relations, docs/prd.md 4.2). */
@@ -66,10 +83,30 @@ export class CityRoomDO extends DurableObject<Env> {
 	private readonly hours: Hours;
 	/** When this instance was created: a later value than the last activity means it hibernated. */
 	private readonly startedAt = Date.now();
+	/** What this area spends of the free tier (docs/prd.md 2.5). */
+	private readonly meter: UsageMeter;
+	private readonly db: D1Database;
+	private pushTimer: ReturnType<typeof setTimeout> | null = null;
 
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env);
 		this.hours = parseHours(env.OPEN_HOURS);
+		this.meter = new UsageMeter({
+			saved: ctx.storage.kv.get<SavedUsage>("usage"),
+			onEvent: () => this.schedulePush(),
+		});
+		this.db = meteredD1(env.DB, (c) => this.meter.add(c));
+		// storage the guide uses: key-value calls are billed as rows read and written
+		const kv: Kv = {
+			get: <T>(k: string) => {
+				this.meter.add({ sqlRowsRead: 1 });
+				return ctx.storage.kv.get<T>(k);
+			},
+			put: (k, v) => {
+				this.meter.add({ sqlRowsWritten: 1 });
+				ctx.storage.kv.put(k, v);
+			},
+		};
 		this.core = new RoomCore<Conn>(
 			{
 				send: (c, msg) => (isGuide(c) ? this.guide.onMessage(msg) : safeSend(c, msg)),
@@ -80,17 +117,21 @@ export class CityRoomDO extends DurableObject<Env> {
 			Date.now,
 			() => randomToken(9),
 		);
-		this.guideMemory = new GuideMemory(ctx.storage.kv, GUIDE_NAME);
+		this.guideMemory = new GuideMemory(kv, GUIDE_NAME);
 		this.guide = new Guide<Conn>({
 			core: this.core,
 			conn: GUIDE_CONN,
 			world,
 			findPath: (from, to) => navmesh.findPath(navmesh.closestPoint(from), navmesh.closestPoint(to)),
-			llm: env.AI ? new WorkersAiLLM(env.AI) : null,
-			load: () => ctx.storage.kv.get<GuideSaved>("guide"),
-			save: (s) => ctx.storage.kv.put("guide", s),
+			llm: env.AI ? this.meteredLlm(new WorkersAiLLM(env.AI)) : null,
+			load: () => kv.get<GuideSaved>("guide"),
+			save: (s) => kv.put("guide", s),
 			memory: this.guideMemory,
 			hoursText: describeHours(this.hours),
+			track: (label, fn) => this.meter.track(label, fn),
+			// the wait before the welcome keeps the room awake too, so it is part of the action
+			defer: (fn, ms) =>
+				void this.meter.track("シルベのあいさつ", () => new Promise((r) => setTimeout(() => r(fn()), ms))),
 		});
 		ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(HEARTBEAT_PING, HEARTBEAT_PONG));
 		const restored: string[] = [];
@@ -116,6 +157,25 @@ export class CityRoomDO extends DurableObject<Env> {
 
 	async fetch(request: Request): Promise<Response> {
 		const url = new URL(request.url);
+		if (url.pathname === "/usage" && request.method === "POST") {
+			// what the gateway measured (index.ts): its own events, plus this request
+			const events = (await request.json()) as Parameters<UsageMeter["merge"]>[0];
+			this.meter.merge(events);
+			return this.meter.track("ゲートウェイの報告", () => new Response(null, { status: 204 }), {
+				doRequests: 1,
+			});
+		}
+		const join = JSON.parse(request.headers.get("X-RJ-Join") ?? "null") as JoinRequest | null;
+		const label =
+			url.pathname === "/stats"
+				? "統計の参照"
+				: url.pathname === "/command"
+					? "モデレーション・関係の変更"
+					: `${join?.info.name ?? "?"}：入場`;
+		return this.meter.track(label, () => this.handleFetch(request, url, join), { doRequests: 1 });
+	}
+
+	private async handleFetch(request: Request, url: URL, join: JoinRequest | null): Promise<Response> {
 		if (url.pathname === "/stats") {
 			// development: what the guide remembers about one person (?person=h_...)
 			const person = url.searchParams.get("person");
@@ -125,7 +185,6 @@ export class CityRoomDO extends DurableObject<Env> {
 			return Response.json(await this.command((await request.json()) as RoomCommand));
 		if (request.headers.get("Upgrade") !== "websocket")
 			return new Response("Expected WebSocket", { status: 426 });
-		const join = JSON.parse(request.headers.get("X-RJ-Join") ?? "null") as JoinRequest | null;
 		if (!join) return new Response("Bad join", { status: 400 });
 
 		const pair = new WebSocketPair();
@@ -150,6 +209,18 @@ export class CityRoomDO extends DurableObject<Env> {
 	async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
 		const att = ws.deserializeAttachment() as Attachment | null;
 		const parsed = parseClientMessage(message);
+		const who = att?.member?.name ?? att?.pending?.info.name ?? "?";
+		const what = parsed.ok ? MESSAGE_LABELS[parsed.msg.t] : "不正なメッセージ";
+		return this.meter.track(`${who}：${what}`, () => this.handleMessage(ws, att, parsed), {
+			doRequests: WS_MESSAGE,
+		});
+	}
+
+	private async handleMessage(
+		ws: WebSocket,
+		att: Attachment | null,
+		parsed: ReturnType<typeof parseClientMessage>,
+	): Promise<void> {
 		if (att?.pending) {
 			const p = att.pending;
 			const ok =
@@ -173,10 +244,14 @@ export class CityRoomDO extends DurableObject<Env> {
 			return;
 		}
 		this.core.handle(ws, parsed.msg);
+		// someone started watching: give them today's totals and the recent actions at once
+		if (parsed.msg.t === "WATCH_USAGE" && this.core.members.get(ws)?.watchUsage)
+			safeSend(ws, { t: "USAGE", ...this.meter.snapshot(), events: [...this.meter.recent] });
 	}
 
 	async webSocketClose(ws: WebSocket): Promise<void> {
-		this.core.leave(ws, "quit");
+		const name = this.core.members.get(ws)?.name ?? "?";
+		this.meter.track(`${name}：退出`, () => this.core.leave(ws, "quit"), { doRequests: WS_MESSAGE });
 	}
 
 	async webSocketError(ws: WebSocket): Promise<void> {
@@ -184,6 +259,10 @@ export class CityRoomDO extends DurableObject<Env> {
 	}
 
 	async alarm(): Promise<void> {
+		return this.meter.track("定期処理（Alarm）", () => this.sweepAlarm(), { doRequests: 1 });
+	}
+
+	private async sweepAlarm(): Promise<void> {
 		const now = Date.now();
 		// unauthenticated agents that never answered
 		for (const ws of this.ctx.getWebSockets("ai")) {
@@ -212,12 +291,51 @@ export class CityRoomDO extends DurableObject<Env> {
 		}
 		this.flushStats();
 		this.flushChat();
+		// today's usage survives eviction (one row a minute while people are here)
+		this.meter.add({ sqlRowsWritten: 1 });
+		this.ctx.storage.kv.put("usage", this.meter.snapshot());
 		await this.scheduleAlarm();
+	}
+
+	/** An LLM whose Workers AI neurons go to the usage meter. */
+	private meteredLlm(llm: WorkersAiLLM): LLM {
+		return {
+			name: llm.name,
+			complete: async (req) => {
+				const r = await llm.complete(req);
+				this.meter.add({ neurons: llm.lastUsage?.neurons ?? 0 });
+				return r;
+			},
+		};
+	}
+
+	/** Pushes new usage events to watchers, at most once a second (only while someone watches). */
+	private schedulePush(): void {
+		if (this.pushTimer) return;
+		if (![...this.core.members.values()].some((m) => m.watchUsage)) {
+			this.meter.pending = [];
+			return;
+		}
+		this.pushTimer = setTimeout(() => {
+			this.pushTimer = null;
+			const events = this.meter.pending;
+			this.meter.pending = [];
+			const msg: HostToClient = { t: "USAGE", ...this.meter.snapshot(), events };
+			for (const [c, m] of this.core.members) if (m.watchUsage && !isGuide(c)) safeSend(c, msg);
+		}, USAGE_PUSH_MS);
+	}
+
+	/** SQL on the room's storage, with rows read and written going to the usage meter. */
+	private sql<T extends Record<string, SqlStorageValue>>(query: string, ...params: unknown[]): T[] {
+		const cursor = this.ctx.storage.sql.exec<T>(query, ...params);
+		const rows = cursor.toArray();
+		this.meter.add({ sqlRowsRead: cursor.rowsRead, sqlRowsWritten: cursor.rowsWritten });
+		return rows;
 	}
 
 	private async loadRelations(id: string): Promise<void> {
 		try {
-			this.core.setRelations(id, await relationsOf(this.env.DB, id));
+			this.core.setRelations(id, await relationsOf(this.db, id));
 		} catch {
 			// D1 unavailable: join without personal filters rather than failing
 		}
@@ -242,7 +360,7 @@ export class CityRoomDO extends DurableObject<Env> {
 		this.flushChat();
 		const since = Date.now() - ms;
 		const lines: ChatLine[] = [];
-		for (const row of this.ctx.storage.sql.exec<{ lines: string }>(
+		for (const row of this.sql<{ lines: string }>(
 			"SELECT lines FROM chat WHERE at >= ? ORDER BY at",
 			since - SWEEP_INTERVAL_MS,
 		)) {
@@ -255,14 +373,10 @@ export class CityRoomDO extends DurableObject<Env> {
 	private flushChat(): void {
 		const fresh = this.core.chatLog.filter((l) => l.at > this.chatFlushedAt);
 		if (fresh.length > 0) {
-			this.ctx.storage.sql.exec(
-				"INSERT INTO chat (at, lines) VALUES (?, ?)",
-				Date.now(),
-				JSON.stringify(fresh),
-			);
+			this.sql("INSERT INTO chat (at, lines) VALUES (?, ?)", Date.now(), JSON.stringify(fresh));
 			this.chatFlushedAt = fresh[fresh.length - 1]?.at ?? this.chatFlushedAt;
 		}
-		this.ctx.storage.sql.exec("DELETE FROM chat WHERE at < ?", Date.now() - CHAT_KEEP_MS);
+		this.sql("DELETE FROM chat WHERE at < ?", Date.now() - CHAT_KEEP_MS);
 	}
 
 	private async scheduleAlarm(): Promise<void> {
@@ -285,7 +399,7 @@ export class CityRoomDO extends DurableObject<Env> {
 			rejected: s.rejectedMoves - this.flushed.rejectedMoves,
 		};
 		if (d.inbound + d.connects + d.says + d.rejected === 0) return;
-		this.ctx.storage.sql.exec(
+		this.sql(
 			`INSERT INTO stats (day, inbound, connects, says, rejected) VALUES (?, ?, ?, ?, ?)
 			 ON CONFLICT (day) DO UPDATE SET inbound = inbound + excluded.inbound, connects = connects + excluded.connects,
 			 says = says + excluded.says, rejected = rejected + excluded.rejected`,
@@ -300,7 +414,7 @@ export class CityRoomDO extends DurableObject<Env> {
 
 	private statsSnapshot() {
 		this.flushStats();
-		const days = this.ctx.storage.sql.exec("SELECT * FROM stats ORDER BY day DESC LIMIT 7").toArray();
+		const days = this.sql("SELECT * FROM stats ORDER BY day DESC LIMIT 7");
 		return {
 			members: this.core.size,
 			sockets: this.ctx.getWebSockets().length,

@@ -76,6 +76,8 @@ export interface JoinInfo {
 	ownerAgentLimit?: number;
 	/** Run by the host itself (the guide): exempt from capacity and AI rate limits. */
 	system?: boolean;
+	/** Admins, moderators and development: may watch the area's free-tier usage (docs/prd.md 2.5). */
+	canWatchUsage?: boolean;
 }
 
 /** Member state that survives hibernation (kept in the WebSocket attachment, < 2 KB). */
@@ -88,6 +90,8 @@ export interface Member extends JoinInfo {
 	/** Open conversations and AI-pair cooldowns of this member, so they survive hibernation. */
 	convs?: Conv[];
 	cooldowns?: Record<AvatarId, number>;
+	/** Watching the usage dashboard: the adapter pushes USAGE to them. */
+	watchUsage?: boolean;
 }
 
 /** Personal mutes and blocks that concern one avatar (docs/prd.md 4.2). */
@@ -423,6 +427,11 @@ export class RoomCore<C> {
 			case "INTEREST":
 				if (m.kind !== "ai") return;
 				m.interest = msg.radius;
+				this.transport.persist(conn, m);
+				return;
+			case "WATCH_USAGE":
+				if (!m.canWatchUsage) return;
+				m.watchUsage = msg.on;
 				this.transport.persist(conn, m);
 				return;
 			case "AUTH":

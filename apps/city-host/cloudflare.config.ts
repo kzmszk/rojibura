@@ -15,6 +15,8 @@ export default defineConfig(({ mode }) => {
 			entrypoint,
 			workersDev: true,
 			previewUrls: false,
+			// AsyncLocalStorage, for attributing free-tier usage to actions (usage.ts)
+			compatibilityFlags: ["nodejs_als"],
 			assets: {
 				notFoundHandling: "single-page-application",
 				runWorkerFirst: ["/api/*", "/ws/*", "/auth/*"],
@@ -38,6 +40,9 @@ export default defineConfig(({ mode }) => {
 				// Outside localhost the dev endpoints also require DEV_TOKEN (staging sets it).
 				DEV_AUTH: bindings.text(dev || staging ? "1" : "0"),
 				DEV_TOKEN: bindings.secret(),
+				// Optional, set with `cf workers secrets update` and not declared here so deploys work without
+				// them: CF_ANALYTICS_TOKEN (Account Analytics: Read) and CF_ACCOUNT_ID, for Cloudflare's own
+				// usage numbers on the dashboard (official.ts). Without them it shows the host's estimates.
 			},
 		},
 	};

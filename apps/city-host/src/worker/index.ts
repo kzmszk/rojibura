@@ -2,12 +2,16 @@
 // The client itself is served as static assets; only /api/*, /ws/* and /auth/* reach this code.
 
 import { env } from "cloudflare:workers";
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
 	authPayload,
 	exportPublicKey,
 	generateAgentKeyPair,
 	importPublicKey,
 	signAuth,
+	USAGE_KEYS,
+	type Usage,
+	type UsageEvent,
 	verifyAuth,
 } from "@rojibura/protocol";
 import {
@@ -33,6 +37,7 @@ import {
 	updateAccount,
 } from "./db.ts";
 import { isOpen, nextOpening, parseHours } from "./hours.ts";
+import { officialUsage } from "./official.ts";
 import { authUrl, exchangeCode, googleKeys, newPkce, verifyIdToken } from "./oidc.ts";
 import type { JoinRequest, RoomCommand } from "./room.ts";
 import {
@@ -48,11 +53,50 @@ import {
 	SESSION_COOKIE,
 	sessionCookie,
 } from "./session.ts";
+import { meteredD1 } from "./usage.ts";
 import { DEFAULT_PRESET, PRESETS } from "./world.ts";
 
 export { CityRoomDO } from "./room.ts";
 
 const DEV = env.DEV_AUTH === "1";
+
+// ---- free-tier usage of the gateway (docs/prd.md 2.5) ----
+/** The cost of the request being handled (AsyncLocalStorage keeps concurrent requests apart). */
+const requestUsage = new AsyncLocalStorage<Partial<Usage>>();
+const DB = meteredD1(env.DB, (c) => {
+	const u = requestUsage.getStore();
+	if (u) for (const k of USAGE_KEYS) if (c[k]) u[k] = (u[k] ?? 0) + (c[k] ?? 0);
+});
+/** Gateway actions not yet reported to the room's meter, and when this isolate last reported. */
+let unreported: UsageEvent[] = [];
+let reportedAt = 0;
+const REPORT_MS = 60_000;
+
+function gatewayLabel(method: string, path: string): string {
+	if (path.startsWith("/ws/")) return "入場（ゲートウェイ）";
+	if (path.startsWith("/auth/")) return "ログイン";
+	const names: Record<string, string> = {
+		"/api/me": method === "PATCH" ? "設定の変更" : "自分の情報",
+		"/api/entry": "入場の確認",
+		"/api/health": "状態の確認",
+		"/api/relations": "ミュート・ブロック",
+		"/api/reports": "通報",
+		"/api/usage/official": "公式の利用状況",
+	};
+	return `API：${names[path] ?? `${method} ${path}`}`;
+}
+
+/** Tells the client what its request cost (same origin, so it can read the header). */
+function withUsageHeader(response: Response, cost: Partial<Usage>, label: string): Response {
+	if (response.status === 101) return response;
+	const value = USAGE_KEYS.filter((k) => cost[k])
+		.map((k) => `${k}=${Math.round((cost[k] ?? 0) * 1000) / 1000}`)
+		.join(",");
+	const r = new Response(response.body, response);
+	r.headers.set("X-RJ-Usage", value);
+	r.headers.set("X-RJ-Usage-Label", encodeURIComponent(label));
+	return r;
+}
 /** Parsed at startup: a malformed OPEN_HOURS fails the deploy instead of going live. */
 const HOURS = parseHours(env.OPEN_HOURS);
 const AREA_RE = /^[a-z0-9-]{1,32}$/;
@@ -106,7 +150,7 @@ async function currentAccount(request: Request): Promise<Account | null> {
 	const token = getCookie(request, SESSION_COOKIE);
 	if (!token) return null;
 	const s = await readSessionToken(sessionSecret(), token);
-	return s ? getAccount(env.DB, s.aid) : null;
+	return s ? getAccount(DB, s.aid) : null;
 }
 
 async function loginResponse(account: Account, redirect: string): Promise<Response> {
@@ -168,8 +212,8 @@ async function googleCallback(request: Request, url: URL): Promise<Response> {
 	} catch (e) {
 		return error(502, (e as Error).message);
 	}
-	const existing = await findAccount(env.DB, "google", sub);
-	const account = existing ?? (await findOrCreateAccount(env.DB, "google", sub, `ゲスト${sub.slice(-4)}`));
+	const existing = await findAccount(DB, "google", sub);
+	const account = existing ?? (await findOrCreateAccount(DB, "google", sub, `ゲスト${sub.slice(-4)}`));
 	// new accounts choose their display name first (scope is openid only, so Google gives no name)
 	return loginResponse(
 		account,
@@ -192,7 +236,7 @@ async function humanEntryRefusal(account: Account | null): Promise<EntryRefusal 
 	const now = Date.now();
 	if (!isOpen(now, HOURS)) return { reason: "closed", nextOpening: nextOpening(now, HOURS) };
 	if (!account) return { reason: "login" };
-	if (await isBanned(env.DB, [account.id])) return { reason: "banned" };
+	if (await isBanned(DB, [account.id])) return { reason: "banned" };
 	return null;
 }
 
@@ -204,12 +248,12 @@ async function wsGateway(request: Request, areaId: string): Promise<Response> {
 	const agentId = url.searchParams.get("agent");
 	let join: JoinRequest;
 	if (agentId) {
-		const agent = await getAgent(env.DB, agentId);
+		const agent = await getAgent(DB, agentId);
 		if (!agent || agent.trust === "suspended" || agent.key_revoked_at !== null)
 			return error(403, "agent not allowed");
-		const owner = await getAccount(env.DB, agent.owner_id);
+		const owner = await getAccount(DB, agent.owner_id);
 		if (!owner) return error(403, "owner not found");
-		if (await isBanned(env.DB, [agent.id, owner.id])) return error(403, "banned");
+		if (await isBanned(DB, [agent.id, owner.id])) return error(403, "banned");
 		join = {
 			areaId,
 			publicKey: agent.public_key,
@@ -239,6 +283,7 @@ async function wsGateway(request: Request, areaId: string): Promise<Response> {
 				assets: preset.assets,
 				ownerId: account.id,
 				allowAiApproach: account.allow_ai_approach === 1,
+				canWatchUsage: DEV || isModerator(account),
 			},
 		};
 	}
@@ -272,6 +317,13 @@ async function api(request: Request, url: URL): Promise<Response> {
 			open: isOpen(Date.now(), HOURS),
 			nextOpening: nextOpening(Date.now(), HOURS),
 		});
+	if (path === "/api/usage/official") {
+		const account = await currentAccount(request);
+		if (!devAllowed(request, url) && !(account && isModerator(account))) return error(403, "moderators only");
+		// optional secrets, not declared in cloudflare.config.ts
+		const optional = env as unknown as { CF_ANALYTICS_TOKEN?: string; CF_ACCOUNT_ID?: string };
+		return json(await officialUsage(optional.CF_ANALYTICS_TOKEN, optional.CF_ACCOUNT_ID));
+	}
 	if (path === "/api/entry") {
 		const refusal = await humanEntryRefusal(await currentAccount(request));
 		return json(refusal ? { ok: false, ...refusal } : { ok: true });
@@ -287,21 +339,21 @@ async function api(request: Request, url: URL): Promise<Response> {
 		} | null;
 		const name = body?.name === undefined ? undefined : cleanName(body.name);
 		if (name === null) return error(400, "bad name");
-		await updateAccount(env.DB, account.id, { name, allowAiApproach: body?.allowAiApproach });
+		await updateAccount(DB, account.id, { name, allowAiApproach: body?.allowAiApproach });
 		return json({ ok: true });
 	}
 
 	if (path === "/api/me") {
 		const account = await currentAccount(request);
 		if (!account) return error(401, "login required");
-		const agents = await listAgents(env.DB, account.id);
+		const agents = await listAgents(DB, account.id);
 		return json({
 			id: account.id,
 			name: account.display_name,
 			role: account.role,
 			allowAiApproach: account.allow_ai_approach === 1,
 			agents: agents.map((a) => ({ id: a.id, name: a.name, runtime: a.runtime, trust: a.trust })),
-			relations: await relationsOf(env.DB, account.id).then((r) => ({ mutes: r.mutes, blocks: r.blocks })),
+			relations: await relationsOf(DB, account.id).then((r) => ({ mutes: r.mutes, blocks: r.blocks })),
 		});
 	}
 
@@ -318,7 +370,7 @@ async function api(request: Request, url: URL): Promise<Response> {
 			return error(400, "bad target");
 		if (b.kind !== "mute" && b.kind !== "block") return error(400, "bad kind");
 		const on = b.on !== false;
-		await setRelation(env.DB, account.id, b.targetId, b.kind, on);
+		await setRelation(DB, account.id, b.targetId, b.kind, on);
 		await broadcastCommand({ op: "relation", accountId: account.id, targetId: b.targetId, kind: b.kind, on });
 		return json({ ok: true });
 	}
@@ -341,7 +393,7 @@ async function api(request: Request, url: URL): Promise<Response> {
 					.catch(() => ({ lines: [] })),
 			),
 		);
-		const id = await createReport(env.DB, {
+		const id = await createReport(DB, {
 			reporterId: account.id,
 			targetId: b.targetId,
 			reason: b.reason as string,
@@ -354,12 +406,12 @@ async function api(request: Request, url: URL): Promise<Response> {
 	if (path === "/api/mod/reports") {
 		const account = await currentAccount(request);
 		if (!account || !isModerator(account)) return error(403, "moderators only");
-		const reports = await listReports(env.DB, url.searchParams.get("status") ?? "open");
+		const reports = await listReports(DB, url.searchParams.get("status") ?? "open");
 		const names = new Map<string, string>();
 		for (const id of new Set(reports.flatMap((r) => [r.reporter_id, r.target_id]))) {
 			const n = id.startsWith("a_")
-				? (await getAgent(env.DB, id))?.name
-				: (await getAccount(env.DB, id))?.display_name;
+				? (await getAgent(DB, id))?.name
+				: (await getAccount(DB, id))?.display_name;
 			names.set(id, n ?? id);
 		}
 		return json(
@@ -399,7 +451,7 @@ async function api(request: Request, url: URL): Promise<Response> {
 				// kicked avatars cannot come back until the end of the day (JST)
 				const jst = now + JST_OFFSET_MS;
 				const endOfDay = jst - (jst % 86_400_000) + 86_400_000 - JST_OFFSET_MS;
-				await addBan(env.DB, {
+				await addBan(DB, {
 					subjectId: subject,
 					kind: subject.startsWith("a_") ? "agent" : "account",
 					until: endOfDay,
@@ -411,7 +463,7 @@ async function api(request: Request, url: URL): Promise<Response> {
 			}
 			case "ban": {
 				const minutes = Number(b.minutes);
-				await addBan(env.DB, {
+				await addBan(DB, {
 					subjectId: subject,
 					kind: subject.startsWith("a_") ? "agent" : "account",
 					until: minutes > 0 ? now + minutes * 60_000 : null,
@@ -421,25 +473,25 @@ async function api(request: Request, url: URL): Promise<Response> {
 				await broadcastCommand({ op: "kick", id: subject });
 				// an owner's ban also removes their agents
 				if (subject.startsWith("h_"))
-					for (const a of await listAgents(env.DB, subject)) await broadcastCommand({ op: "kick", id: a.id });
+					for (const a of await listAgents(DB, subject)) await broadcastCommand({ op: "kick", id: a.id });
 				break;
 			}
 			case "suspend":
 				if (!subject.startsWith("a_")) return error(400, "only agents can be suspended");
-				await setAgentTrust(env.DB, subject, "suspended");
+				await setAgentTrust(DB, subject, "suspended");
 				await broadcastCommand({ op: "kick", id: subject });
 				break;
 			case "approve":
 				if (!subject.startsWith("a_") || account.role !== "admin") return error(403, "admins approve agents");
-				await setAgentTrust(env.DB, subject, "approved");
+				await setAgentTrust(DB, subject, "approved");
 				break;
 			case "resolve":
 				break;
 			default:
 				return error(400, "bad action");
 		}
-		if (b?.reportId) await resolveReport(env.DB, b.reportId);
-		await logModAction(env.DB, {
+		if (b?.reportId) await resolveReport(DB, b.reportId);
+		await logModAction(DB, {
 			actorId: account.id,
 			action: b?.action ?? "",
 			subjectId: subject,
@@ -453,7 +505,7 @@ async function api(request: Request, url: URL): Promise<Response> {
 		if (!account) return error(401, "login required");
 		const role = ((await request.json().catch(() => null)) as { role?: string } | null)?.role;
 		if (role !== "admin" && role !== "moderator" && role !== "user") return error(400, "bad role");
-		await setRole(env.DB, account.id, role);
+		await setRole(DB, account.id, role);
 		return json({ ok: true });
 	}
 
@@ -475,7 +527,7 @@ async function api(request: Request, url: URL): Promise<Response> {
 		} catch {
 			return error(400, "bad public key");
 		}
-		const r = await registerAgent(env.DB, account.id, { name, publicKey, runtime });
+		const r = await registerAgent(DB, account.id, { name, publicKey, runtime });
 		if (typeof r === "string") return error(409, r);
 		return json({ id: r.id, name: r.name, trust: r.trust }, 201);
 	}
@@ -486,7 +538,7 @@ async function api(request: Request, url: URL): Promise<Response> {
 
 	const approve = path.match(/^\/api\/dev\/agents\/(a_[A-Za-z0-9_-]+)\/approve$/);
 	if (approve?.[1] && request.method === "POST" && devAllowed(request, url)) {
-		await setAgentTrust(env.DB, approve[1], "approved");
+		await setAgentTrust(DB, approve[1], "approved");
 		return json({ ok: true });
 	}
 
@@ -507,20 +559,39 @@ async function auth(request: Request, url: URL): Promise<Response> {
 		if (!devAllowed(request, url)) return error(404, "not found");
 		const name = cleanName(url.searchParams.get("name") ?? "");
 		if (!name) return error(400, "name is required (1-24 characters)");
-		const account = await findOrCreateAccount(env.DB, "dev", name, name);
+		const account = await findOrCreateAccount(DB, "dev", name, name);
 		return loginResponse(account, safeRedirect(url.searchParams.get("redirect")));
 	}
 	return error(404, "not found");
 }
 
+async function route(request: Request, url: URL): Promise<Response> {
+	if (DEV) await ensureSchema(DB);
+	if (url.pathname.startsWith("/api/")) return api(request, url);
+	if (url.pathname.startsWith("/auth/")) return auth(request, url);
+	const ws = url.pathname.match(/^\/ws\/area\/([^/]+)$/);
+	if (ws?.[1] && AREA_RE.test(ws[1])) return wsGateway(request, ws[1]);
+	return error(404, "not found");
+}
+
 export default {
-	async fetch(request) {
+	async fetch(request, _env, ctx) {
 		const url = new URL(request.url);
-		if (DEV) await ensureSchema(env.DB);
-		if (url.pathname.startsWith("/api/")) return api(request, url);
-		if (url.pathname.startsWith("/auth/")) return auth(request, url);
-		const ws = url.pathname.match(/^\/ws\/area\/([^/]+)$/);
-		if (ws?.[1] && AREA_RE.test(ws[1])) return wsGateway(request, ws[1]);
-		return error(404, "not found");
+		const cost: Partial<Usage> = { workerRequests: 1 };
+		const response = await requestUsage.run(cost, () => route(request, url));
+		const label = gatewayLabel(request.method, url.pathname);
+		unreported.push({ at: Date.now(), label, cost });
+		// report to the room's meter at most once a minute per isolate (each report is one DO request)
+		if (Date.now() - reportedAt > REPORT_MS) {
+			const events = unreported;
+			unreported = [];
+			reportedAt = Date.now();
+			ctx.waitUntil(
+				env.ROOM.getByName(AREAS[0] ?? "main")
+					.fetch(new Request("https://room/usage", { method: "POST", body: JSON.stringify(events) }))
+					.catch(() => {}),
+			);
+		}
+		return withUsageHeader(response, cost, label);
 	},
 } satisfies ExportedHandler<Env>;
