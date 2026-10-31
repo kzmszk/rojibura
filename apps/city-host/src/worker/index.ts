@@ -180,6 +180,20 @@ function openOrError(): Response | null {
 	return json({ error: "closed", nextOpening: nextOpening(Date.now()) }, 403);
 }
 
+export type EntryRefusal = { reason: "closed"; nextOpening: number } | { reason: "login" | "banned" };
+
+/**
+ * Why a person cannot enter right now (null: they can). Shared by the gateway and /api/entry: a browser
+ * cannot read why a WebSocket handshake failed, so the client asks here before connecting.
+ */
+async function humanEntryRefusal(account: Account | null): Promise<EntryRefusal | null> {
+	const now = Date.now();
+	if (env.DEV_ALWAYS_OPEN !== "1" && !isOpen(now)) return { reason: "closed", nextOpening: nextOpening(now) };
+	if (!account) return { reason: "login" };
+	if (await isBanned(env.DB, [account.id])) return { reason: "banned" };
+	return null;
+}
+
 async function wsGateway(request: Request, areaId: string): Promise<Response> {
 	if (request.headers.get("Upgrade") !== "websocket") return error(426, "Expected WebSocket");
 	const closed = openOrError();
@@ -210,8 +224,9 @@ async function wsGateway(request: Request, areaId: string): Promise<Response> {
 		};
 	} else {
 		const account = await currentAccount(request);
-		if (!account) return error(401, "login required");
-		if (await isBanned(env.DB, [account.id])) return error(403, "banned");
+		const refusal = await humanEntryRefusal(account);
+		if (refusal || !account)
+			return json({ error: refusal?.reason ?? "login", ...refusal }, refusal?.reason === "login" ? 401 : 403);
 		const preset = PRESETS[url.searchParams.get("avatar") ?? ""] ?? DEFAULT_PRESET;
 		join = {
 			areaId,
@@ -247,7 +262,17 @@ async function devSelftest(): Promise<Response> {
 async function api(request: Request, url: URL): Promise<Response> {
 	const path = url.pathname;
 	if (path === "/api/health")
-		return json({ ok: true, dev: DEV, google: googleConfigured(), open: isOpen(Date.now()) });
+		return json({
+			ok: true,
+			dev: DEV,
+			google: googleConfigured(),
+			open: isOpen(Date.now()),
+			nextOpening: nextOpening(Date.now()),
+		});
+	if (path === "/api/entry") {
+		const refusal = await humanEntryRefusal(await currentAccount(request));
+		return json(refusal ? { ok: false, ...refusal } : { ok: true });
+	}
 	if (path === "/api/presets") return json(Object.values(PRESETS));
 
 	if (path === "/api/me" && request.method === "PATCH") {

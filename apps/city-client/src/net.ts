@@ -20,6 +20,16 @@ export interface CityConnectionOptions {
 }
 
 const NO_RETRY = new Set([1008, 4000, 4001, 4003, 4010]);
+/** Host closed the area for the night. */
+const CLOSE_CLOSING = 4010;
+
+/** GET /api/entry: whether this person may enter now. */
+type Entry =
+	| { ok: true }
+	| { ok: false; reason: "closed"; nextOpening: number }
+	| { ok: false; reason: "login" | "banned" };
+
+const hhmm = (t: number) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
 export class CityConnection {
 	private ws: WebSocket | null = null;
@@ -40,7 +50,7 @@ export class CityConnection {
 
 	start(): void {
 		this.stopped = false;
-		this.open();
+		void this.enter();
 	}
 
 	stop(): void {
@@ -50,6 +60,32 @@ export class CityConnection {
 
 	send(msg: ClientToHost): void {
 		if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(encode(msg));
+	}
+
+	/**
+	 * Asks the host whether we may enter, then connects, waits for the opening time, or gives up.
+	 * A failed WebSocket handshake carries no reason, so this is asked before every (re)connect.
+	 */
+	private async enter(): Promise<void> {
+		let entry: Entry = { ok: true };
+		try {
+			entry = (await (await fetch("/api/entry")).json()) as Entry;
+		} catch {
+			// host unreachable: let the socket attempt fail and retry with backoff
+		}
+		if (this.stopped) return;
+		if (entry.ok) {
+			this.open();
+			return;
+		}
+		if (entry.reason === "closed") {
+			this.o.onState("closed", `閉館中です（${hhmm(entry.nextOpening)} に開館。時間になると自動で入ります）`);
+			// spread the crowd at the opening over a few seconds
+			const wait = Math.max(1000, entry.nextOpening - Date.now() + Math.random() * 10_000);
+			setTimeout(() => !this.stopped && void this.enter(), wait);
+			return;
+		}
+		this.o.onState("closed", entry.reason === "banned" ? "現在は入場できません" : "ログインが必要です");
 	}
 
 	private open(): void {
@@ -85,10 +121,12 @@ export class CityConnection {
 			if (this.stopped) return;
 			if (NO_RETRY.has(e.code)) {
 				this.o.onState("closed", e.reason || `closed (${e.code})`);
+				// after closing time, wait for the next opening
+				if (e.code === CLOSE_CLOSING) setTimeout(() => !this.stopped && void this.enter(), 5000);
 				return;
 			}
 			this.o.onState("connecting", "再接続しています…");
-			setTimeout(() => !this.stopped && this.open(), this.retryMs);
+			setTimeout(() => !this.stopped && void this.enter(), this.retryMs);
 			this.retryMs = Math.min(this.retryMs * 2, 30_000);
 		};
 	}

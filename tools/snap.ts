@@ -1,5 +1,5 @@
 // Headless Chrome screenshots of the running client (for checking rendering without a visible browser).
-//   node tools/snap.ts <out.png> <url> [--eval "js"] [--wait ms] [--size 1280x800] [--cookie name=value]
+//   node tools/snap.ts <out.png> <url> [--eval "js"] [--wait ms] [--size 1280x800] [--cookie name=value] [--mock path=json]
 // Each --eval runs in the page in order (awaited); its JSON result is printed. The shot is taken at the end.
 // Logs in with the dev login when the URL starts with /auth/dev/login.
 
@@ -17,6 +17,8 @@ const { values, positionals } = parseArgs({
 		size: { type: "string", default: "1280x800" },
 		// set before loading the page, e.g. the staging dev token (rj_dev=...)
 		cookie: { type: "string", multiple: true, default: [] },
+		// answer requests whose URL contains PATH with this JSON, e.g. '/api/entry={"ok":false,...}'
+		mock: { type: "string", multiple: true, default: [] },
 	},
 });
 const [out, url] = positionals;
@@ -57,6 +59,10 @@ await new Promise((r, j) => {
 	ws.onerror = j;
 });
 let seq = 0;
+const mocks = (values.mock ?? []).map((m) => {
+	const i = m.indexOf("=");
+	return [m.slice(0, i), m.slice(i + 1)] as const;
+});
 const pending = new Map<number, { res: (v: unknown) => void; rej: (e: Error) => void }>();
 const logs: string[] = [];
 ws.onmessage = (e) => {
@@ -66,6 +72,17 @@ ws.onmessage = (e) => {
 		pending.delete(m.id);
 		if (m.error) p?.rej(new Error(m.error.message));
 		else p?.res(m.result);
+	} else if (m.method === "Fetch.requestPaused") {
+		const hit = mocks.find(([path]) => m.params.request.url.includes(path));
+		const body = Buffer.from(hit?.[1] ?? "").toString("base64");
+		if (hit)
+			void send("Fetch.fulfillRequest", {
+				requestId: m.params.requestId,
+				responseCode: 200,
+				responseHeaders: [{ name: "Content-Type", value: "application/json" }],
+				body,
+			});
+		else void send("Fetch.continueRequest", { requestId: m.params.requestId });
 	} else if (m.method === "Runtime.consoleAPICalled") {
 		logs.push(
 			`${m.params.type}: ${m.params.args.map((a: { value?: unknown; description?: string }) => a.value ?? a.description).join(" ")}`,
@@ -86,6 +103,8 @@ let code = 0;
 try {
 	await send("Page.enable");
 	await send("Runtime.enable");
+	if (mocks.length > 0)
+		await send("Fetch.enable", { patterns: mocks.map(([path]) => ({ urlPattern: `*${path}*` })) });
 	for (const c of values.cookie ?? []) {
 		const [name = "", ...rest] = c.split("=");
 		await send("Network.setCookie", { name, value: rest.join("="), url, secure: url.startsWith("https:") });
