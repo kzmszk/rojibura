@@ -35,7 +35,7 @@ import {
 } from "./room-core.ts";
 import { FREE_PLAY_RULES, PRODUCTION_RULES } from "./rules.ts";
 import { meteredD1, type SavedUsage, UsageMeter } from "./usage.ts";
-import { BUILTIN_MODELS, buildWorld, world } from "./world.ts";
+import { BUILTIN_MODELS, freePlayWorld, PUBLISHED, world } from "./world.ts";
 
 /** The guide's connection: the room routes its messages to the Guide instead of a socket. */
 const GUIDE_CONN = { guide: true } as const;
@@ -86,7 +86,9 @@ export type RoomCommand =
 	| { op: "mute"; id: string; until: number }
 	| { op: "excerpt"; id: string; minutes: number }
 	/** Free play, development: take down everything built. */
-	| { op: "clear_builds"; by: string };
+	| { op: "clear_builds"; by: string }
+	/** Free play, development: everything built (`pnpm builds:publish` reads it). */
+	| { op: "list_builds" };
 
 export class CityRoomDO extends DurableObject<Env> {
 	private readonly core: RoomCore<Conn>;
@@ -133,7 +135,7 @@ export class CityRoomDO extends DurableObject<Env> {
 				close: (c, code, reason) => !isGuide(c) && safeClose(c, code, reason),
 				persist: (c, member) => (isGuide(c) ? this.guide.persist(member) : persistMember(c, member)),
 			},
-			freePlay ? { ...world, build: buildWorld((id) => this.models.get(id)?.nav) } : world,
+			freePlay ? freePlayWorld((id) => this.models.get(id)?.nav) : world,
 			Date.now,
 			() => randomToken(9),
 			freePlay
@@ -396,6 +398,8 @@ export class CityRoomDO extends DurableObject<Env> {
 				return { lines: this.excerpt(c.id, c.minutes * 60_000) };
 			case "clear_builds":
 				return { removed: this.freePlay ? this.core.clearBuilds(c.by) : 0 };
+			case "list_builds":
+				return { builds: this.freePlay ? this.core.buildList : [] };
 		}
 	}
 
@@ -403,7 +407,15 @@ export class CityRoomDO extends DurableObject<Env> {
 
 	/** Creates the building tables and loads registered models and builds. */
 	private loadBuilding(): void {
+		const fresh =
+			this.sql<{ n: number }>(
+				"SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'builds'",
+			)[0]?.n === 0;
 		this.sql("CREATE TABLE IF NOT EXISTS builds (id TEXT PRIMARY KEY, data TEXT NOT NULL)");
+		// a new local city starts from what was published (docs/prd.md 3.7.8)
+		if (fresh)
+			for (const b of PUBLISHED.builds)
+				this.sql("INSERT INTO builds (id, data) VALUES (?, ?)", b.id, JSON.stringify(b));
 		this.sql(
 			"CREATE TABLE IF NOT EXISTS models (id TEXT PRIMARY KEY, info TEXT NOT NULL, nav TEXT NOT NULL, created INTEGER NOT NULL)",
 		);
@@ -427,10 +439,20 @@ export class CityRoomDO extends DurableObject<Env> {
 		if (!this.freePlay) return Response.json({ error: "building is only in free play" }, { status: 403 });
 		if (url.pathname === "/models") {
 			if (request.method === "POST") return this.registerModel(request);
-			return Response.json([...BUILTIN_MODELS, ...[...this.models.values()].map((m) => m.info)]);
+			const published = Object.entries(PUBLISHED.models)
+				.filter(([id]) => !this.models.has(id))
+				.map(([, m]) => m.info);
+			return Response.json([
+				...BUILTIN_MODELS,
+				...[...this.models.values()].map((m) => m.info),
+				...published,
+			]);
 		}
 		const file = url.pathname.match(MODEL_FILE);
 		const model = file?.[1] ? this.models.get(file[1]) : undefined;
+		// published but not registered here: its files are static assets
+		if (file?.[1] && !model && PUBLISHED.models[file[1]])
+			return new Response(null, { status: 302, headers: { Location: `/models/${file[1]}.${file[2]}` } });
 		if (!file || !model) return Response.json({ error: "no such model" }, { status: 404 });
 		const immutable = { "Cache-Control": "public, max-age=31536000, immutable" };
 		if (file[2] === "nav.json") return Response.json(model.nav, { headers: immutable });

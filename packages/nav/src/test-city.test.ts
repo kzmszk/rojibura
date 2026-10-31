@@ -2,7 +2,7 @@
 // Coordinates are glTF world space: Blender (x, y) becomes (x, -y) on XZ (see tools/city-build/blender/test_city.py).
 import { describe, expect, test } from "vitest";
 import landmarksJson from "../../../assets/test-city/landmarks.json" with { type: "json" };
-import navmeshJson from "../../../assets/test-city/navmesh.json" with { type: "json" };
+import navmeshJson from "../../../assets/test-city/navmesh.base.json" with { type: "json" };
 import { type LandmarksData, NavMesh, pathLength, pointAlongPath, type Vec2, validatePath } from "./index.ts";
 
 const mesh = NavMesh.fromJSON(navmeshJson);

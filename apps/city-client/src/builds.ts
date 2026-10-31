@@ -23,16 +23,22 @@ interface View {
 
 const loader = new GLTFLoader();
 const models = new Map<ModelId, Promise<Model | null>>();
+/** In free play, registered models come from the host; otherwise every model is a static asset. */
+let fromHost = false;
+
+export function modelsFromHost(on: boolean): void {
+	fromHost = on;
+}
 
 /** A model's glb and nav.json (cached). Null if it cannot be loaded. */
 function loadModel(id: ModelId): Promise<Model | null> {
 	let p = models.get(id);
 	if (!p) {
 		p = Promise.all([
-			fetch(modelUrl(id, "nav.json")).then((r) =>
+			fetch(modelUrl(id, "nav.json", fromHost)).then((r) =>
 				r.ok ? (r.json() as Promise<ModelNav>) : Promise.reject(),
 			),
-			loader.loadAsync(modelUrl(id, "glb")),
+			loader.loadAsync(modelUrl(id, "glb", fromHost)),
 		])
 			.then(([nav, gltf]) => ({ nav, scene: gltf.scene }))
 			.catch(() => null);

@@ -83,6 +83,17 @@ export interface Build {
 	at: number;
 }
 
+/**
+ * assets/test-city/builds.json: what was built in free play and published (docs/prd.md 3.7.8). Everyone
+ * sees these; nobody can change them in production. `models` has the registered models they use (their
+ * files are copied to assets/models); `Nav` is @rojibura/nav's ModelNav.
+ */
+export interface PublishedBuilds<Nav = unknown> {
+	version: 1;
+	builds: Build[];
+	models: Record<ModelId, { info: ModelInfo; nav: Nav }>;
+}
+
 /** GET /api/models: what can be built. */
 export interface ModelInfo {
 	id: ModelId;

@@ -20,11 +20,12 @@ export function isBuildId(v: unknown): v is BuildId {
 }
 
 /**
- * Where a model's files are: built-in ones are static assets, registered ones come from the host.
+ * Where a model's files are. Built-in and published models are static assets (/models); in free play,
+ * registered models come from the host (/api/models, which sends published ones on to /models).
  * `block` has no files (it is a box drawn in code).
  */
-export function modelUrl(id: ModelId, file: "glb" | "nav.json" | "png"): string {
-	return isBuiltinModel(id) ? `/models/${id}.${file}` : `/api/models/${id}.${file}`;
+export function modelUrl(id: ModelId, file: "glb" | "nav.json" | "png", freePlay = false): string {
+	return freePlay && !isBuiltinModel(id) ? `/api/models/${id}.${file}` : `/models/${id}.${file}`;
 }
 
 /** "#rgb", "#rrggbb" or a BUILD_COLORS name, as "#rrggbb"; null if it is none of them. */

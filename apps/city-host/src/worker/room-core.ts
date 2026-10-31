@@ -75,6 +75,8 @@ export interface World {
 	areaName: string;
 	/** Where building is possible (free play). */
 	build?: BuildWorld;
+	/** Published builds that are part of the city (already in `walk`); only for spatial context. */
+	fixedBuilds?: Build[];
 }
 
 /** Identity of a connection, decided by the gateway (humans) or after AUTH (agents). */
@@ -975,8 +977,10 @@ export class RoomCore<C> {
 			nearbyAvatars,
 			nearbyLandmarks,
 		};
-		if (this.canBuild)
-			context.nearbyBuilds = [...this.builds.values()]
+		// free play: the area's own builds; elsewhere: what was published, part of the city
+		const builds = this.canBuild ? [...this.builds.values()] : (this.world.fixedBuilds ?? []);
+		if (builds.length > 0)
+			context.nearbyBuilds = builds
 				.map((b) => {
 					const item = { id: b.id, model: b.model, byName: b.byName, distance: round1(dist(pos, b.pos)) };
 					return b.label ? { ...item, label: b.label } : item;

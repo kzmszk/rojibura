@@ -915,14 +915,14 @@ SpatialContext.nearbyBuilds?: { id: BuildId; model: ModelId; label?: string; byN
   * `check <model.glb>`：検査し、モデルの下に地面の板を敷いて Recast で歩ける面と足元を計算し、`<model>.nav.json` に書く。
   * `upload <model.glb> --name 茶屋`：ダミーログインして `/api/models` に glb、nav、プレビューを送る。ID は `m_` + glb の SHA-256 の先頭16桁（同じファイルは同じモデル）。
 * **既定の部品**：`tools/city-build/blender/models/*.py` から `pnpm build:models` で `assets/models/` に作る（glb、nav.json、サムネイルの png、一覧の `index.json`）。家、塔、木（幹だけが障害物）、ベンチ、街灯、展望台（階段で上がれる）、橋（坂で上がって渡る）。`block` は Blender を使わずコードで描く箱で、大きさを自由に決められる。
-* **登録と配信**（自由モードだけ。本番は 403）
+* **登録と配信**（自由モードだけ。本番は 403。公開したモデルは静的ファイルで配る。3.7.8）
   * `GET /api/models`：既定と登録済みの一覧（`ModelInfo`）。`POST /api/models`：登録（multipart、ログインが要る）。`GET /api/models/<id>.glb|png|nav.json`：配信（`immutable`）。
   * 登録したモデルは、メインのエリアの DO SQLite に置く（glb は 1MB ずつ。DO の値の上限が2MBのため）。「ホストは3D資産を持たない」（2.3）の例外で、ローカルだけのもの。
   * ホストは Recast を動かさない。glb が自己完結していること（外部参照なし）と、nav.json が正しい形でモデルの範囲に収まり、歩ける面が重なっていないことを確かめる。中身が glb と合っているかまでは確かめない（自分の PC だけなので）。
 
 #### 3.7.5 歩ける場所の作り直し
 
-ホスト、ブラウザ、（後で）SDK が同じ関数 `applyBuilds(街のナビメッシュ, 建物)`（`packages/nav`）を、同じ順（古い順）で呼ぶ。ナビメッシュを送り合わずに、歩ける場所が一致する。
+ホスト、ブラウザ、（後で）SDK が同じ関数 `applyBuilds(街のナビメッシュ, 建物)`（`packages/nav`）を、同じ順（古い順）で呼ぶ。ナビメッシュを送り合わずに、歩ける場所が一致する。公開した建物は、公開のときに同じ関数で `navmesh.json` に焼き込む（3.7.8）。
 
 ```mermaid
 flowchart LR
@@ -946,12 +946,43 @@ flowchart LR
 * 「作る」ツール：AI が `rj.py` を使う Blender スクリプトを書き、`model-cli make --preview --upload` を呼ぶ。返ってくる JSON のモデル ID で建てる。プレビュー画像を見て直すこともできる。
 * プロンプトインジェクションの影響を狭める方針（3.5.2）は変わらない。建てる場所は検証され、自由モードはローカルだけ。
 
-#### 3.7.7 本番で使うなら（未決）
+#### 3.7.7 本番でも建てられるようにするなら（未決）
+
+いまは、本番で建物が増えるのは「公開」（3.7.8）だけ。本番の街で参加者が建てられるようにするなら、次が要る。
 
 * 荒らし対策：建てられる人（承認済みの AI とログインした人）、数（1人いくつ、エリアでいくつ）、大きさ、間隔の上限。消せるのは自分と自分の AI が建てたものと、モデレーター。看板の文字の通報。
 * モデル：ホスト側での検証（Recast を動かせないので、glb から足元を求め直すなど）、置き場所（R2）、容量。
 * コスト：建物が変わるたびと DO の起動のたびに、ナビメッシュの作り直しで CPU を使う。保存は1件1行。
 * 下をくぐれる形（橋の下を通る）は、2D のナビメッシュでは表せない。層を持つナビが要る。
+
+#### 3.7.8 公開する（デプロイすれば、ほかの人にも見える）
+
+ローカルの自由モードの街を「下書き」にして、その時点の建物を全部まとめて公開する。公開した建物は街の一部になり、本番ではだれも建てたり消したりできない（街の glb の建物と同じ扱い）。本番から消すときは、ローカルで消して公開し直す。
+
+* **ファイル**（静的アセットとしてリポジトリに入れ、`cf deploy` で配る。DO や D1 には何も書かない）
+
+  | ファイル | 中身 |
+  | --- | --- |
+  | `assets/test-city/navmesh.base.json` | 街の glb だけから作ったナビメッシュ（`pnpm build:city` が書く） |
+  | `assets/test-city/navmesh.json` | base に公開した建物を焼き込んだもの。本番、`pnpm dev`、AI のランタイムが読む。公開した建物がなければ base と同じ |
+  | `assets/test-city/builds.json` | 公開した建物（`Build[]`）と、そこで使う登録モデルの情報と nav（`PublishedBuilds`） |
+  | `assets/models/m_<id>.glb / .nav.json / .png` | 公開した建物が使う登録モデルのファイル |
+
+* **手順**：`pnpm dev:free` で街を動かしたまま `pnpm builds:publish`（`tools/city-build/src/publish.ts`）。
+  1. 開発用 API `GET /api/dev/rooms/main/builds`（自由モードだけ）で、ローカルの建物を全部取る。
+  2. 使っている登録モデルのファイルを `assets/models/` に保存する。もう使わない登録モデルのファイルは消す。
+  3. `builds.json` を書き、`navmesh.json` = `applyBuilds(navmesh.base.json, 建物)` を書く。スポーンから全ランドマークへ歩けなければ、何も書かずに止まる。
+  4. ファイルをコミットして `cf deploy` する（デプロイは自動ではしない）。
+* **歩ける場所を焼き込む理由**：`navmesh.json` を読むものすべて（本番のホストの検証、ブラウザのクリック移動、avatar-sdk の経路探索、T4 の AgentDO）が、コードを変えずに公開した建物を避ける。本番のホストは建物の計算をしないので、CPU も増えない。`pnpm build:city` で街を作り直しても、base を書いたあと同じ関数で焼き込み直す。
+* **本番と `pnpm dev`**：
+  * ブラウザは `/test-city/builds.json` を読んで建物を描く。上を歩けるモデルには足が乗る。
+  * ホストは公開した建物を `World.fixedBuilds` に持ち、AI の `SpatialContext.nearbyBuilds` に入れる（AI が近くの建物を話題にできる）。BUILD と UNBUILD はいままでどおり拒否する。
+  * モデルのファイルは静的な `/models/<id>.*` から取る（本番の `/api/models` は 403 のまま）。
+* **自由モード**：
+  * 土台は `navmesh.base.json`。公開した建物は、エリアの自分の建物として扱う（下書きなので、動かしたり消したりできる）。
+  * ローカルの `builds` テーブルを初めて作るとき（まっさらな状態）に、`builds.json` の建物を入れる。別の PC で始めても、公開した状態から続けられる。
+  * 公開済みの登録モデルは、ローカルに登録していなくても使える。nav は `builds.json` から読み、`/api/models/<id>.glb` などは静的ファイルの `/models/<id>.glb` に転送する。
+* **テスト**：`build.test.ts`（`navmesh.json` が base + `builds.json` と一致し、スポーンから全ランドマークへ行ける）、`room-build.test.ts`（本番のルールでも公開した建物が AI の文脈に入り、消せない）。
 
 ---
 

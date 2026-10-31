@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import landmarksJson from "../../../assets/test-city/landmarks.json";
-import navmeshJson from "../../../assets/test-city/navmesh.json";
+import navmeshJson from "../../../assets/test-city/navmesh.base.json";
 import {
 	applyBuilds,
 	boxNav,

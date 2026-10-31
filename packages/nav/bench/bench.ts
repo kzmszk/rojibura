@@ -2,14 +2,14 @@
 //
 //   node packages/nav/bench/bench.ts [navmesh.json] [queries]
 //
-// Defaults to assets/test-city/navmesh.json and 1,000 findPath queries between random walkable points.
+// Defaults to assets/test-city/navmesh.base.json and 1,000 findPath queries between random walkable points.
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 import { NavMesh, type NavMeshData, pathLength, type Vec2, validatePath } from "../src/index.ts";
 
 const file =
-	process.argv[2] ?? fileURLToPath(new URL("../../../assets/test-city/navmesh.json", import.meta.url));
+	process.argv[2] ?? fileURLToPath(new URL("../../../assets/test-city/navmesh.base.json", import.meta.url));
 const queries = Number(process.argv[3] ?? 1000);
 const text = readFileSync(file, "utf8");
 

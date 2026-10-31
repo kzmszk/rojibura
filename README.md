@@ -156,7 +156,7 @@ pnpm dev:free     # = RJ_FREE_PLAY=1 cf dev（http://localhost:5173）
 - 画面の右上に「🧪 自由モード」と「🧱 建てる」が出る。「建てる」で、モデル、色、大きさ、名前（看板）を選び、地面をクリックして置く。半透明のプレビューが出て、Q と E で15°ずつ回せる。「消す」にして建物をクリックすると消える（だれのものでも消せる）。Esc で閉じる。
 - 置けないときは理由がトーストに出る（ほかの建物と重なる、スポーン地点やランドマークの上、人がいる、道をふさぐ、など）。
 - 展望台や橋は上を歩ける。建物を横切ろうとすると、回り込む。
-- 建てたものは DO のストレージ（`.wrangler` の下）に残る。全部消すには：
+- 建てたものと登録したモデルは、ローカルの DO のストレージ（`apps/city-host/.cloudflare/state/`、git には入らない）に残り、次に `pnpm dev:free` で起動したときもそのまま出てくる。`pnpm dev`（自由モードなし）では読み込まないので見えないが、消えてはいない。全部消すには：
 
 ```bash
 curl -X DELETE http://localhost:5173/api/dev/rooms/main/builds
@@ -175,6 +175,19 @@ node tools/city-build/src/model-cli.ts make tools/city-build/blender/examples/te
 - Blender の画面で作ったモデルは、glb で書き出して `check` と `upload` だけ使う（`node tools/city-build/src/model-cli.ts upload my.glb --name 名前`）。
 - 階段（段差0.2m以下）や坂（45°以下）でつながる面は、上を歩ける。歩ける面の下はくぐれない。
 - 既定の部品（家、塔、木、ベンチ、街灯、展望台、橋）は `tools/city-build/blender/models/*.py`。直したら `pnpm build:models` で `assets/models/` を作り直す。
+
+### 公開する（デプロイすれば、ほかの人にも見える）
+
+自由モードの街を下書きにして、その時点の建物を全部まとめて公開する（docs/prd.md 3.7.8）。公開した建物は本番では固定で、だれも建てたり消したりできない。
+
+```bash
+pnpm builds:publish     # pnpm dev:free で街を動かしたまま
+```
+
+- `assets/test-city/builds.json`（建物の一覧）、`assets/test-city/navmesh.json`（建物を避ける道）、`assets/models/m_*`（使っている登録モデル）が書き換わる。これをコミットして `cd apps/city-host && npx cf deploy`。
+- `pnpm dev`（自由モードなし）で起動すると、デプロイ前に本番と同じ見え方で確かめられる。
+- 本番から消したいときは、ローカルで消して、もう一度 `pnpm builds:publish`。
+- ローカルの状態がまっさらなときに `pnpm dev:free` で起動すると、公開した建物から始まる。
 
 ### 確かめる
 

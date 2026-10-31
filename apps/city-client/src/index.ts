@@ -7,6 +7,7 @@ import {
 	MAX_PATH_POINTS,
 	MAX_SAY_LENGTH,
 	type Motion,
+	type PublishedBuilds,
 	poseAt,
 	RUN_SPEED,
 	type Vec2,
@@ -17,7 +18,7 @@ import { showAgentPage } from "./agent-page.ts";
 import { api, onApiUsage } from "./api.ts";
 import { AvatarView } from "./avatars.ts";
 import { BuildPanel } from "./build-ui.ts";
-import { BuildsView, makeObject } from "./builds.ts";
+import { BuildsView, makeObject, modelsFromHost } from "./builds.ts";
 import { actionBar, Relations, showAdmin } from "./moderation.ts";
 import { CityConnection, type ConnState } from "./net.ts";
 import { rememberFirstVisit, reportFirstVisit } from "./onboarding.ts";
@@ -44,8 +45,14 @@ function el<K extends keyof HTMLElementTagNameMap>(
 	return e;
 }
 
-async function loadNavMesh(): Promise<NavMeshData> {
-	return (await (await fetch(`${CITY}/navmesh.json`)).json()) as NavMeshData;
+/**
+ * The city's navmesh: with the published builds baked in, or in free play the city alone (the area's own
+ * builds, which include the published ones, are applied on top).
+ */
+async function loadNavMesh(freePlay: boolean): Promise<NavMeshData> {
+	return (await (
+		await fetch(`${CITY}/${freePlay ? "navmesh.base.json" : "navmesh.json"}`)
+	).json()) as NavMeshData;
 }
 
 function navigatorFor(mesh: NavMesh): Navigator {
@@ -178,14 +185,17 @@ function showLogin(root: HTMLElement, health: { dev: boolean; google: boolean })
 
 async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay: boolean): Promise<void> {
 	const scene = new CityScene(root);
-	const base = await loadNavMesh();
+	const base = await loadNavMesh(freePlay);
 	let mesh = NavMesh.fromJSON(base);
 	let nav = navigatorFor(mesh);
 	scene.heightHint = (x, z) => mesh.heightAt([x, z]);
 	await scene.loadCity(`${CITY}/test_city.glb`);
 	// free play (docs/prd.md 3.7): what has been built, and the walkable area with it
 	let navVersion = 0;
+	modelsFromHost(freePlay);
 	const builds = new BuildsView(scene, () => {
+		// outside free play the builds are published ones, already in navmesh.json
+		if (!freePlay) return;
 		const v = ++navVersion;
 		void builds.placed().then((placed) => {
 			if (v !== navVersion) return;
@@ -193,6 +203,12 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 			nav = navigatorFor(mesh);
 		});
 	});
+	// published builds are part of the city everyone sees (docs/prd.md 3.7.8)
+	if (!freePlay)
+		void fetch(`${CITY}/builds.json`)
+			.then((r) => (r.ok ? (r.json() as Promise<PublishedBuilds>) : null))
+			.then((p) => p && builds.set(p.builds))
+			.catch(() => {});
 
 	// ---- HUD ----
 	const hud = el("div", "rj-hud");
@@ -327,7 +343,7 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 					for (const v of avatars.values()) v.dispose();
 					avatars.clear();
 					for (const a of m.avatars) add(a);
-					builds.set(m.builds ?? []);
+					if (m.builds) builds.set(m.builds);
 					break;
 				case "BUILT":
 					builds.add(m.build);

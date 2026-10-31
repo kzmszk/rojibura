@@ -72,7 +72,21 @@ const MODELS: Record<string, ModelNav> = { house: boxNav(4, 3, 4), deck: platfor
 
 type Conn = { name: string; inbox: HostToClient[]; closed?: number };
 
-function setup(rules: RoomRules) {
+/** A published house (assets/test-city/builds.json): part of the city outside free play. */
+const PUBLISHED_HOUSE: Build = {
+	id: "b_pub",
+	model: "house",
+	pos: [12, 0],
+	y: 0,
+	rot: 0,
+	scale: 1,
+	label: "みんなの家",
+	by: "h_kazu",
+	byName: "kazu",
+	at: 1,
+};
+
+function setup(rules: RoomRules, fixedBuilds?: Build[]) {
 	let now = 1_000_000;
 	let n = 0;
 	const clock = { now: () => now, advance: (ms: number) => (now += ms) };
@@ -82,6 +96,7 @@ function setup(rules: RoomRules) {
 		landmarks: [{ id: "cafe", name: "カフェ", pos: [10, 10] }],
 		spawn: [-10, -10],
 		areaName: "テスト街",
+		fixedBuilds,
 		build: {
 			model: (id) => MODELS[id],
 			groundHeight: (p) => mesh.heightAt(p),
@@ -151,6 +166,20 @@ const build = (
 });
 
 describe("production rules", () => {
+	test("published builds are part of the city: AIs see them nearby; nobody can take them down", () => {
+		const ctx = setup(PRODUCTION_RULES, [PUBLISHED_HOUSE]);
+		const a = conn("a");
+		const x = conn("x");
+		joinAt(ctx, a, human("alice"), [5, 5]);
+		joinAt(ctx, x, ai("x", "o1"), [6, 6]);
+		ctx.room.handle(a, { t: "SAY", text: "あの家", to: "a_x" });
+		expect(of(x, "ADDRESSED")[0]?.context.nearbyBuilds).toEqual([
+			{ id: "b_pub", model: "house", label: "みんなの家", byName: "kazu", distance: 8.5 },
+		]);
+		ctx.room.handle(a, { t: "UNBUILD", id: "b_pub", ref: "u" });
+		expect(last(a)).toMatchObject({ t: "NOTICE", kind: "rejected", ref: "u" });
+	});
+
 	test("BUILD and UNBUILD are refused, with the ref; nobody hears of a build; WELCOME has no builds", () => {
 		const ctx = setup(PRODUCTION_RULES);
 		const a = conn("a");

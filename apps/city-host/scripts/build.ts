@@ -131,14 +131,15 @@ async function placedOf(b: Build): Promise<PlacedModel> {
 	const nav =
 		b.model === "block"
 			? boxNav(...(b.size ?? [1, 1, 1]))
-			: ((await (await fetch(`${BASE}${modelUrl(b.model, "nav.json")}`)).json()) as ModelNav);
+			: ((await (await fetch(`${BASE}${modelUrl(b.model, "nav.json", true)}`)).json()) as ModelNav);
 	return { nav, pos: b.pos, y: b.y, rot: b.rot, scale: b.scale };
 }
 // everything built, oldest first, as the host applies it: the same walkable area the host has
 const everything = builder.inbox
 	.filter((m): m is Extract<typeof m, { t: "BUILT" }> => m.t === "BUILT")
 	.map((m) => m.build);
-const base = (await (await fetch(`${BASE}/test-city/navmesh.json`)).json()) as NavMeshData;
+// free play builds on the city alone (navmesh.json has the published builds baked in)
+const base = (await (await fetch(`${BASE}/test-city/navmesh.base.json`)).json()) as NavMeshData;
 const mesh = NavMesh.fromJSON(applyBuilds(base, await Promise.all(everything.map(placedOf))));
 
 const walkerCookie = await devLogin("あるく人");

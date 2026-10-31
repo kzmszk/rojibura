@@ -579,9 +579,13 @@ async function api(request: Request, url: URL): Promise<Response> {
 	}
 
 	const builds = path.match(/^\/api\/dev\/rooms\/([a-z0-9-]{1,32})\/builds$/);
-	if (builds?.[1] && request.method === "DELETE" && FREE_PLAY && devAllowed(request, url)) {
-		const account = await currentAccount(request);
-		return roomCommand(builds[1], { op: "clear_builds", by: account?.id ?? "h_dev" });
+	if (builds?.[1] && FREE_PLAY && devAllowed(request, url)) {
+		// GET: everything built (pnpm builds:publish); DELETE: take it all down
+		if (request.method === "GET") return roomCommand(builds[1], { op: "list_builds" });
+		if (request.method === "DELETE") {
+			const account = await currentAccount(request);
+			return roomCommand(builds[1], { op: "clear_builds", by: account?.id ?? "h_dev" });
+		}
 	}
 
 	const stats = path.match(/^\/api\/dev\/rooms\/([a-z0-9-]{1,32})\/stats$/);

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import navmeshJson from "../../../assets/test-city/navmesh.json" with { type: "json" };
+import navmeshJson from "../../../assets/test-city/navmesh.base.json" with { type: "json" };
 import { NavMesh, type Vec2, validatePath } from "./index.ts";
 
 const mesh = NavMesh.fromJSON(navmeshJson);

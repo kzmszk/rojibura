@@ -211,7 +211,9 @@ describe("BUILD and UNBUILD (free play, docs/prd.md 3.7)", () => {
 
 	test("helpers", () => {
 		expect(modelUrl("house", "glb")).toBe("/models/house.glb");
-		expect(modelUrl("m_0123456789abcdef", "nav.json")).toBe("/api/models/m_0123456789abcdef.nav.json");
+		expect(modelUrl("house", "glb", true)).toBe("/models/house.glb");
+		expect(modelUrl("m_0123456789abcdef", "nav.json", true)).toBe("/api/models/m_0123456789abcdef.nav.json");
+		expect(modelUrl("m_0123456789abcdef", "glb")).toBe("/models/m_0123456789abcdef.glb");
 		expect(facing([0, 0], [0, 5])).toBe(0);
 		expect(facing([0, 0], [5, 0])).toBe(90);
 		expect(facing([0, 0], [-5, 0])).toBe(270);

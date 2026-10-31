@@ -165,7 +165,7 @@ export class BuildPanel {
 			if (m.id === "block") b.append(el("span", "rj-build-block", "■"));
 			else {
 				const img = el("img");
-				img.src = modelUrl(m.id, "png");
+				img.src = modelUrl(m.id, "png", true); // the menu is only in free play
 				img.alt = "";
 				img.onerror = () => img.replaceWith(el("span", "rj-build-block", "?"));
 				b.append(img);

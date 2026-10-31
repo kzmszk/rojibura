@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
+import { type LandmarksData, NavMesh, type NavMeshData } from "@rojibura/nav";
 import { expect, test } from "vitest";
+import { bake, builtinNavs, type Published, unreachable } from "./bake.ts";
 import { buildCity } from "./build.ts";
 import { collectTriangles, localMatrix, parseGlb, transformPoint } from "./glb.ts";
 import { extractLandmarks } from "./landmarks.ts";
@@ -46,8 +48,18 @@ test("extracts landmarks and the spawn point (glTF Y up: Blender (x, y) is (x, -
 	]);
 });
 
-test("the committed navmesh.json and landmarks.json are up to date (pnpm build:city)", async () => {
+test("the committed navmesh.base.json and landmarks.json are up to date (pnpm build:city)", async () => {
 	const { navmesh, landmarks } = await buildCity(glbBytes);
-	expect(navmesh).toEqual(JSON.parse(readFileSync(asset("navmesh.json"), "utf8")));
+	expect(navmesh).toEqual(JSON.parse(readFileSync(asset("navmesh.base.json"), "utf8")));
 	expect(landmarks).toEqual(JSON.parse(readFileSync(asset("landmarks.json"), "utf8")));
+});
+
+test("navmesh.json is the base with the published builds baked in (pnpm builds:publish)", () => {
+	const base = JSON.parse(readFileSync(asset("navmesh.base.json"), "utf8")) as NavMeshData;
+	const published = JSON.parse(readFileSync(asset("builds.json"), "utf8")) as Published;
+	const models = new URL("../../../assets/models", import.meta.url).pathname;
+	const baked = bake(base, published, builtinNavs(models));
+	expect(JSON.parse(readFileSync(asset("navmesh.json"), "utf8"))).toEqual(JSON.parse(JSON.stringify(baked)));
+	const city = JSON.parse(readFileSync(asset("landmarks.json"), "utf8")) as LandmarksData;
+	expect(unreachable(NavMesh.fromJSON(baked), city.spawn.pos, city.landmarks)).toEqual([]);
 });
