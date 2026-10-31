@@ -6,15 +6,19 @@ import {
 	facing,
 	generateAgentKeyPair,
 	importPrivateKey,
+	MAX_PATH_LENGTH,
 	MAX_PATH_POINTS,
 	MAX_SAY_LENGTH,
 	type MoveState,
 	modelUrl,
 	parseClientMessage,
+	pathLeg,
+	polylineLength,
 	poseAt,
 	positionAt,
 	sanitizeText,
 	signAuth,
+	type Vec2,
 	verifyAuth,
 } from "./index.ts";
 
@@ -122,6 +126,38 @@ describe("poseAt", () => {
 		const move: MoveState = { kind: "vel", pos: [0, 0], dir: [1, 0], speed: 3, at: 0 };
 		expect(positionAt(move, 2000)).toEqual([6, 0]);
 		expect(positionAt(move, 2000, (p) => [Math.min(p[0], 4), p[1]])).toEqual([4, 0]);
+	});
+});
+
+describe("pathLeg", () => {
+	test("keeps a path the host accepts as it is", () => {
+		const path: Vec2[] = [
+			[0, 0],
+			[100, 0],
+			[100, 50],
+		];
+		expect(pathLeg(path)).toEqual(path);
+	});
+
+	test("cuts a long way where MAX_PATH_LENGTH runs out, on the way", () => {
+		const leg = pathLeg([
+			[0, 0],
+			[150, 0],
+			[150, 150],
+		]);
+		expect(leg).toEqual([
+			[0, 0],
+			[150, 0],
+			[150, MAX_PATH_LENGTH - 1 - 150],
+		]);
+		expect(polylineLength(leg)).toBeLessThan(MAX_PATH_LENGTH);
+	});
+
+	test("keeps at most MAX_PATH_POINTS points", () => {
+		const path = Array.from({ length: 40 }, (_, i): Vec2 => [i, i % 2]);
+		const leg = pathLeg(path);
+		expect(leg).toHaveLength(MAX_PATH_POINTS);
+		expect(leg).toEqual(path.slice(0, MAX_PATH_POINTS));
 	});
 });
 

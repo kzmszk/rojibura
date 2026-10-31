@@ -112,7 +112,7 @@ node apps/avatar-sdk/scripts/eval-resident.ts --models llama/gemma-4-26B-A4B-it-
 
 ## エリアと門（ヴェネツィアへ行く）
 
-街は複数のエリアからなる（docs/prd.md 3.8）。一覧は `assets/areas.json`。テストの街の駅前にある「ヴェネツィアへの門」に立つと「🚪 ヴェネツィア（サン・マルコ）へ行く」が出て、押すとヴェネツィアのモーロに着く。直接開くなら http://localhost:5173/?area=venezia 。
+街は複数のエリアからなる（docs/prd.md 3.8）。一覧は `assets/areas.json`。テストの街の駅前にある「ヴェネツィアへの門」に立つと「🚪 ヴェネツィア（サン・マルコ）へ行く」が出て、押すとヴェネツィアのモーロに着く。戻るときは、画面の左上の「🚪 門へ」を押すと門まで歩く（ヴェネツィアの門はモーロの水辺）。直接開くなら http://localhost:5173/?area=venezia 。
 
 - ヴェネツィアの3D（glb）は demos の VENEZIA（`~/work/demos/venice`）のデプロイから読む（`https://demos.polynous.io/venice/rj/<版>/`）。rojibura に置くのは `assets/areas/venezia/` の `navmesh.json`、`landmarks.json`、`places.json` だけ。
 - glb の書き出しは venice 側で（`tools/rj_export.mjs`、venice の README）。版を変えたら `assets/areas.json` の `assets` を書き換える。

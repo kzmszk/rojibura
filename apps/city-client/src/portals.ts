@@ -54,10 +54,16 @@ export class PortalsView {
 
 	/** The portal within reach of `pos`, nearest first, or null. */
 	near(pos: Vec2): Portal | null {
+		const p = this.nearest(pos);
+		return p && Math.hypot(p.pos[0] - pos[0], p.pos[1] - pos[1]) <= PORTAL_REACH ? p : null;
+	}
+
+	/** The portal nearest to `pos` (in a straight line), or null if the area has none. */
+	nearest(pos: Vec2): Portal | null {
 		let best: { p: Portal; d: number } | null = null;
 		for (const p of this.portals) {
 			const d = Math.hypot(p.pos[0] - pos[0], p.pos[1] - pos[1]);
-			if (d <= PORTAL_REACH && (!best || d < best.d)) best = { p, d };
+			if (!best || d < best.d) best = { p, d };
 		}
 		return best?.p ?? null;
 	}

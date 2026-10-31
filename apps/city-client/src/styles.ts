@@ -13,10 +13,12 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #bfd6e8; }
   background: #fff; color: #222; box-shadow: 0 1px 4px rgba(0,0,0,.25); overflow-wrap: anywhere; }
 .rj-bubble.show { display: block; }
 .rj-bubble.thinking { color: #888; letter-spacing: 2px; }
-.rj-hud { position: absolute; top: 12px; left: 12px; right: 12px; display: flex; justify-content: space-between; pointer-events: none; }
+.rj-hud { position: absolute; top: 12px; left: 12px; right: 12px; display: flex; justify-content: space-between; align-items: flex-start; pointer-events: none; }
 .rj-status, .rj-logout { pointer-events: auto; font-size: 13px; padding: 6px 10px; border-radius: 8px; background: rgba(255,255,255,.8); color: #222; }
 .rj-logout { text-decoration: none; }
 .rj-right { display: flex; gap: 8px; align-items: center; }
+.rj-left { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.rj-gate { white-space: nowrap; }
 .rj-check { pointer-events: auto; font-size: 12px; padding: 6px 10px; border-radius: 8px; background: rgba(255,255,255,.8); color: #222; cursor: pointer; }
 .rj-google { display: block; text-align: center; font-size: 16px; padding: 10px; border-radius: 8px; border: 1px solid #bbc; color: #222; text-decoration: none; background: #fff; }
 .rj-chat { position: absolute; left: 12px; bottom: 12px; width: min(440px, calc(100% - 24px)); display: flex; flex-direction: column; gap: 6px; }

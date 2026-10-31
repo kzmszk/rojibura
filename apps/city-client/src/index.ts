@@ -3,11 +3,13 @@
 import { applyBuilds, NavMesh, type NavMeshData } from "@rojibura/nav";
 import {
 	type AvatarId,
+	dist,
 	type HostToClient,
-	MAX_PATH_POINTS,
 	MAX_SAY_LENGTH,
 	type Motion,
+	type Portal,
 	type PublishedBuilds,
+	pathLeg,
 	poseAt,
 	RUN_SPEED,
 	type Vec2,
@@ -23,7 +25,7 @@ import { BuildsView, makeObject, modelsFromHost } from "./builds.ts";
 import { actionBar, Relations, showAdmin } from "./moderation.ts";
 import { CityConnection, type ConnState } from "./net.ts";
 import { rememberFirstVisit, reportFirstVisit } from "./onboarding.ts";
-import { PortalsView } from "./portals.ts";
+import { PORTAL_REACH, PortalsView } from "./portals.ts";
 import { CityScene } from "./scene.ts";
 import { STYLES } from "./styles.ts";
 import { UsagePanel } from "./usage-panel.ts";
@@ -264,7 +266,17 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 		right.prepend(buildButton);
 		root.append(panel.el);
 	}
-	hud.append(status, right);
+	// the way to a portal from anywhere in the area (docs/prd.md 3.8): it may be far off and out of sight
+	const gates = area.portals ?? [];
+	const onlyGate = gates.length === 1 ? gates[0] : undefined;
+	const gateButton = el("button", "rj-logout rj-gate", "🚪 門へ");
+	gateButton.type = "button";
+	gateButton.title = `${onlyGate ? onlyGate.name : "いちばん近い門"}まで歩いていきます（遠いときは走ります）`;
+	gateButton.hidden = gates.length === 0;
+	gateButton.onclick = () => goToGate();
+	const left = el("div", "rj-left");
+	left.append(status, gateButton);
+	hud.append(left, right);
 	// free-tier usage for admins, moderators and development builds (docs/prd.md 2.5)
 	let usage: UsagePanel | null = null;
 	if (devBuild || me.role === "moderator" || me.role === "admin") {
@@ -520,7 +532,7 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 		const k = movementKey(e);
 		if (k && !typing()) {
 			e.preventDefault();
-			stopFollow();
+			stopGoing();
 			keys.add(k);
 			steer(performance.now());
 			return;
@@ -534,7 +546,7 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 			panel.turn(e.key.toLowerCase() === "q" ? -15 : 15);
 		} else if (e.key === "Escape") {
 			if (panel.open) panel.hide();
-			stopFollow();
+			stopGoing();
 			setTarget(null);
 			input.blur();
 		}
@@ -650,14 +662,13 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 		// a click on a portal walks up to it
 		const gate = portals.portalOf(ray.intersectObjects(portals.objects, true)[0]?.object ?? null);
 		if (gate) {
-			stopFollow();
-			if (!walkTo(gate.pos, e.shiftKey ? RUN_SPEED : WALK_SPEED)) showToast("そこへは行けません");
+			goToGate(gate);
 			return;
 		}
 		// a click on something built walks up to it
 		const p = scene.pickGround(ndc, builds.objects);
 		if (!p) return;
-		stopFollow();
+		stopGoing();
 		if (!walkTo([p.x, p.z], e.shiftKey ? RUN_SPEED : WALK_SPEED)) showToast("そこへは行けません");
 	});
 
@@ -668,10 +679,11 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 		const from = poseAt(mine.state.move, conn.hostNow()).pos;
 		const path = nav.findPath(from, to);
 		if (!path || path.length < 2) return false;
-		const trimmed = path.slice(0, MAX_PATH_POINTS);
+		// as much of the way as the host takes at once (a longer way stops short)
+		const leg = pathLeg(path);
 		// move right away; the host's MOVED (or CORRECT) replaces this
-		mine.setMove({ kind: "path", path: trimmed, speed, at: conn.hostNow() });
-		conn.send({ t: "MOVE_PATH", path: trimmed, speed, seq: ++seq });
+		mine.setMove({ kind: "path", path: leg, speed, at: conn.hostNow() });
+		conn.send({ t: "MOVE_PATH", path: leg, speed, seq: ++seq });
 		return true;
 	}
 
@@ -684,11 +696,14 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 	function startFollow(id: AvatarId): void {
 		const them = avatars.get(id);
 		if (!them || id === myId) return;
+		stopGoing();
 		following = { id, until: performance.now() + FOLLOW_MAX_MS, plannedAt: 0 };
 		showToast(`${them.state.name} のそばへ向かいます`);
 	}
-	function stopFollow(): void {
+	/** Stops following someone or going to a portal (the person moves on their own). */
+	function stopGoing(): void {
 		following = null;
+		toGate = null;
 	}
 	function followStep(t: number): void {
 		if (!following) return;
@@ -719,6 +734,53 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 		}
 	}
 
+	// ---- going to a portal (🚪 門へ) ----
+	/** Run while farther than this, plan the next leg this often, and give up after this long. */
+	const GATE_RUN_M = 10;
+	const GATE_REPLAN_MS = 1000;
+	const GATE_MAX_MS = 5 * 60_000;
+	/** `from`: where the last leg started, to notice when it took us nowhere. */
+	let toGate: { gate: Portal; until: number; plannedAt: number; from: Vec2 | null } | null = null;
+	/** Walks to `gate` (the nearest one if not given), in as many legs as the way needs. */
+	function goToGate(gate?: Portal): void {
+		const mine = myId ? avatars.get(myId) : undefined;
+		const to = gate ?? (mine ? portals.nearest(poseAt(mine.state.move, conn.hostNow()).pos) : null);
+		if (!to) return;
+		stopGoing();
+		toGate = { gate: to, until: performance.now() + GATE_MAX_MS, plannedAt: 0, from: null };
+		showToast(`${to.name}へ向かいます`);
+	}
+	function gateStep(t: number): void {
+		if (!toGate) return;
+		const mine = myId ? avatars.get(myId) : undefined;
+		if (!mine || t > toGate.until) {
+			toGate = null;
+			return;
+		}
+		const pose = poseAt(mine.state.move, conn.hostNow());
+		// still walking a leg
+		if (pose.moving) return;
+		const d = dist(pose.pos, toGate.gate.pos);
+		// there: the button to go through shows
+		if (d <= PORTAL_REACH) {
+			toGate = null;
+			return;
+		}
+		if (t - toGate.plannedAt < GATE_REPLAN_MS) return;
+		// the last leg took us nowhere (no way there, or the host did not take it)
+		if (toGate.from && dist(pose.pos, toGate.from) < 0.5) {
+			showToast("そこへは行けません");
+			toGate = null;
+			return;
+		}
+		toGate.plannedAt = t;
+		toGate.from = pose.pos;
+		if (!walkTo(toGate.gate.pos, d > GATE_RUN_M ? RUN_SPEED : WALK_SPEED)) {
+			showToast("そこへは行けません");
+			toGate = null;
+		}
+	}
+
 	// ---- loop ----
 	let last = performance.now();
 	let placed = false;
@@ -733,6 +795,7 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 		const mine = myId ? avatars.get(myId) : undefined;
 		if (keys.size > 0) steer(t);
 		followStep(t);
+		gateStep(t);
 		// stop at the edge of the walkable area instead of walking into walls
 		if (mine?.state.move.kind === "vel") {
 			const ahead = poseAt(mine.state.move, now + 150).pos;
@@ -747,6 +810,7 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 		if (gateHere !== shownGate) {
 			shownGate = gateHere;
 			travel.hidden = !gateHere;
+			gateButton.hidden = gates.length === 0 || !!gateHere;
 			if (gateHere) {
 				travel.textContent = `🚪 ${areas.areas[gateHere.to]?.name ?? gateHere.name}へ行く`;
 				travel.onclick = () => {

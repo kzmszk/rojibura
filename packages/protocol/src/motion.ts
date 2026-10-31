@@ -1,6 +1,7 @@
 // Position of an avatar at a given host time (docs/prd.md 3.3, lazy position evaluation).
 // Shared by the host (validation, context) and clients (interpolation) so both agree.
 
+import { MAX_PATH_LENGTH, MAX_PATH_POINTS } from "./limits.ts";
 import type { MoveState, Vec2 } from "./types.ts";
 
 export function dist(a: Vec2, b: Vec2): number {
@@ -32,6 +33,30 @@ export function alongPolyline(path: readonly Vec2[], d: number): { pos: Vec2; di
 	}
 	const last = path[path.length - 1] as Vec2;
 	return { pos: [last[0], last[1]], dir, done: true };
+}
+
+/**
+ * The start of `path` that one MOVE_PATH may carry: at most MAX_PATH_POINTS points and MAX_PATH_LENGTH metres
+ * (with a metre to spare). A longer way is walked in several legs.
+ */
+export function pathLeg(path: readonly Vec2[]): Vec2[] {
+	const first = path[0];
+	if (!first) return [];
+	const max = MAX_PATH_LENGTH - 1;
+	const out: Vec2[] = [first];
+	let len = 0;
+	for (let i = 1; i < path.length && out.length < MAX_PATH_POINTS; i++) {
+		const a = path[i - 1] as Vec2;
+		const b = path[i] as Vec2;
+		const seg = dist(a, b);
+		if (len + seg > max) {
+			out.push(alongPolyline([a, b], max - len).pos);
+			break;
+		}
+		len += seg;
+		out.push(b);
+	}
+	return out;
 }
 
 export interface Pose {
