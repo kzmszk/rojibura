@@ -32,7 +32,7 @@ import {
 	setRole,
 	updateAccount,
 } from "./db.ts";
-import { isOpen, nextOpening } from "./hours.ts";
+import { isOpen, nextOpening, parseHours } from "./hours.ts";
 import { authUrl, exchangeCode, googleKeys, newPkce, verifyIdToken } from "./oidc.ts";
 import type { JoinRequest, RoomCommand } from "./room.ts";
 import {
@@ -53,6 +53,8 @@ import { DEFAULT_PRESET, PRESETS } from "./world.ts";
 export { CityRoomDO } from "./room.ts";
 
 const DEV = env.DEV_AUTH === "1";
+/** Parsed at startup: a malformed OPEN_HOURS fails the deploy instead of going live. */
+const HOURS = parseHours(env.OPEN_HOURS);
 const AREA_RE = /^[a-z0-9-]{1,32}$/;
 /** Areas that moderation commands are sent to. */
 const AREAS = ["main"];
@@ -176,8 +178,8 @@ async function googleCallback(request: Request, url: URL): Promise<Response> {
 }
 
 function openOrError(): Response | null {
-	if (env.DEV_ALWAYS_OPEN === "1" || isOpen(Date.now())) return null;
-	return json({ error: "closed", nextOpening: nextOpening(Date.now()) }, 403);
+	if (isOpen(Date.now(), HOURS)) return null;
+	return json({ error: "closed", nextOpening: nextOpening(Date.now(), HOURS) }, 403);
 }
 
 export type EntryRefusal = { reason: "closed"; nextOpening: number } | { reason: "login" | "banned" };
@@ -188,7 +190,7 @@ export type EntryRefusal = { reason: "closed"; nextOpening: number } | { reason:
  */
 async function humanEntryRefusal(account: Account | null): Promise<EntryRefusal | null> {
 	const now = Date.now();
-	if (env.DEV_ALWAYS_OPEN !== "1" && !isOpen(now)) return { reason: "closed", nextOpening: nextOpening(now) };
+	if (!isOpen(now, HOURS)) return { reason: "closed", nextOpening: nextOpening(now, HOURS) };
 	if (!account) return { reason: "login" };
 	if (await isBanned(env.DB, [account.id])) return { reason: "banned" };
 	return null;
@@ -266,8 +268,9 @@ async function api(request: Request, url: URL): Promise<Response> {
 			ok: true,
 			dev: DEV,
 			google: googleConfigured(),
-			open: isOpen(Date.now()),
-			nextOpening: nextOpening(Date.now()),
+			hours: env.OPEN_HOURS,
+			open: isOpen(Date.now(), HOURS),
+			nextOpening: nextOpening(Date.now(), HOURS),
 		});
 	if (path === "/api/entry") {
 		const refusal = await humanEntryRefusal(await currentAccount(request));

@@ -30,7 +30,9 @@ pnpm lint         # biome
 | `packages/nav` | ナビメッシュと経路探索 |
 | `tools/city-build` | 街の glb からナビメッシュとランドマークを生成 |
 
-`cf dev`（Vite の development モード）では、ダミー認証（`DEV_AUTH`）と開館時間の解除（`DEV_ALWAYS_OPEN`）が自動で有効になる。本番ビルドでは無効。
+`cf dev`（Vite の development モード）では、ダミー認証（`DEV_AUTH`）が自動で有効になる。本番ビルドでは無効。
+
+開館時間は `apps/city-host/cloudflare.config.ts` の `OPEN_HOURS` で決める。`always`（いつでも）か、JST の時間帯（`20-24`、`12-13,20-24` など）を書く。開発期間中は本番も `always`。変えたら `npx cf deploy` する。
 
 ## デプロイ
 
@@ -41,7 +43,7 @@ pnpm lint         # biome
 | 本番 | https://rojibura.kazumasa.workers.dev | `npx cf deploy` |
 | ステージング | https://rojibura-staging.kazumasa.workers.dev | `npx cf deploy --mode staging` |
 
-- 本番は JST 20〜24時だけ開いていて、ログインは Google だけ（設定するまではログインできない）。
+- 本番のログインは Google だけ。開館時間は `OPEN_HOURS` に従う（開発期間中は `always`）。
 - ステージングはいつでも開いていて、ダミー認証が使える。ただし `DEV_TOKEN` が必要。
   - 値は `apps/city-host/.dev.vars.staging`（git に入れない）。スクリプトには `RJ_DEV_TOKEN` で渡す。
   - ブラウザで使うときは、`rj_dev=<DEV_TOKEN>` の Cookie を付けてからダミーログインする。

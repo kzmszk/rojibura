@@ -29,10 +29,12 @@ export default defineConfig(({ mode }) => {
 				// Google OAuth client (docs/prd.md 2.2.3). Login is disabled until both are set.
 				GOOGLE_CLIENT_ID: bindings.secret(),
 				GOOGLE_CLIENT_SECRET: bindings.secret(),
-				// Development switches (docs/prd.md part 5). Never on in production builds.
+				// Opening hours in JST (docs/prd.md 2.4): "always", "20-24", "12-13,20-24"...
+				// Always open while in development; set production to "20-24" when the city opens to the public.
+				OPEN_HOURS: bindings.text("always"),
+				// Development switch (docs/prd.md part 5). Never on in production builds.
 				// Outside localhost the dev endpoints also require DEV_TOKEN (staging sets it).
 				DEV_AUTH: bindings.text(dev || staging ? "1" : "0"),
-				DEV_ALWAYS_OPEN: bindings.text(dev || staging ? "1" : "0"),
 				DEV_TOKEN: bindings.secret(),
 			},
 		},

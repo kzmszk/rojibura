@@ -14,7 +14,7 @@ import {
 	verifyAuth,
 } from "@rojibura/protocol";
 import { relationsOf } from "./db.ts";
-import { CLOSING_NOTICE_MS, closingTime, isOpen } from "./hours.ts";
+import { CLOSING_NOTICE_MS, closingTime, type Hours, isOpen, parseHours } from "./hours.ts";
 import {
 	type ChatLine,
 	CLOSE_CLOSING,
@@ -53,11 +53,13 @@ export class CityRoomDO extends DurableObject<Env> {
 	private flushed = { inbound: 0, connects: 0, says: 0, rejectedMoves: 0 };
 	private noticeSentFor = 0;
 	private chatFlushedAt = 0;
+	private readonly hours: Hours;
 	/** When this instance was created: a later value than the last activity means it hibernated. */
 	private readonly startedAt = Date.now();
 
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env);
+		this.hours = parseHours(env.OPEN_HOURS);
 		this.core = new RoomCore<WebSocket>(
 			{
 				send: (ws, msg) => safeSend(ws, msg),
@@ -159,14 +161,19 @@ export class CityRoomDO extends DurableObject<Env> {
 			if (att?.pending && now - att.pending.at > AUTH_TIMEOUT_MS) safeClose(ws, CLOSE_POLICY, "auth timeout");
 		}
 		this.core.sweep((ws) => this.ctx.getWebSocketAutoResponseTimestamp(ws)?.getTime() ?? null);
-		if (this.env.DEV_ALWAYS_OPEN !== "1" && this.core.size > 0) {
-			const close = closingTime(now);
-			if (!isOpen(now) || now >= close) {
+		if (this.core.size > 0) {
+			const close = closingTime(now, this.hours);
+			if (!isOpen(now, this.hours)) {
 				this.core.closeAll("closing", CLOSE_CLOSING, "閉館しました");
-			} else if (now >= close - CLOSING_NOTICE_MS && this.noticeSentFor !== close) {
+			} else if (close !== null && now >= close - CLOSING_NOTICE_MS && this.noticeSentFor !== close) {
 				this.noticeSentFor = close;
+				const minutes = Math.max(1, Math.round((close - now) / 60_000));
 				for (const ws of this.core.members.keys())
-					safeSend(ws, { t: "NOTICE", kind: "closing_soon", message: "まもなく閉館です（24:00）" });
+					safeSend(ws, {
+						t: "NOTICE",
+						kind: "closing_soon",
+						message: `まもなく閉館です（あと${minutes}分）`,
+					});
 			}
 		}
 		this.flushStats();
@@ -228,10 +235,8 @@ export class CityRoomDO extends DurableObject<Env> {
 		if (this.ctx.getWebSockets().length === 0) return;
 		const now = Date.now();
 		let next = now + SWEEP_INTERVAL_MS;
-		if (this.env.DEV_ALWAYS_OPEN !== "1" && isOpen(now)) {
-			const close = closingTime(now);
-			for (const t of [close - CLOSING_NOTICE_MS, close]) if (t > now && t < next) next = t;
-		}
+		const close = closingTime(now, this.hours);
+		if (close !== null) for (const t of [close - CLOSING_NOTICE_MS, close]) if (t > now && t < next) next = t;
 		const current = await this.ctx.storage.getAlarm();
 		if (current === null || current > next || current < now) await this.ctx.storage.setAlarm(next);
 	}

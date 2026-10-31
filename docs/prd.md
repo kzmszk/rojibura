@@ -288,8 +288,9 @@ flowchart LR
   * Workers Cache（Worker の前段キャッシュ）は使わない。有効にすると、静的アセットへのリクエストまで課金対象になる。
   * 独自ドメインは当面いらない。
 * 開館時間の管理
-  * Gateway Worker は、時間外の一般接続を拒否し、次の開館時刻を返す。
-  * CityRoomDO は Alarm で 23:50 に閉館予告（NOTICE）、24:00 に全接続を閉じる。
+  * 開館時間は設定（`OPEN_HOURS`、第5部「開発環境」）で変えられる。開発期間中は `always`。
+  * Gateway Worker は、時間外の一般接続を拒否し、次の開館時刻を返す。ブラウザは WebSocket が断られた理由を読めないので、クライアントは接続の前に `/api/entry` で入れるかを確かめる。閉館中なら次の開館時刻を表示し、時間になると自動で入る。
+  * CityRoomDO は Alarm で、閉館の10分前に予告（NOTICE）し、閉館時刻に全接続を閉じる。
   * T4 の常駐AIは、開館時刻に Cron か Alarm で起きて再入場し、閉館で止まる（参加者側のコストは 3.5.1）。
 
 ### 2.5 縮退設計
@@ -799,18 +800,22 @@ AIのペルソナと記憶はホストに置かない（参加者側に置く）
 * **Cloudflare：** 既存アカウントを使う。Webクライアントは Pages ではなく、Gateway Worker の静的アセット（Workers Static Assets）として同じ Worker から配信する（同一オリジンなので Cookie と WebSocket の扱いが単純になる）。ツールは `cf` CLI（Cloudflare公式、npm の `cf`。現在 beta）。ローカル開発は `cf dev`、デプロイは `cf deploy`。デプロイ前に一度 `cf auth login` が必要。
 * **環境：** 3つある。モードで切り替え、同じコードを使う。
 
-  | 環境 | コマンド | Worker / D1 | ダミー認証・開館時間の解除 |
+  | 環境 | コマンド | Worker / D1 | ダミー認証 |
   | --- | --- | --- | --- |
   | ローカル | `cf dev` | ローカルの workerd | 有効（トークン不要） |
   | ステージング | `cf deploy --mode staging` | `rojibura-staging` | 有効。ただし `DEV_TOKEN` が必要 |
-  | 本番 | `cf deploy` | `rojibura` | 無効 |
+  | 本番 | `cf deploy` | `rojibura` | 無効（Google ログインのみ） |
 
   * ステージングは、Cloudflare 上でしか測れないこと（課金、CPU、キャッシュ）と、デプロイ先での通し確認に使う。
   * 秘密の値は `apps/city-host/.dev.vars`（ローカル）と `.dev.vars.staging`（ステージング。`cf deploy --secrets-file` で送る）に置き、どちらも git に入れない。
 * **ダミー認証（`DEV_AUTH=1`）：** Google の OAuth クライアントが用意できるまでは、Gateway Worker が `/auth/dev/login?name=<表示名>` で即座にセッションを発行する。
   * localhost 以外では、`X-RJ-Dev-Token` ヘッダーか `rj_dev` Cookie で `DEV_TOKEN` を示さないと使えない（`/api/dev/*` も同じ）。
   * 本番の設定では無効にする。
-* **開館時間の解除（`DEV_ALWAYS_OPEN=1`）：** 開発中は時間外でも入場できるようにする。
+* **開館時間（`OPEN_HOURS`）：** `apps/city-host/cloudflare.config.ts` の1行で決める。
+  * 値は `always`（いつでも）か、JST の時間帯（`20-24`、`12-13,20-24` など）。
+  * 日をまたぐ時間帯は `20-24,0-2` のように書く。つながった時間帯は1回の開館として扱うので、0時に追い出されない。
+  * 変えるときは、その1行を直して `cf deploy` する。値の書き方が正しくなければ、起動時のエラーでデプロイが止まる（そのまま公開されることはない）。
+  * 開発期間中は本番も `always`。一般公開のときに `20-24` にする（2.4）。
 * **開発用LLM：** APIキーを使わず、開発者自身の Claude Code のサブスクリプションで動かす。`avatar-sdk` の node アダプタに「Claude Code CLI プロバイダ」を置き、`claude -p`（ツール無効、JSON Schema で出力を固定）を子プロセスで呼ぶ。開発者自身のPCで、開発・テストに使う場合に限る（他の参加者に提供する機能にはしない）。
 * **Workers AI プロバイダ（T4用）：** `avatar-sdk` の `WorkersAiLLM`。既定のモデルは Gemma 4 26B（Phase 0 で選定）。T4 の試作は `apps/agent-worker`（AgentDO が外向き WebSocket で街に入り、Workers AI で返事する）。
 * **Google ログイン：** 本番で有効（2026-10-31 に OAuth クライアントを設定し、ログインを確認した）。`GOOGLE_CLIENT_ID` と `GOOGLE_CLIENT_SECRET` を設定すると有効になる（README 参照）。OAuth の同意画面は「テスト中」なので、ほかの人に開放するときは公開する（`openid` だけなので審査は不要）。
@@ -920,7 +925,7 @@ AIのペルソナと記憶はホストに置かない（参加者側に置く）
 | プロンプトインジェクション | 完全には防げない | 影響範囲の限定、通報、AI停止で対処する |
 | T3 の API費用 | ホストは0円だが、参加者にはAPI費用がかかりうる | ウィザードで明示し、日次上限の既定値を低めにする |
 | 軽量版の自動生成 | スキン付きメッシュの簡略化がブラウザ内で安定して動くか | 難しければサムネイルのビルボードで代替する |
-| 開館時間 | JST 20〜24時だけなので、海外からは参加しにくい | 当面は割り切る |
+| 開館時間 | 公開後は JST 20〜24時だけの予定なので、海外からは参加しにくい | 当面は割り切る。`OPEN_HOURS` で時間帯を足せる（無料枠の範囲で） |
 | 独自ドメイン | 当初は workers.dev ではアセットのエッジキャッシュが使えないと見ていた | Phase 0 で解消。静的アセットは workers.dev でもキャッシュされ、無料。投稿VRMだけ Worker のリクエストを使う |
 | Workers AI のモデル | モデルの追加・廃止が速く、推論するモデルは設定しないと返事を返さない | 既定モデルと推論オフの設定を SDK に持ち、モデルを替えたら `workers-ai-bench.ts` で測り直す |
 | T4 の止め忘れ | AgentDO は接続中ずっと課金対象。閉館後も再接続を続けると、参加者の無料枠を使い切る | テンプレートで、閉館後は止まって次の開館まで眠るようにする。オーナーポータルに稼働時間を出す |
