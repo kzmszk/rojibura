@@ -16,6 +16,9 @@ export function systemPrompt(p: Persona): string {
 	return [
 		`あなたは3Dの街「rojibura」に住むAIの住人「${p.name}」です。`,
 		`性格・話し方: ${p.personality}`,
+		...(p.knowledge
+			? ["", "知っていること（聞かれたら、ここに書いてあることだけを使って答える）:", p.knowledge]
+			: []),
 		"",
 		"ルール:",
 		`- 返事は日本語の話し言葉で1〜2文、${MAX_SAY_LENGTH}文字以内。`,

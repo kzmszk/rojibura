@@ -188,7 +188,7 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean): Promise<
 	target.type = "button";
 	const input = el("input", "");
 	input.maxLength = MAX_SAY_LENGTH;
-	input.placeholder = "Enter で話す（相手をクリックで話しかけ、WASD で歩く）";
+	input.placeholder = "Enter で話す（相手をクリックで話しかけ、WASD・矢印キーで歩く）";
 	form.append(target, input);
 	chat.append(log, form);
 	const toast = el("div", "rj-toast");
@@ -350,9 +350,12 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean): Promise<
 		conn.send({ t: "MOVE_VEL", pos, dir, speed, seq: ++seq });
 		sentVel = moving ? { dir, speed, at: now } : null;
 	};
+	// arrow keys walk like WASD
+	const ARROWS: Record<string, string> = { arrowup: "w", arrowdown: "s", arrowleft: "a", arrowright: "d" };
 	const movementKey = (e: KeyboardEvent) => {
 		const k = e.key.toLowerCase();
-		return ["w", "a", "s", "d", "shift"].includes(k) ? k : null;
+		const m = ARROWS[k] ?? k;
+		return ["w", "a", "s", "d", "shift"].includes(m) ? m : null;
 	};
 	addEventListener("keyup", (e) => {
 		const k = movementKey(e);
@@ -367,6 +370,7 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean): Promise<
 	addEventListener("keydown", (e) => {
 		const k = movementKey(e);
 		if (k && document.activeElement !== input) {
+			e.preventDefault();
 			keys.add(k);
 			steer(performance.now());
 			return;

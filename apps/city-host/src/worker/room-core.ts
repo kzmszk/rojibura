@@ -74,6 +74,8 @@ export interface JoinInfo {
 	allowAiApproach?: boolean;
 	/** Max agents of this owner in the area at once (accounts.agent_concurrency). */
 	ownerAgentLimit?: number;
+	/** Run by the host itself (the guide): exempt from capacity and AI rate limits. */
+	system?: boolean;
 }
 
 /** Member state that survives hibernation (kept in the WebSocket attachment, < 2 KB). */
@@ -223,6 +225,7 @@ export class RoomCore<C> {
 
 	/** Returns a reason when the area cannot take this avatar (docs/prd.md 3.3 item 7). */
 	admissionError(info: JoinInfo): string | null {
+		if (info.system) return null;
 		const others = [...this.members.values()].filter((m) => m.id !== info.id);
 		if (others.length >= CAPACITY_TOTAL) return "街が満員です";
 		if (info.kind === "ai") {
@@ -478,8 +481,10 @@ export class RoomCore<C> {
 			this.transport.send(conn, { t: "NOTICE", kind: "muted_by_moderator", message: "いまは発言できません" });
 			return;
 		}
-		// rate limits
-		if (m.kind === "human") {
+		// rate limits (the host's own guide answers everyone, so it has none)
+		if (m.system) {
+			// no limit
+		} else if (m.kind === "human") {
 			if (!takeToken(v.sayBucket, RATE_SAY_HUMAN.rate, RATE_SAY_HUMAN.burst, now)) {
 				this.violation(conn, v, now);
 				return;

@@ -9,6 +9,12 @@ export const CLOSING_NOTICE_MS = 10 * 60 * 1000;
 
 export type Hours = "always" | [start: number, end: number][];
 
+/** Opening hours as people should hear them, e.g. "いつでも" or "毎日 20時〜24時". */
+export function describeHours(hours: Hours): string {
+	if (hours === "always") return "いつでも（開発中のため）";
+	return `毎日 ${hours.map(([a, b]) => `${a}時〜${b}時`).join("、")}（日本時間）`;
+}
+
 /** Parses OPEN_HOURS. Throws on a malformed value so a bad deploy fails at startup instead of going live. */
 export function parseHours(spec: string | undefined): Hours {
 	const s = (spec ?? "").trim();

@@ -10,6 +10,10 @@ const welcome = await c.waitFor("WELCOME");
 console.log("here:", welcome.avatars.map((a) => `${a.name}(${a.kind})`).join(", "));
 const ai = welcome.avatars.find((a) => a.name === name);
 if (!ai) throw new Error(`${name} is not here`);
+// anything said to us right after arriving (the guide's welcome)
+await new Promise((res) => setTimeout(res, 4000));
+for (const m of c.inbox) if (m.t === "SAID" && m.to === welcome.you) console.log(`< ${m.text} (on arrival)`);
+c.inbox.length = 0;
 for (const text of lines) {
 	const t0 = Date.now();
 	c.send({ t: "SAY", text, to: ai.id });

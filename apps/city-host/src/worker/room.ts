@@ -2,6 +2,7 @@
 // agent challenge-response and alarms; the area logic lives in RoomCore.
 
 import { DurableObject } from "cloudflare:workers";
+import { WorkersAiLLM } from "@rojibura/avatar-sdk";
 import {
 	AUTH_TIMEOUT_MS,
 	authPayload,
@@ -14,7 +15,8 @@ import {
 	verifyAuth,
 } from "@rojibura/protocol";
 import { relationsOf } from "./db.ts";
-import { CLOSING_NOTICE_MS, closingTime, type Hours, isOpen, parseHours } from "./hours.ts";
+import { Guide, type GuideSaved } from "./guide.ts";
+import { CLOSING_NOTICE_MS, closingTime, describeHours, type Hours, isOpen, parseHours } from "./hours.ts";
 import {
 	type ChatLine,
 	CLOSE_CLOSING,
@@ -23,7 +25,12 @@ import {
 	type Member,
 	RoomCore,
 } from "./room-core.ts";
-import { world } from "./world.ts";
+import { navmesh, world } from "./world.ts";
+
+/** The guide's connection: the room routes its messages to the Guide instead of a socket. */
+const GUIDE_CONN = { guide: true } as const;
+type Conn = WebSocket | typeof GUIDE_CONN;
+const isGuide = (c: Conn): c is typeof GUIDE_CONN => c === GUIDE_CONN;
 
 /** What the gateway sends with the upgrade request (trusted: the DO is only reachable through it). */
 export interface JoinRequest {
@@ -49,7 +56,8 @@ export type RoomCommand =
 	| { op: "excerpt"; id: string; minutes: number };
 
 export class CityRoomDO extends DurableObject<Env> {
-	private readonly core: RoomCore<WebSocket>;
+	private readonly core: RoomCore<Conn>;
+	private readonly guide: Guide<Conn>;
 	private flushed = { inbound: 0, connects: 0, says: 0, rejectedMoves: 0 };
 	private noticeSentFor = 0;
 	private chatFlushedAt = 0;
@@ -60,16 +68,26 @@ export class CityRoomDO extends DurableObject<Env> {
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env);
 		this.hours = parseHours(env.OPEN_HOURS);
-		this.core = new RoomCore<WebSocket>(
+		this.core = new RoomCore<Conn>(
 			{
-				send: (ws, msg) => safeSend(ws, msg),
-				close: (ws, code, reason) => safeClose(ws, code, reason),
-				persist: (ws, member) => persistMember(ws, member),
+				send: (c, msg) => (isGuide(c) ? this.guide.onMessage(msg) : safeSend(c, msg)),
+				close: (c, code, reason) => !isGuide(c) && safeClose(c, code, reason),
+				persist: (c, member) => (isGuide(c) ? this.guide.persist(member) : persistMember(c, member)),
 			},
 			world,
 			Date.now,
 			() => randomToken(9),
 		);
+		this.guide = new Guide<Conn>({
+			core: this.core,
+			conn: GUIDE_CONN,
+			world,
+			findPath: (from, to) => navmesh.findPath(navmesh.closestPoint(from), navmesh.closestPoint(to)),
+			llm: env.AI ? new WorkersAiLLM(env.AI) : null,
+			load: () => ctx.storage.kv.get<GuideSaved>("guide"),
+			save: (s) => ctx.storage.kv.put("guide", s),
+			hoursText: describeHours(this.hours),
+		});
 		ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(HEARTBEAT_PING, HEARTBEAT_PONG));
 		const restored: string[] = [];
 		for (const ws of ctx.getWebSockets()) {
@@ -79,6 +97,8 @@ export class CityRoomDO extends DurableObject<Env> {
 				restored.push(att.member.id);
 			}
 		}
+		// woke from hibernation with people present: put the guide back where it was
+		if (this.core.size > 0) this.guide.ensurePresent();
 		ctx.blockConcurrencyWhile(async () => {
 			ctx.storage.sql.exec(
 				"CREATE TABLE IF NOT EXISTS stats (day TEXT PRIMARY KEY, inbound INTEGER NOT NULL DEFAULT 0, connects INTEGER NOT NULL DEFAULT 0, says INTEGER NOT NULL DEFAULT 0, rejected INTEGER NOT NULL DEFAULT 0)",
@@ -112,6 +132,7 @@ export class CityRoomDO extends DurableObject<Env> {
 			safeSend(server, { t: "CHALLENGE", nonce });
 		} else {
 			await this.loadRelations(join.info.id);
+			this.guide.ensurePresent();
 			this.core.join(server, join.info);
 		}
 		await this.scheduleAlarm();
@@ -134,6 +155,7 @@ export class CityRoomDO extends DurableObject<Env> {
 			}
 			// the nonce is consumed: the attachment is replaced by the member state
 			await this.loadRelations(p.info.id);
+			this.guide.ensurePresent();
 			this.core.join(ws, p.info);
 			return;
 		}
@@ -160,7 +182,10 @@ export class CityRoomDO extends DurableObject<Env> {
 			const att = ws.deserializeAttachment() as Attachment | null;
 			if (att?.pending && now - att.pending.at > AUTH_TIMEOUT_MS) safeClose(ws, CLOSE_POLICY, "auth timeout");
 		}
-		this.core.sweep((ws) => this.ctx.getWebSocketAutoResponseTimestamp(ws)?.getTime() ?? null);
+		this.guide.tick();
+		this.core.sweep((c) =>
+			isGuide(c) ? now : (this.ctx.getWebSocketAutoResponseTimestamp(c)?.getTime() ?? null),
+		);
 		if (this.core.size > 0) {
 			const close = closingTime(now, this.hours);
 			if (!isOpen(now, this.hours)) {
@@ -168,12 +193,13 @@ export class CityRoomDO extends DurableObject<Env> {
 			} else if (close !== null && now >= close - CLOSING_NOTICE_MS && this.noticeSentFor !== close) {
 				this.noticeSentFor = close;
 				const minutes = Math.max(1, Math.round((close - now) / 60_000));
-				for (const ws of this.core.members.keys())
-					safeSend(ws, {
-						t: "NOTICE",
-						kind: "closing_soon",
-						message: `まもなく閉館です（あと${minutes}分）`,
-					});
+				for (const c of this.core.members.keys())
+					if (!isGuide(c))
+						safeSend(c, {
+							t: "NOTICE",
+							kind: "closing_soon",
+							message: `まもなく閉館です（あと${minutes}分）`,
+						});
 			}
 		}
 		this.flushStats();
@@ -271,6 +297,7 @@ export class CityRoomDO extends DurableObject<Env> {
 			members: this.core.size,
 			sockets: this.ctx.getWebSockets().length,
 			instanceStartedAt: this.startedAt,
+			guide: { llmCallsToday: this.guide.llmCallsToday },
 			live: this.core.stats,
 			days,
 		};

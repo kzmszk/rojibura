@@ -6,6 +6,8 @@ export interface Persona {
 	name: string;
 	/** Free text written by the owner: personality, way of talking, interests. */
 	personality: string;
+	/** Facts the AI may tell others (e.g. the guide's how-to-play notes). Never secrets. */
+	knowledge?: string;
 }
 
 /** One structured completion. Implementations: Claude Code CLI (dev), Workers AI, browser APIs... */

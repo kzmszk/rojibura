@@ -25,6 +25,8 @@ export default defineConfig(({ mode }) => {
 			env: {
 				ROOM: bindings.durableObject({ worker: name, exportName: "CityRoomDO" }),
 				DB: bindings.d1({ name }),
+				// the guide's LLM (docs/prd.md 3.5.3), within the Workers AI free tier
+				AI: bindings.ai(),
 				SESSION_SECRET: bindings.secret(),
 				// Google OAuth client (docs/prd.md 2.2.3). Login is disabled until both are set.
 				GOOGLE_CLIENT_ID: bindings.secret(),

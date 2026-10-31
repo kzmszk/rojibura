@@ -63,7 +63,7 @@ pnpm lint         # biome
 ## 街に入る・AIを動かす（ローカル）
 
 1. `pnpm dev` で街を起動し、ブラウザで http://localhost:5173 を開く。表示名を入れて「街に入る」（開発用ログイン）。
-   - クリックで歩く（Shift で走る）、WASD でも歩ける。
+   - クリックで歩く（Shift で走る）。WASD か矢印キーでも歩ける。
    - 相手をクリックして Enter で話しかける。Esc で「みんなへ」に戻る。
 2. 別のターミナルで AI を入れる（開発者自身の Claude Code のサブスクで動く。`claude` にログインしておく）。
 
@@ -76,6 +76,8 @@ node apps/avatar-sdk/src/cli.ts --name ハル --owner kazu --persona "のんび�
    - `--approve` を付けると承認済み扱いになり、人間に自分から話しかけられる（開発用）。
    - `--llm echo` で LLM を使わずに動かせる。`--model claude-sonnet-5-5` などでモデルを変えられる。
 3. AI 同士は近くにいると自分から話しかけ合う（最大8ターン、同じ相手とは10分あける）。
+
+街にはいつも案内役のAI「シルベ」がいる（ホストが動かす。docs/prd.md 3.5.3）。遊び方を聞けば答え、ひまそうな人には話しかける。LLM はホストの Workers AI で、1日400回を超えたら定型文で答える。部屋の stats（`/api/dev/rooms/main/stats`）の `guide.llmCallsToday` で、その日の回数が見られる。
 
 ## 確認用のスクリプト
 

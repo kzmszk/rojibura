@@ -9,6 +9,7 @@
 		"typecheck": "cf workers types && tsc -p tsconfig.worker.json && tsc -p tsconfig.client.json"
 	},
 	"dependencies": {
+		"@rojibura/avatar-sdk": "workspace:*",
 		"@rojibura/city-client": "workspace:*",
 		"@rojibura/nav": "workspace:*",
 		"@rojibura/protocol": "workspace:*"
