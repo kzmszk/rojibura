@@ -266,6 +266,12 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean): Promise<
 		},
 	});
 	chat.insertBefore(bar.el, form);
+	// walk up to the selected person, following them if they move (also the F key)
+	const followButton = el("button", "", "🚶 そばへ行く");
+	followButton.type = "button";
+	followButton.title = "選んだ相手のそばまで歩いていきます（F キー）";
+	followButton.onclick = () => talkTo && startFollow(talkTo);
+	bar.el.prepend(followButton);
 
 	const add = (s: AvatarView["state"]) => {
 		if (relations.blocks.has(s.id)) return;
@@ -339,7 +345,10 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean): Promise<
 	conn.start();
 	usage?.restore();
 	// debug hook for tools/snap.ts on development builds (cf dev and staging)
-	if (devBuild) Object.assign(globalThis, { __rj: { avatars, scene, conn, setTarget } });
+	if (devBuild)
+		Object.assign(globalThis, {
+			__rj: { avatars, scene, conn, setTarget, startFollow: (id: string) => startFollow(id) },
+		});
 
 	// ---- input ----
 	form.onsubmit = (e) => {
@@ -405,6 +414,7 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean): Promise<
 		const k = movementKey(e);
 		if (k && document.activeElement !== input) {
 			e.preventDefault();
+			stopFollow();
 			keys.add(k);
 			steer(performance.now());
 			return;
@@ -412,7 +422,10 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean): Promise<
 		if (e.key === "Enter" && document.activeElement !== input) {
 			input.focus();
 			e.preventDefault();
+		} else if (e.key.toLowerCase() === "f" && document.activeElement !== input && talkTo) {
+			startFollow(talkTo);
 		} else if (e.key === "Escape") {
+			stopFollow();
 			setTarget(null);
 			input.blur();
 		}
@@ -448,17 +461,68 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean): Promise<
 			}
 		}
 		const p = scene.pickGround(ndc);
+		if (!p) return;
+		stopFollow();
+		if (!walkTo([p.x, p.z], e.shiftKey ? RUN_SPEED : WALK_SPEED)) showToast("そこへは行けません");
+	});
+
+	/** Walks along the navmesh to `to`. False if there is no way there. */
+	function walkTo(to: Vec2, speed: number): boolean {
 		const mine = myId ? avatars.get(myId) : undefined;
-		if (!p || !mine) return;
+		if (!mine) return false;
 		const from = poseAt(mine.state.move, conn.hostNow()).pos;
-		const path = nav.findPath(from, [p.x, p.z]);
-		if (!path || path.length < 2) return showToast("そこへは行けません");
-		const speed = e.shiftKey ? RUN_SPEED : WALK_SPEED;
+		const path = nav.findPath(from, to);
+		if (!path || path.length < 2) return false;
 		const trimmed = path.slice(0, MAX_PATH_POINTS);
 		// move right away; the host's MOVED (or CORRECT) replaces this
 		mine.setMove({ kind: "path", path: trimmed, speed, at: conn.hostNow() });
 		conn.send({ t: "MOVE_PATH", path: trimmed, speed, seq: ++seq });
-	});
+		return true;
+	}
+
+	// ---- following someone (そばへ行く) ----
+	/** Stop this close to them, plan again this often while they move, and give up after this long. */
+	const FOLLOW_STOP_M = 2;
+	const FOLLOW_REPLAN_MS = 1000;
+	const FOLLOW_MAX_MS = 60_000;
+	let following: { id: AvatarId; until: number; plannedAt: number } | null = null;
+	function startFollow(id: AvatarId): void {
+		const them = avatars.get(id);
+		if (!them || id === myId) return;
+		following = { id, until: performance.now() + FOLLOW_MAX_MS, plannedAt: 0 };
+		showToast(`${them.state.name} のそばへ向かいます`);
+	}
+	function stopFollow(): void {
+		following = null;
+	}
+	function followStep(t: number): void {
+		if (!following) return;
+		const mine = myId ? avatars.get(myId) : undefined;
+		const them = avatars.get(following.id);
+		if (!mine || !them || t > following.until) {
+			if (!them) showToast("相手を見失いました");
+			following = null;
+			return;
+		}
+		const now = conn.hostNow();
+		const here = poseAt(mine.state.move, now).pos;
+		const there = poseAt(them.state.move, now).pos;
+		const d = Math.hypot(there[0] - here[0], there[1] - here[1]);
+		if (d <= FOLLOW_STOP_M) {
+			showToast(`${them.state.name} のそばに着きました`);
+			following = null;
+			return;
+		}
+		if (t - following.plannedAt < FOLLOW_REPLAN_MS) return;
+		following.plannedAt = t;
+		// aim a little short of them, on our side; run while far, so a walking AI can be caught up with
+		const k = Math.min(1, (FOLLOW_STOP_M * 0.75) / d);
+		const goal: Vec2 = [there[0] + (here[0] - there[0]) * k, there[1] + (here[1] - there[1]) * k];
+		if (!walkTo(goal, d > 4 ? RUN_SPEED : WALK_SPEED) && !walkTo(there, d > 4 ? RUN_SPEED : WALK_SPEED)) {
+			showToast("そこへは行けません");
+			following = null;
+		}
+	}
 
 	// ---- loop ----
 	let last = performance.now();
@@ -470,6 +534,7 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean): Promise<
 		for (const v of avatars.values()) v.update(now, dt, scene);
 		const mine = myId ? avatars.get(myId) : undefined;
 		if (keys.size > 0) steer(t);
+		followStep(t);
 		// stop at the edge of the walkable area instead of walking into walls
 		if (mine?.state.move.kind === "vel") {
 			const ahead = poseAt(mine.state.move, now + 150).pos;
