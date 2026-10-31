@@ -13,10 +13,12 @@ import {
 	WALK_SPEED,
 } from "@rojibura/protocol";
 import * as THREE from "three";
+import { showAgentPage } from "./agent-page.ts";
 import { api, onApiUsage } from "./api.ts";
 import { AvatarView } from "./avatars.ts";
 import { actionBar, Relations, showAdmin } from "./moderation.ts";
 import { CityConnection, type ConnState } from "./net.ts";
+import { rememberFirstVisit, reportFirstVisit } from "./onboarding.ts";
 import { CityScene } from "./scene.ts";
 import { STYLES } from "./styles.ts";
 import { UsagePanel } from "./usage-panel.ts";
@@ -59,6 +61,7 @@ export async function mountApp(root: HTMLElement): Promise<void> {
 	style.textContent = STYLES;
 	document.head.appendChild(style);
 	root.classList.add("rj-root");
+	rememberFirstVisit();
 
 	const [meRes, health] = await Promise.all([
 		api("/api/me"),
@@ -69,8 +72,13 @@ export async function mountApp(root: HTMLElement): Promise<void> {
 		return;
 	}
 	const me = (await meRes.json()) as Me;
+	reportFirstVisit();
 	if (location.pathname === "/admin") {
 		await showAdmin(root);
+		return;
+	}
+	if (location.pathname === "/agent") {
+		showAgentPage(root);
 		return;
 	}
 	const params = new URLSearchParams(location.search);
@@ -121,7 +129,8 @@ function showLogin(root: HTMLElement, health: { dev: boolean; google: boolean })
 	box.append(el("h1", "", "rojibura"), el("p", "", "人間とAIが暮らす街"));
 	if (health.google) {
 		const google = el("a", "rj-google", "Google でログイン");
-		google.href = `/auth/google/login?redirect=${encodeURIComponent("/")}`;
+		// come back to the page they opened (the city, or /agent)
+		google.href = `/auth/google/login?redirect=${encodeURIComponent(location.pathname)}`;
 		box.append(google);
 	}
 	if (!health.dev) {
@@ -152,7 +161,8 @@ function showLogin(root: HTMLElement, health: { dev: boolean; google: boolean })
 	);
 	box.onsubmit = (e) => {
 		e.preventDefault();
-		const redirect = `/?avatar=${encodeURIComponent(avatar.value)}`;
+		const redirect =
+			location.pathname === "/agent" ? "/agent" : `/?avatar=${encodeURIComponent(avatar.value)}`;
 		location.href = `/auth/dev/login?name=${encodeURIComponent(name.value)}&redirect=${encodeURIComponent(redirect)}`;
 	};
 	root.append(box);
@@ -177,11 +187,15 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean): Promise<
 	const logout = el("a", "rj-logout", "ログアウト");
 	logout.href = "/auth/logout";
 	if (me.role === "moderator" || me.role === "admin") {
-		const admin = el("a", "rj-logout", "通報の確認");
+		const admin = el("a", "rj-logout", "管理");
 		admin.href = "/admin";
 		right.append(admin);
 	}
-	right.append(approach, logout);
+	// put your own AI in the city (T3): opens in its own tab, which keeps the AI running
+	const myAi = el("a", "rj-logout", "🤖 自分のAI");
+	myAi.href = "/agent";
+	myAi.target = "_blank";
+	right.append(myAi, approach, logout);
 	hud.append(status, right);
 	// free-tier usage for admins, moderators and development builds (docs/prd.md 2.5)
 	let usage: UsagePanel | null = null;

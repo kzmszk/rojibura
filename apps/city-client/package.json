@@ -9,6 +9,7 @@
 		"typecheck": "tsc"
 	},
 	"dependencies": {
+		"@rojibura/avatar-sdk": "workspace:*",
 		"@rojibura/nav": "workspace:*",
 		"@rojibura/protocol": "workspace:*",
 		"three": "0.187.0"

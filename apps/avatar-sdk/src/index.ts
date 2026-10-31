@@ -12,6 +12,7 @@ export {
 	decisionSchema,
 	openingPrompt,
 	parseDecision,
+	SUMMARY_SCHEMA,
 	systemPrompt,
 	userPrompt,
 } from "./core/prompt.ts";

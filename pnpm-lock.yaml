@@ -51,6 +51,9 @@ importers:
 
   apps/city-client:
     dependencies:
+      '@rojibura/avatar-sdk':
+        specifier: workspace:*
+        version: link:../avatar-sdk
       '@rojibura/nav':
         specifier: workspace:*
         version: link:../../packages/nav

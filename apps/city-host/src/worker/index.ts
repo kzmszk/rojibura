@@ -3,6 +3,7 @@
 
 import { env } from "cloudflare:workers";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { decisionSchema, SUMMARY_SCHEMA, systemPrompt, WorkersAiLLM } from "@rojibura/avatar-sdk";
 import {
 	authPayload,
 	exportPublicKey,
@@ -12,11 +13,13 @@ import {
 	USAGE_KEYS,
 	type Usage,
 	type UsageEvent,
+	usageDay,
 	verifyAuth,
 } from "@rojibura/protocol";
 import {
 	type Account,
 	addBan,
+	addTrialCall,
 	cleanName,
 	createReport,
 	ensureSchema,
@@ -26,14 +29,18 @@ import {
 	getAgent,
 	isBanned,
 	listAgents,
+	listOnboarding,
 	listReports,
 	logModAction,
+	markOnboarding,
 	registerAgent,
 	relationsOf,
 	resolveReport,
 	setAgentTrust,
+	setFirstVisit,
 	setRelation,
 	setRole,
+	trialCalls,
 	updateAccount,
 } from "./db.ts";
 import { isOpen, nextOpening, parseHours } from "./hours.ts";
@@ -54,7 +61,7 @@ import {
 	sessionCookie,
 } from "./session.ts";
 import { meteredD1 } from "./usage.ts";
-import { DEFAULT_PRESET, PRESETS } from "./world.ts";
+import { DEFAULT_PRESET, PRESETS, world } from "./world.ts";
 
 export { CityRoomDO } from "./room.ts";
 
@@ -67,6 +74,19 @@ const DB = meteredD1(env.DB, (c) => {
 	const u = requestUsage.getStore();
 	if (u) for (const k of USAGE_KEYS) if (c[k]) u[k] = (u[k] ?? 0) + (c[k] ?? 0);
 });
+/** Adds a cost to the request being handled (e.g. Workers AI neurons). */
+function addRequestCost(c: Partial<Usage>): void {
+	const u = requestUsage.getStore();
+	if (u) for (const k of USAGE_KEYS) if (c[k]) u[k] = (u[k] ?? 0) + (c[k] ?? 0);
+}
+
+/**
+ * The trial LLM for browser AIs (#24): the host's Workers AI, so people can start without an API key.
+ * Capped per person and in total (docs/prd.md 2.4: with the guide, at most about 60% of the free tier).
+ */
+const TRIAL_CALLS_PER_ACCOUNT = 60;
+const TRIAL_CALLS_PER_DAY = 600;
+
 /** Gateway actions not yet reported to the room's meter, and when this isolate last reported. */
 let unreported: UsageEvent[] = [];
 let reportedAt = 0;
@@ -82,6 +102,8 @@ function gatewayLabel(method: string, path: string): string {
 		"/api/relations": "ミュート・ブロック",
 		"/api/reports": "通報",
 		"/api/usage/official": "公式の利用状況",
+		"/api/llm": "お試しAI（Workers AI）",
+		"/api/onboarding": "初回訪問の記録",
 	};
 	return `API：${names[path] ?? `${method} ${path}`}`;
 }
@@ -254,6 +276,7 @@ async function wsGateway(request: Request, areaId: string): Promise<Response> {
 		const owner = await getAccount(DB, agent.owner_id);
 		if (!owner) return error(403, "owner not found");
 		if (await isBanned(DB, [agent.id, owner.id])) return error(403, "banned");
+		await markOnboarding(DB, owner.id, "ai_at");
 		join = {
 			areaId,
 			publicKey: agent.public_key,
@@ -271,6 +294,7 @@ async function wsGateway(request: Request, areaId: string): Promise<Response> {
 	} else {
 		const account = await currentAccount(request);
 		const refusal = await humanEntryRefusal(account);
+		if (!refusal && account) await markOnboarding(DB, account.id, "entered_at");
 		if (refusal || !account)
 			return json({ error: refusal?.reason ?? "login", ...refusal }, refusal?.reason === "login" ? 401 : 403);
 		const preset = PRESETS[url.searchParams.get("avatar") ?? ""] ?? DEFAULT_PRESET;
@@ -324,6 +348,22 @@ async function api(request: Request, url: URL): Promise<Response> {
 		const optional = env as unknown as { CF_ANALYTICS_TOKEN?: string; CF_ACCOUNT_ID?: string };
 		return json(await officialUsage(optional.CF_ANALYTICS_TOKEN, optional.CF_ACCOUNT_ID));
 	}
+	if (path === "/api/onboarding" && request.method === "POST") {
+		const account = await currentAccount(request);
+		if (!account) return error(401, "login required");
+		// how long ago this browser first opened the site (a duration, so the browser's clock does not matter)
+		const body = (await request.json().catch(() => null)) as { sinceFirstVisitMs?: unknown } | null;
+		const since = Number(body?.sinceFirstVisitMs);
+		if (Number.isFinite(since) && since >= 0 && since < 86_400_000)
+			await setFirstVisit(DB, account.id, Date.now() - since);
+		return json({ ok: true });
+	}
+	if (path === "/api/mod/onboarding") {
+		const account = await currentAccount(request);
+		if (!account || !isModerator(account)) return error(403, "moderators only");
+		return json(await listOnboarding(DB));
+	}
+	if (path === "/api/llm") return trialLlm(request);
 	if (path === "/api/entry") {
 		const refusal = await humanEntryRefusal(await currentAccount(request));
 		return json(refusal ? { ok: false, ...refusal } : { ok: true });
@@ -544,6 +584,46 @@ async function api(request: Request, url: URL): Promise<Response> {
 
 	if (path === "/api/dev/selftest" && devAllowed(request, url)) return devSelftest();
 	return error(404, "not found");
+}
+
+/** GET: how many trial calls are left today. POST: one LLM call for one of the caller's browser AIs. */
+async function trialLlm(request: Request): Promise<Response> {
+	const account = await currentAccount(request);
+	if (!account) return error(401, "login required");
+	const day = usageDay(Date.now());
+	const used = await trialCalls(DB, account.id, day);
+	const remaining = Math.max(
+		0,
+		Math.min(TRIAL_CALLS_PER_ACCOUNT - used.mine, TRIAL_CALLS_PER_DAY - used.all),
+	);
+	if (request.method !== "POST") return json({ remaining, limit: TRIAL_CALLS_PER_ACCOUNT });
+	const b = (await request.json().catch(() => null)) as {
+		agentId?: string;
+		kind?: string;
+		personality?: string;
+		user?: string;
+		landmarkIds?: string[];
+	} | null;
+	const agent = b?.agentId ? await getAgent(DB, b.agentId) : null;
+	if (!agent || agent.owner_id !== account.id || agent.runtime !== "browser" || agent.trust === "suspended")
+		return error(403, "not your browser AI");
+	if (b?.kind !== "decision" && b?.kind !== "summary") return error(400, "bad kind");
+	const user = typeof b.user === "string" ? b.user.slice(0, 4000) : "";
+	if (!user) return error(400, "bad prompt");
+	if (remaining <= 0) return json({ error: "limit", remaining: 0 }, 429);
+	if (!env.AI) return error(503, "Workers AI is not available");
+	// the system prompt and the output schema are built here: the endpoint only plays a resident of the city
+	const landmarkIds = world.landmarks.map((l) => l.id).filter((id) => b.landmarkIds?.includes(id) ?? true);
+	const llm = new WorkersAiLLM(env.AI);
+	const result = await llm.complete({
+		system: systemPrompt({ name: agent.name, personality: String(b.personality ?? "").slice(0, 400) }),
+		user,
+		schema: b.kind === "summary" ? SUMMARY_SCHEMA : decisionSchema(landmarkIds),
+	});
+	const neurons = llm.lastUsage?.neurons ?? 0;
+	addRequestCost({ neurons });
+	await addTrialCall(DB, account.id, day, neurons);
+	return json({ result, remaining: remaining - 1 });
 }
 
 async function auth(request: Request, url: URL): Promise<Response> {

@@ -2,6 +2,7 @@
 
 import type { AvatarId } from "@rojibura/protocol";
 import { api } from "./api.ts";
+import { onboardingTable } from "./onboarding.ts";
 
 function el<K extends keyof HTMLElementTagNameMap>(
 	tag: K,
@@ -143,7 +144,7 @@ interface ReportView {
 export async function showAdmin(root: HTMLElement): Promise<void> {
 	root.classList.add("rj-admin");
 	const page = el("div", "rj-admin-page");
-	page.append(el("h1", "", "通報の確認"), el("a", "", "← 街に戻る"));
+	page.append(el("h1", "", "管理"), el("a", "", "← 街に戻る"));
 	(page.lastChild as HTMLAnchorElement).href = "/";
 	root.append(page);
 	const r = await api("/api/mod/reports");
@@ -151,6 +152,7 @@ export async function showAdmin(root: HTMLElement): Promise<void> {
 		page.append(el("p", "", "モデレーターだけが見られます。"));
 		return;
 	}
+	page.append(await onboardingTable(), el("h2", "", "通報"));
 	const reports = (await r.json()) as ReportView[];
 	if (reports.length === 0) page.append(el("p", "", "未対応の通報はありません。"));
 	const label = Object.fromEntries(REASONS);

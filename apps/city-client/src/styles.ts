@@ -1,4 +1,5 @@
 export const STYLES = `
+[hidden] { display: none !important; }
 :root { color-scheme: light; font-family: system-ui, "Hiragino Sans", "Noto Sans JP", sans-serif; }
 html, body { margin: 0; height: 100%; overflow: hidden; background: #bfd6e8; }
 .rj-root { position: fixed; inset: 0; }
@@ -53,6 +54,16 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #bfd6e8; }
 .rj-excerpt { font-size: 13px; background: #f6f6f8; border-radius: 6px; padding: 6px 8px; overflow-wrap: anywhere; }
 .rj-note-text { color: #444; overflow-wrap: anywhere; }
 .rj-report-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.rj-admin-page button { font: inherit; padding: 6px 12px; border-radius: 8px; border: 1px solid #bbc; background: #fff; color: #222; cursor: pointer; }
+.rj-admin-page button[type="submit"] { background: #2f6fae; border-color: #2f6fae; color: #fff; }
+.rj-admin-page input:disabled { background: #f0f1f3; color: #555; }
+.rj-agent-log { max-height: 360px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.rj-report textarea, .rj-report input { font: inherit; padding: 8px; border-radius: 6px; border: 1px solid #ccd; }
+.rj-onboarding { border-collapse: collapse; font-size: 13px; width: 100%; }
+.rj-onboarding th, .rj-onboarding td { text-align: left; padding: 4px 6px; border-bottom: 1px solid #eee; font-variant-numeric: tabular-nums; }
+.rj-good { color: #1a7f37; font-weight: 600; }
+.rj-bad { color: #c62828; font-weight: 600; }
+.rj-dim { color: #aaa; }
 .rj-usage { display: none; position: fixed; top: 52px; right: 12px; width: 380px; max-width: calc(100vw - 24px); max-height: calc(100vh - 200px); overflow-y: auto; box-sizing: border-box; padding: 10px 12px; border-radius: 10px; background: rgba(255,255,255,.94); color: #222; font-size: 12px; box-shadow: 0 2px 10px rgba(0,0,0,.15); pointer-events: auto; z-index: 5; }
 .rj-usage.show { display: block; }
 .rj-usage-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 13px; }

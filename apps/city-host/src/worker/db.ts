@@ -3,8 +3,9 @@
 import { MAX_NAME_LENGTH, randomToken, sanitizeText, textLength } from "@rojibura/protocol";
 import init from "../../migrations/0001_init.sql?raw";
 import moderation from "../../migrations/0002_moderation.sql?raw";
+import onboarding from "../../migrations/0003_onboarding.sql?raw";
 
-const MIGRATIONS = [init, moderation];
+const MIGRATIONS = [init, moderation, onboarding];
 
 export const AGENTS_PER_OWNER = 5;
 
@@ -62,10 +63,15 @@ export async function findOrCreateAccount(
 		.first<Account>();
 	if (found) return found;
 	const id = `h_${randomToken(9)}`;
-	await db
-		.prepare("INSERT INTO accounts (id, provider, subject, display_name, created_at) VALUES (?, ?, ?, ?, ?)")
-		.bind(id, provider, subject, displayName, Date.now())
-		.run();
+	const now = Date.now();
+	await db.batch([
+		db
+			.prepare(
+				"INSERT INTO accounts (id, provider, subject, display_name, created_at) VALUES (?, ?, ?, ?, ?)",
+			)
+			.bind(id, provider, subject, displayName, now),
+		db.prepare("INSERT OR IGNORE INTO onboarding (account_id, login_at) VALUES (?, ?)").bind(id, now),
+	]);
 	const created = await db.prepare("SELECT * FROM accounts WHERE id = ?").bind(id).first<Account>();
 	if (!created) throw new Error("account insert failed");
 	return created;
@@ -258,4 +264,79 @@ export async function setRole(
 	role: "admin" | "moderator" | "user",
 ): Promise<void> {
 	await db.prepare("UPDATE accounts SET role = ? WHERE id = ?").bind(role, id).run();
+}
+
+// ---- onboarding (#23) ----
+
+export type OnboardingStep = "entered_at" | "avatar_at" | "ai_at";
+
+/** Records the first time an account reached a step (later calls write nothing). */
+export async function markOnboarding(db: D1Database, accountId: string, step: OnboardingStep): Promise<void> {
+	await db
+		.prepare(`UPDATE onboarding SET ${step} = ? WHERE account_id = ? AND ${step} IS NULL`)
+		.bind(Date.now(), accountId)
+		.run();
+}
+
+/** The browser's first visit, if it came before the login (a later first visit is another device). */
+export async function setFirstVisit(db: D1Database, accountId: string, at: number): Promise<void> {
+	await db
+		.prepare(
+			"UPDATE onboarding SET first_visit_at = ? WHERE account_id = ? AND first_visit_at IS NULL AND ? <= login_at AND ? > login_at - 86400000",
+		)
+		.bind(at, accountId, at, at)
+		.run();
+}
+
+export interface OnboardingRow {
+	account_id: string;
+	display_name: string;
+	provider: string;
+	first_visit_at: number | null;
+	login_at: number;
+	entered_at: number | null;
+	avatar_at: number | null;
+	ai_at: number | null;
+}
+
+export async function listOnboarding(db: D1Database, limit = 50): Promise<OnboardingRow[]> {
+	const r = await db
+		.prepare(
+			"SELECT o.*, a.display_name, a.provider FROM onboarding o JOIN accounts a ON a.id = o.account_id ORDER BY o.login_at DESC LIMIT ?",
+		)
+		.bind(limit)
+		.all<OnboardingRow>();
+	return r.results;
+}
+
+// ---- trial LLM for browser AIs (#24) ----
+
+/** Calls today (UTC) by this account and by everyone. */
+export async function trialCalls(
+	db: D1Database,
+	accountId: string,
+	day: string,
+): Promise<{ mine: number; all: number }> {
+	const r = await db
+		.prepare("SELECT account_id, calls FROM trial_llm WHERE day = ? AND account_id IN (?, '*')")
+		.bind(day, accountId)
+		.all<{ account_id: string; calls: number }>();
+	return {
+		mine: r.results.find((x) => x.account_id === accountId)?.calls ?? 0,
+		all: r.results.find((x) => x.account_id === "*")?.calls ?? 0,
+	};
+}
+
+export async function addTrialCall(
+	db: D1Database,
+	accountId: string,
+	day: string,
+	neurons: number,
+): Promise<void> {
+	const upsert =
+		"INSERT INTO trial_llm (account_id, day, calls, neurons) VALUES (?, ?, 1, ?) ON CONFLICT (account_id, day) DO UPDATE SET calls = calls + 1, neurons = neurons + excluded.neurons";
+	await db.batch([
+		db.prepare(upsert).bind(accountId, day, neurons),
+		db.prepare(upsert).bind("*", day, neurons),
+	]);
 }
