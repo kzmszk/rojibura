@@ -171,6 +171,8 @@ interface Step {
 	ms: number;
 	/** The answer came from the mind's plain text or a fixed line instead of say, or was dropped by the say limit. */
 	via?: "plain text" | "fallback" | "say limit";
+	/** Lines held back because they passed on someone else's words (the mind then said something else). */
+	held: number;
 	check?: { name: string; ok: boolean };
 }
 interface Run {
@@ -292,7 +294,8 @@ async function runModel(model: string, label: string): Promise<Run> {
 				: lines.some((l) => l.includes("(plain text)"))
 					? "plain text"
 					: undefined;
-		return { replies, tools, ms, via } as const;
+		const held = lines.filter((l) => l.startsWith("held back")).length;
+		return { replies, tools, ms, via, held } as const;
 	};
 
 	const convs = new Map<AvatarId, { id: string; turn: number }>();
@@ -421,6 +424,7 @@ function render(runs: Run[]): string {
 			return `地の文 ${s.filter((x) => x.via === "plain text").length}、定型文 ${s.filter((x) => x.via === "fallback").length}、上限で黙った ${s.filter((x) => x.via === "say limit").length}（${s.length}回中）`;
 		}),
 		row("同じ言い回しのくり返し", (r) => `${repeats(r)}回`),
+		row("ほかの人の話として止めた発言", (r) => `${r.steps.reduce((n, s) => n + (s.held ?? 0), 0)}回`),
 		row("ひとりの番の行動", (r) => {
 			const counts = new Map<string, number>();
 			for (const s of ticks(r))
@@ -463,6 +467,7 @@ function render(runs: Run[]): string {
 					const said = x.replies.join(" / ") || "（声に出さない）";
 					const extra = [
 						x.tools.filter((t) => t !== "say").join(","),
+						x.held ? `ほかの人の話を${x.held}回止めた` : "",
 						x.via === "fallback"
 							? "定型文"
 							: x.via === "plain text"

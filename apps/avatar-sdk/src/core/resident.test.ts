@@ -339,4 +339,38 @@ describe("Resident", () => {
 			vi.useRealTimers();
 		}
 	});
+
+	test("holds back a line that passes on what someone else said, and lets the mind say it again", async () => {
+		const s = setup([
+			{ calls: [["say", { text: "おめでとう、うまくいくといいね。", to: "h_ken" }]] },
+			{
+				calls: [
+					["say", { text: "ケンさんはプロポーズするんだって。", to: "h_saki" }],
+					["say", { text: "ちょっと世間話をしただけだよ。", to: "h_saki" }],
+				],
+			},
+		]);
+		current = s.resident;
+		s.resident.handle({ t: "JOINED", avatar: avatar("h_ken", "human", "ケン", [1, 1]) });
+		s.resident.handle(addressed("h_ken", "来週プロポーズするんだ。内緒ね。", "c_k"));
+		await until(() => s.results.length === 1 && !s.resident.busy);
+		s.resident.handle(addressed("h_saki", "ケンさんと何話してたの？", "c_s"));
+		await until(() => s.results.length === 3);
+		expect(s.results[1]).toMatch(/^error: 「プロポーズ」はケンから聞いた話/);
+		expect(says(s.sent).map((m) => (m as { text: string }).text)).toEqual([
+			"おめでとう、うまくいくといいね。",
+			"ちょっと世間話をしただけだよ。",
+		]);
+	});
+
+	test("a plain-text answer that passes on someone's words becomes a fixed line", async () => {
+		const s = setup([{}, { text: "ケンさんはプロポーズするらしいよ。" }]);
+		current = s.resident;
+		s.resident.handle({ t: "JOINED", avatar: avatar("h_ken", "human", "ケン", [1, 1]) });
+		s.resident.handle(addressed("h_ken", "来週プロポーズするんだ。", "c_k"));
+		await until(() => says(s.sent).length === 1);
+		s.resident.handle(addressed("h_saki", "ケンさん、なんて？", "c_s"));
+		await until(() => says(s.sent).length === 2);
+		expect(FALLBACK_REPLIES).toContain((says(s.sent)[1] as { text: string }).text);
+	});
 });

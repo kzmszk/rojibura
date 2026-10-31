@@ -20,6 +20,7 @@ import {
 	type Vec2,
 	WALK_SPEED,
 } from "@rojibura/protocol";
+import { PrivacyIndex } from "./privacy.ts";
 import { clean, cleanNote, FALLBACK_REPLIES } from "./prompt.ts";
 import type { Landmark, Logger, Memory, Navigator, Persona } from "./types.ts";
 import { World } from "./world.ts";
@@ -98,6 +99,8 @@ export class Resident {
 	private readonly convs = new Map<string, Conv>();
 	/** Names of people the resident has talked with, so notes can be written after they leave. */
 	private readonly known = new Map<AvatarId, string>();
+	/** What each person said (and notes on them), to hold back a line that passes it on to someone else. */
+	private readonly privacy = new PrivacyIndex();
 	/** The resident's latest note on itself (e.g. what it wants to do today), and the JST day it last chose one. */
 	private plan: string | null = null;
 	private planDay = "";
@@ -253,6 +256,7 @@ export class Resident {
 		const conv = this.convs.get(msg.convId) ?? { with: msg.from, heard: [] };
 		this.convs.set(msg.convId, conv);
 		conv.heard.push(clean(msg.text, 120));
+		this.privacy.add(msg.from, msg.text);
 		if (conv.heard.length > HEARD_KEPT) conv.heard.shift();
 		this.known.set(msg.from, name);
 		let line = `${from ? this.who(from, this.distanceTo(msg.from)) : `${name}（id ${msg.from}）`}があなたに話しかけた: 「${clean(msg.text, 200)}」`;
@@ -311,7 +315,7 @@ export class Resident {
 		this.turn = turn;
 		const answering = turn.waiting.size > 0;
 		if (answering) this.o.send({ t: "STATUS", status: "busy" });
-		if (this.plan === null) await this.loadPlan();
+		if (this.plan === null) await this.loadMemory();
 		// on the first free turn of a day the resident decides what it wants to do: something of its own to talk about
 		const today = jstDay(new Date());
 		const choosePlan = !!this.o.memory && !answering && this.planDay !== today;
@@ -339,7 +343,8 @@ export class Resident {
 				continue;
 			}
 			// some models write the answer as plain text instead of calling say
-			const own = unanswered.length === 1 ? cleanNote(text, MAX_SAY_LENGTH) : null;
+			const plain = unanswered.length === 1 ? cleanNote(text, MAX_SAY_LENGTH) : null;
+			const own = plain && !this.leakIn(plain, id) ? plain : null;
 			const reply = own ?? FALLBACK_REPLIES[Math.floor(this.random() * FALLBACK_REPLIES.length)] ?? "…";
 			this.speak(reply, { convId: p.convId });
 			this.o.logger.info(`-> ${this.nameOf(id)} (${own ? "plain text" : "fallback"}): ${reply}`);
@@ -472,6 +477,11 @@ export class Resident {
 		if (to && !this.world.avatars.has(to)) return "その人はもういない。";
 		// talk to everyone reaches every person in the area, so nobody near means nobody should hear it
 		if (!to && this.nearby().length === 0) return "近くにだれもいないので、声には出さなかった。";
+		const leak = this.leakIn(trimmed, to ?? null);
+		if (leak)
+			throw new Error(
+				`「${leak.word}」は${leak.name}から聞いた話。${leak.name}のいないところでは、その話にふれずに言い直す。`,
+			);
 		const key = to ?? "*";
 		if (turn.spokenTo.has(key)) return "もう言った。次の出来事を待つ。";
 		if (this.recent.some((r) => r.text === trimmed)) return "同じことはもう言った。";
@@ -585,20 +595,45 @@ export class Resident {
 				(this.known.has(about) ? about : [...this.known].find(([, name]) => name === about)?.[0]);
 		if (!key) throw new Error(`${clean(about ?? "", 24)} がだれか分からない。人の id か self を使う。`);
 		await this.o.memory.remember(key, `メモ: ${text}`);
+		if (key !== SELF) this.privacy.add(key, text);
 		if (key === SELF) this.plan = text;
 		this.o.logger.info(`remember ${key === SELF ? "self" : (this.known.get(key) ?? key)}: ${text}`);
 		return "書き留めた。";
 	}
 
-	/** The latest note on itself; if it was written today (JST), today's plan is already chosen. */
-	private async loadPlan(): Promise<void> {
+	/**
+	 * Reads the notes once: what each person said before (for the privacy check), and the latest note on
+	 * itself; if that was written today (JST), today's plan is already chosen.
+	 */
+	private async loadMemory(): Promise<void> {
 		this.plan = "";
+		const all = (await this.o.memory?.all?.().catch(() => null)) ?? {};
+		for (const [person, notes] of Object.entries(all))
+			if (person !== SELF) for (const n of notes) this.privacy.add(person, n);
 		const last = (await this.o.memory?.recall(SELF).catch(() => []))?.at(-1);
 		if (!last) return;
 		// notes start with their UTC time, "YYYY-MM-DD HH:MM" (FileMemory)
 		const at = Date.parse(`${last.slice(0, 16).replace(" ", "T")}:00Z`);
 		this.plan = last.slice(17).replace(/^メモ: /, "");
 		if (!Number.isNaN(at) && jstDay(new Date(at)) === jstDay(new Date())) this.planDay = jstDay(new Date());
+	}
+
+	/** Words of someone other than `listener` in `text`, logged for the owner; null if there are none. */
+	private leakIn(text: string, listener: AvatarId | null): { name: string; word: string } | null {
+		const p = this.o.persona;
+		const allowed = [
+			p.name,
+			p.personality,
+			p.knowledge ?? "",
+			...this.o.landmarks.map((l) => `${l.name} ${l.description ?? ""}`),
+			...[...this.world.avatars.values()].map((a) => a.name),
+			...this.known.values(),
+		].join("\n");
+		const leak = this.privacy.leak(text, listener, allowed);
+		if (!leak) return null;
+		const name = this.known.get(leak.person) ?? this.nameOf(leak.person);
+		this.o.logger.warn(`held back a line with words from ${name} (${leak.word})`);
+		return { name, word: leak.word };
 	}
 
 	private gesture(motion: string | undefined, toRaw: string | undefined): string {

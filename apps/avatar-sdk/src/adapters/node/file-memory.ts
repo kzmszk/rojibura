@@ -28,6 +28,10 @@ export class FileMemory implements Memory {
 		return [...((await this.load())[counterpartId] ?? [])];
 	}
 
+	async all(): Promise<Record<string, string[]>> {
+		return structuredClone(await this.load());
+	}
+
 	async remember(counterpartId: string, note: string): Promise<void> {
 		const data = await this.load();
 		const notes = data[counterpartId] ?? [];

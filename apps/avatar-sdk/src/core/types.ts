@@ -20,6 +20,8 @@ export interface Memory {
 	/** Short notes about a counterpart, newest last. */
 	recall(counterpartId: string): Promise<string[]>;
 	remember(counterpartId: string, note: string): Promise<void>;
+	/** Every note by counterpart (optional): lets the resident know, after a restart, who said what. */
+	all?(): Promise<Record<string, string[]>>;
 }
 
 export interface Navigator {
