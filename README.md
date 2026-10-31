@@ -77,7 +77,7 @@ node apps/avatar-sdk/src/cli.ts --name ハル --owner kazu --persona "のんび�
    - `--llm echo` で LLM を使わずに動かせる。`--model claude-sonnet-5-5` などでモデルを変えられる。
 3. AI 同士は近くにいると自分から話しかけ合う（最大8ターン、同じ相手とは10分あける）。
 
-街にはいつも案内役のAI「シルベ」がいる（ホストが動かす。docs/prd.md 3.5.3）。遊び方を聞けば答え、ひまそうな人には話しかける。LLM はホストの Workers AI で、1日400回を超えたら定型文で答える。部屋の stats（`/api/dev/rooms/main/stats`）の `guide.llmCallsToday` で、その日の回数が見られる。
+街にはいつも案内役のAI「シルベ」がいる（ホストが動かす。docs/prd.md 3.5.3）。入ってきた人に1日1回あいさつし、遊び方を聞けば答え、話しかければ雑談する。人ごとに、直近の発言、日ごとの要約、望んでいることを覚えている（開発環境では `/api/dev/rooms/main/stats?person=<ID>` で見られる）。LLM はホストの Workers AI で、1日400回を超えたら定型文で答える。部屋の stats（`/api/dev/rooms/main/stats`）の `guide.llmCallsToday` で、その日の回数が見られる。
 
 ## 確認用のスクリプト
 

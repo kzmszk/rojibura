@@ -4,7 +4,7 @@
 import { Client, devLogin, WS_BASE } from "./lib.ts";
 
 const [name, ...lines] = process.argv.slice(3);
-const c = new Client(`${WS_BASE}/ws/area/main`, await devLogin("つばさ"));
+const c = new Client(`${WS_BASE}/ws/area/main`, await devLogin(process.env.RJ_NAME ?? "つばさ"));
 await c.opened;
 const welcome = await c.waitFor("WELCOME");
 console.log("here:", welcome.avatars.map((a) => `${a.name}(${a.kind})`).join(", "));

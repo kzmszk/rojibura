@@ -482,7 +482,7 @@ async function api(request: Request, url: URL): Promise<Response> {
 
 	const stats = path.match(/^\/api\/dev\/rooms\/([a-z0-9-]{1,32})\/stats$/);
 	if (stats?.[1] && devAllowed(request, url))
-		return env.ROOM.getByName(stats[1]).fetch(new Request("https://room/stats"));
+		return env.ROOM.getByName(stats[1]).fetch(new Request(`https://room/stats${url.search}`));
 
 	const approve = path.match(/^\/api\/dev\/agents\/(a_[A-Za-z0-9_-]+)\/approve$/);
 	if (approve?.[1] && request.method === "POST" && devAllowed(request, url)) {

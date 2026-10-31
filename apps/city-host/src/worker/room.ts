@@ -15,7 +15,8 @@ import {
 	verifyAuth,
 } from "@rojibura/protocol";
 import { relationsOf } from "./db.ts";
-import { Guide, type GuideSaved } from "./guide.ts";
+import { GUIDE_NAME, Guide, type GuideSaved } from "./guide.ts";
+import { GuideMemory } from "./guide-memory.ts";
 import { CLOSING_NOTICE_MS, closingTime, describeHours, type Hours, isOpen, parseHours } from "./hours.ts";
 import {
 	type ChatLine,
@@ -58,6 +59,7 @@ export type RoomCommand =
 export class CityRoomDO extends DurableObject<Env> {
 	private readonly core: RoomCore<Conn>;
 	private readonly guide: Guide<Conn>;
+	private readonly guideMemory: GuideMemory;
 	private flushed = { inbound: 0, connects: 0, says: 0, rejectedMoves: 0 };
 	private noticeSentFor = 0;
 	private chatFlushedAt = 0;
@@ -78,6 +80,7 @@ export class CityRoomDO extends DurableObject<Env> {
 			Date.now,
 			() => randomToken(9),
 		);
+		this.guideMemory = new GuideMemory(ctx.storage.kv, GUIDE_NAME);
 		this.guide = new Guide<Conn>({
 			core: this.core,
 			conn: GUIDE_CONN,
@@ -86,6 +89,7 @@ export class CityRoomDO extends DurableObject<Env> {
 			llm: env.AI ? new WorkersAiLLM(env.AI) : null,
 			load: () => ctx.storage.kv.get<GuideSaved>("guide"),
 			save: (s) => ctx.storage.kv.put("guide", s),
+			memory: this.guideMemory,
 			hoursText: describeHours(this.hours),
 		});
 		ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(HEARTBEAT_PING, HEARTBEAT_PONG));
@@ -112,7 +116,11 @@ export class CityRoomDO extends DurableObject<Env> {
 
 	async fetch(request: Request): Promise<Response> {
 		const url = new URL(request.url);
-		if (url.pathname === "/stats") return Response.json(this.statsSnapshot());
+		if (url.pathname === "/stats") {
+			// development: what the guide remembers about one person (?person=h_...)
+			const person = url.searchParams.get("person");
+			return Response.json(person ? (this.guideMemory.get(person) ?? null) : this.statsSnapshot());
+		}
 		if (url.pathname === "/command" && request.method === "POST")
 			return Response.json(await this.command((await request.json()) as RoomCommand));
 		if (request.headers.get("Upgrade") !== "websocket")

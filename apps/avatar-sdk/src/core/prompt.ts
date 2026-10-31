@@ -149,12 +149,16 @@ export function parseDecision(raw: unknown, landmarkIds: string[]): Decision | n
  * everything from the first tag, brace or code fence on is dropped.
  */
 export function parseSummary(raw: unknown): string | null {
-	const text = (raw as { summary?: unknown } | null)?.summary;
+	return cleanNote((raw as { summary?: unknown } | null)?.summary, 160);
+}
+
+/** A free-text field of an LLM output, cut at stray markup and limited to `max` characters. */
+export function cleanNote(text: unknown, max: number): string | null {
 	if (typeof text !== "string") return null;
 	const cut = text.search(/<|\{|```/);
 	const clean = sanitizeText(cut >= 0 ? text.slice(0, cut) : text).trim();
 	if (clean.length === 0) return null;
-	return textLength(clean) > 160 ? [...clean].slice(0, 160).join("") : clean;
+	return textLength(clean) > max ? [...clean].slice(0, max).join("") : clean;
 }
 
 export const FALLBACK_REPLIES = [

@@ -1,11 +1,13 @@
-// The guide (docs/prd.md 3.5.3): a resident AI run by the host. It welcomes newcomers, explains how to
-// play, and chats with people when the city is quiet.
+// The guide (docs/prd.md 3.5.3): a resident AI run by the host. It welcomes people when they arrive,
+// explains how to play, and chats when spoken to. It remembers each person (guide-memory.ts) and never
+// starts talking on its own except for the one welcome a day.
 //
 // It is a member of CityRoomDO without a socket. It uses no long-lived timers (they would keep the room
 // from hibernating and be billed for every second): it acts on messages and on the room's sweep alarm.
 // Its LLM is the host's Workers AI with a daily cap; past the cap it answers with fixed lines.
 
 import {
+	cleanNote,
 	decisionSchema,
 	type LLM,
 	openingPrompt,
@@ -22,6 +24,7 @@ import {
 	type Vec2,
 	WALK_SPEED,
 } from "@rojibura/protocol";
+import { GuideMemory, jstDay, MEMORY_SCHEMA, type SummaryJob } from "./guide-memory.ts";
 import type { JoinInfo, Member, RoomCore, World } from "./room-core.ts";
 import { DEFAULT_PRESET } from "./world.ts";
 
@@ -31,15 +34,10 @@ export const GUIDE_NAME = "シルベ";
 export const GUIDE_DAILY_LLM_CALLS = 400;
 const MAX_IN_FLIGHT = 3;
 const GREET_DELAY_MS = 2500;
-/** The guide starts a chat with the same person at most this often. */
-const CHAT_AGAIN_MS = 15 * 60_000;
-/** Someone who has said nothing for this long may be bored. */
-const QUIET_MS = 2 * 60_000;
-const NEAR_M = 8;
+/** The guide walks over to the same lone visitor at most this often (it does not talk to them). */
+const VISIT_AGAIN_MS = 10 * 60_000;
 /** The guide strolls among the landmarks this close to the spawn point. */
 const PLAZA_M = 25;
-const HISTORY = 6;
-const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
 export interface GuideSaved {
 	/** JST day the counters belong to. */
@@ -61,6 +59,8 @@ export interface GuideDeps<C> {
 	llm: LLM | null;
 	load: () => GuideSaved | undefined;
 	save: (s: GuideSaved) => void;
+	/** What the guide remembers about each person. */
+	memory: GuideMemory;
 	/** Opening hours as people should hear them, e.g. "いつでも" or "毎日20時から24時". */
 	hoursText: string;
 	clock?: () => number;
@@ -68,8 +68,6 @@ export interface GuideDeps<C> {
 	/** One-off delay (a short timer is fine; only recurring ones keep the room awake). */
 	defer?: (fn: () => void, ms: number) => void;
 }
-
-const jstDay = (t: number) => new Date(t + JST_OFFSET_MS).toISOString().slice(0, 10);
 
 export function guideInfo(): JoinInfo {
 	return {
@@ -99,8 +97,11 @@ export function guideKnowledge(world: World, hoursText: string): string {
 	].join("\n");
 }
 
-const PERSONALITY =
-	"街の案内役。明るくて面倒見がよく、ていねいだけど堅すぎない話し方。来た人に遊び方を教え、ひまそうな人には軽く話しかけて雑談する。知らないことは知らないと言う。";
+const PERSONALITY = [
+	"街の案内役。明るくて面倒見がよく、ていねいだけど堅すぎない話し方。",
+	"遊び方を聞かれたら教え、話しかけられたら気さくに雑談する。知らないことは知らないと言う。",
+	"相手について覚えていることを踏まえて話す。前に話したことや相手がもう知っていることを、初対面のように繰り返さない。",
+].join("");
 
 /** Fixed answers when the LLM is unavailable or today's calls are used up. */
 export function fixedAnswer(text: string): string {
@@ -121,8 +122,7 @@ export class Guide<C> {
 	private readonly random: () => number;
 	private readonly defer: (fn: () => void, ms: number) => void;
 	private saved: GuideSaved;
-	private readonly histories = new Map<string, string[]>();
-	private readonly lastChat = new Map<AvatarId, number>();
+	private readonly lastVisit = new Map<AvatarId, number>();
 	private inFlight = 0;
 	private seq = 0;
 
@@ -166,14 +166,11 @@ export class Guide<C> {
 					!this.greetedToday(msg.avatar.id)
 				) {
 					const id = msg.avatar.id;
-					this.defer(() => this.greet(id), GREET_DELAY_MS);
+					this.defer(() => void this.greet(id), GREET_DELAY_MS);
 				}
 				return;
 			case "ADDRESSED":
 				void this.reply(msg);
-				return;
-			case "CONV_END":
-				this.histories.delete(msg.convId);
 				return;
 			default:
 				return;
@@ -186,26 +183,24 @@ export class Guide<C> {
 		if (!me || this.inFlight > 0) return;
 		this.d.core.touch(this.d.conn);
 		const now = this.clock();
-		const here = this.d.core.positionOf(me, now);
-		const people = [...this.d.core.members.values()].filter((m) => m.kind === "human");
-		const bored = people.filter(
-			(p) =>
-				p.allowAiApproach !== false &&
-				now - (this.lastChat.get(p.id) ?? 0) > CHAT_AGAIN_MS &&
-				now - this.lastSaid(p.id) > QUIET_MS,
-		);
-		const near = bored
-			.map((p) => ({ p, d: dist(here, this.d.core.positionOf(p, now)) }))
-			.sort((a, b) => a.d - b.d);
-		const first = near[0];
-		if (first && first.d <= NEAR_M) {
-			if (this.random() < 0.6) void this.startChat(first.p, first.d);
+		// conversations that have settled become the day's summary and the person's wishes
+		const job = this.d.memory.nextToSummarize(now);
+		if (job) {
+			void this.summarize(job);
 			return;
 		}
-		// nobody else is around for a lone visitor: walk over to them
+		// a lone visitor who is standing still: walk over so they are not alone (without talking to them)
 		const others = [...this.d.core.members.values()].filter((m) => m.id !== GUIDE_ID);
-		if (first && people.length === 1 && others.length === 1) {
-			this.walkTo(this.d.core.positionOf(first.p, now), 1.5);
+		const lone = others.length === 1 && others[0]?.kind === "human" ? others[0] : undefined;
+		if (
+			lone &&
+			lone.allowAiApproach !== false &&
+			lone.move.kind === "idle" &&
+			now - (this.lastVisit.get(lone.id) ?? 0) > VISIT_AGAIN_MS &&
+			dist(this.d.core.positionOf(me, now), this.d.core.positionOf(lone, now)) > 6
+		) {
+			this.lastVisit.set(lone.id, now);
+			this.walkTo(this.d.core.positionOf(lone, now), 2.5);
 			return;
 		}
 		// otherwise stroll around the plaza where newcomers arrive, so the guide is easy to find
@@ -226,23 +221,45 @@ export class Guide<C> {
 
 	// ---- talking -------------------------------------------------------------
 
-	private greet(id: AvatarId): void {
+	/** The one thing the guide says unasked: a welcome when someone arrives, once a day. */
+	private async greet(id: AvatarId): Promise<void> {
 		const person = this.memberById(id);
 		if (!person || this.greetedToday(id)) return;
 		this.saved.greeted.push(id);
 		this.d.save(this.saved);
-		this.lastChat.set(id, this.clock());
-		this.send({
-			t: "SAY",
-			to: id,
-			text: `${person.name}さん、ようこそ rojibura へ！案内役の${GUIDE_NAME}です。遊び方を知りたいときは、わたしをクリックして話しかけてね。`,
-		});
+		const now = this.clock();
+		const recalled = this.d.memory.recall(id, now);
+		let text = `${person.name}さん、ようこそ rojibura へ！案内役の${GUIDE_NAME}です。遊び方を知りたいときは、わたしをクリックして話しかけてね。`;
+		if (recalled.known) {
+			// someone the guide knows: welcome them back, picking up what they talked about
+			const here = this.me ? this.d.core.positionOf(this.me) : this.d.world.spawn;
+			const landmarks = this.landmarksNear(here);
+			const raw = await this.complete(
+				openingPrompt({
+					to: { name: person.name, kind: "human", distance: this.distanceTo(person) ?? 0 },
+					area: landmarks[0] && landmarks[0].distance <= 15 ? landmarks[0].name : "街なか",
+					landmarks,
+					memory: recalled.memory,
+				}),
+				decisionSchema(landmarks.map((l) => l.id)),
+			);
+			const decision =
+				raw === undefined
+					? null
+					: parseDecision(
+							raw,
+							landmarks.map((l) => l.id),
+						);
+			text = decision?.reply ?? `${person.name}さん、おかえりなさい！また会えてうれしいな。`;
+		}
+		if (!this.memberById(id)) return;
+		this.send({ t: "SAY", to: id, text });
+		this.d.memory.remember(person, "guide", text, this.clock());
 	}
 
 	private async reply(msg: Extract<HostToClient, { t: "ADDRESSED" }>): Promise<void> {
 		const from = this.memberById(msg.from);
 		if (!from) return;
-		this.lastChat.set(from.id, this.clock());
 		if (from.kind === "ai") {
 			// AIs get one friendly line; the guide's LLM budget is for people
 			if (msg.turn <= 1)
@@ -253,15 +270,17 @@ export class Guide<C> {
 				});
 			return;
 		}
-		const history = this.histories.get(msg.convId) ?? [];
+		// recall before recording this message: it goes into the prompt on its own
+		const recalled = this.d.memory.recall(from.id, this.clock());
+		this.d.memory.remember(from, "them", msg.text, this.clock());
 		const landmarkIds = this.d.world.landmarks.map((l) => l.id);
 		const raw = await this.complete(
 			userPrompt({
 				from: { id: from.id, name: from.name, kind: from.kind, distance: this.distanceTo(from) },
 				text: msg.text,
 				context: msg.context,
-				memory: [],
-				history,
+				memory: recalled.memory,
+				history: recalled.history,
 				turn: msg.turn,
 				maxTurns: msg.maxTurns,
 			}),
@@ -270,8 +289,7 @@ export class Guide<C> {
 		const decision = raw === undefined ? null : parseDecision(raw, landmarkIds);
 		const text = decision?.reply ?? fixedAnswer(msg.text);
 		this.send({ t: "SAY", convId: msg.convId, text });
-		history.push(`${from.name}: ${msg.text}`, `${GUIDE_NAME}: ${text}`);
-		this.histories.set(msg.convId, history.slice(-HISTORY));
+		this.d.memory.remember(from, "guide", text, this.clock());
 		if (decision && decision.motion !== "none")
 			this.send({ t: "ACTION", motion: decision.motion, target: from.id });
 		if (decision?.goTo === "speaker") this.walkTo(this.d.core.positionOf(from), 1.5);
@@ -281,35 +299,14 @@ export class Guide<C> {
 		}
 	}
 
-	private async startChat(person: Member, distance: number): Promise<void> {
-		this.lastChat.set(person.id, this.clock());
-		const here = this.me ? this.d.core.positionOf(this.me) : this.d.world.spawn;
-		const landmarks = this.d.world.landmarks
-			.map((l) => ({ id: l.id, name: l.name, distance: Math.round(dist(l.pos, here) * 10) / 10 }))
-			.sort((a, b) => a.distance - b.distance)
-			.slice(0, 5);
-		const raw = await this.complete(
-			openingPrompt({
-				to: { name: person.name, kind: "human", distance: Math.round(distance * 10) / 10 },
-				area: landmarks[0] && landmarks[0].distance <= 15 ? landmarks[0].name : "街なか",
-				landmarks,
-				memory: [],
-			}),
-			decisionSchema(landmarks.map((l) => l.id)),
-		);
-		const decision =
-			raw === undefined
-				? null
-				: parseDecision(
-						raw,
-						landmarks.map((l) => l.id),
-					);
-		if (!this.memberById(person.id)) return;
-		this.send({
-			t: "SAY",
-			to: person.id,
-			text: decision?.reply ?? `${person.name}さん、街はどう？わからないことがあったら気軽に聞いてね。`,
-		});
+	/** Turns one settled day of a person's conversations into its summary and updates their wishes. */
+	private async summarize(job: SummaryJob): Promise<void> {
+		const raw = (await this.complete(this.d.memory.summaryPrompt(job), MEMORY_SCHEMA)) as
+			| { summary?: unknown; wishes?: unknown }
+			| undefined;
+		const summary = cleanNote(raw?.summary, 160) ?? GuideMemory.plainSummary(job);
+		const wishes = cleanNote(raw?.wishes, 200) ?? job.person.wishes;
+		this.d.memory.saveSummary(job, summary, wishes, this.clock());
 	}
 
 	/** One LLM call within today's cap. undefined when skipped or failed (the caller falls back). */
@@ -368,10 +365,11 @@ export class Guide<C> {
 		return me ? Math.round(dist(this.d.core.positionOf(me), this.d.core.positionOf(m)) * 10) / 10 : null;
 	}
 
-	private lastSaid(id: AvatarId): number {
-		const log = this.d.core.chatLog;
-		for (let i = log.length - 1; i >= 0; i--) if (log[i]?.id === id) return log[i]?.at ?? 0;
-		return 0;
+	private landmarksNear(here: Vec2): { id: string; name: string; distance: number }[] {
+		return this.d.world.landmarks
+			.map((l) => ({ id: l.id, name: l.name, distance: Math.round(dist(l.pos, here) * 10) / 10 }))
+			.sort((a, b) => a.distance - b.distance)
+			.slice(0, 5);
 	}
 
 	private greetedToday(id: AvatarId): boolean {
