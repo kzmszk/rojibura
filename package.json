@@ -8,8 +8,10 @@
 	},
 	"scripts": {
 		"dev": "pnpm --filter @rojibura/city-host dev",
+		"dev:free": "pnpm --filter @rojibura/city-host dev:free",
 		"build": "pnpm --filter @rojibura/city-host build",
 		"build:city": "node tools/city-build/src/build.ts assets/test-city/test_city.glb assets/test-city",
+		"build:models": "node tools/city-build/src/model-cli.ts builtins",
 		"test": "vitest run",
 		"typecheck": "pnpm -r --no-bail typecheck",
 		"lint": "biome check .",

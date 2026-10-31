@@ -4,6 +4,7 @@
 	"type": "module",
 	"scripts": {
 		"dev": "cf dev",
+		"dev:free": "RJ_FREE_PLAY=1 cf dev",
 		"build": "cf build",
 		"deploy": "cf deploy",
 		"typecheck": "cf workers types && tsc -p tsconfig.worker.json && tsc -p tsconfig.client.json"

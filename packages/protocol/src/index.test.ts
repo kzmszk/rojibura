@@ -3,11 +3,13 @@ import {
 	authPayload,
 	exportPrivateKey,
 	exportPublicKey,
+	facing,
 	generateAgentKeyPair,
 	importPrivateKey,
 	MAX_PATH_POINTS,
 	MAX_SAY_LENGTH,
 	type MoveState,
+	modelUrl,
 	parseClientMessage,
 	poseAt,
 	positionAt,
@@ -143,5 +145,75 @@ describe("Ed25519 agent auth", () => {
 		expect(
 			await verifyAuth(await exportPublicKey(kp.publicKey), payload, await signAuth(restored, payload)),
 		).toBe(true);
+	});
+});
+
+describe("BUILD and UNBUILD (free play, docs/prd.md 3.7)", () => {
+	const parse = (v: unknown) => parseClientMessage(JSON.stringify(v));
+
+	test("anchors, normalised colours and rotations, sanitised labels", () => {
+		expect(
+			parse({
+				t: "BUILD",
+				model: "house",
+				at: { landmark: "cafe" },
+				color: "Red",
+				rot: -90,
+				label: "ハルの\n家",
+				ref: "r-1",
+			}),
+		).toEqual({
+			ok: true,
+			msg: {
+				t: "BUILD",
+				model: "house",
+				at: { landmark: "cafe" },
+				color: "#c8473d",
+				rot: 270,
+				label: "ハルの 家",
+				ref: "r-1",
+			},
+		});
+		expect(
+			parse({ t: "BUILD", model: "m_0123456789abcdef", at: { avatar: "a_x1", offset: [2, -1] } }).ok,
+		).toBe(true);
+		expect(
+			parse({ t: "BUILD", model: "block", at: { pos: [1, 2] }, size: [2, 3, 0.5], color: "#abc" }),
+		).toEqual({
+			ok: true,
+			msg: { t: "BUILD", model: "block", at: { pos: [1, 2] }, size: [2, 3, 0.5], color: "#aabbcc" },
+		});
+		expect(parse({ t: "UNBUILD", id: "b_abc", ref: "x" })).toEqual({
+			ok: true,
+			msg: { t: "UNBUILD", id: "b_abc", ref: "x" },
+		});
+	});
+
+	test("rejects what does not fit", () => {
+		const bad = [
+			{ t: "BUILD", model: "castle", at: { pos: [0, 0] } },
+			{ t: "BUILD", model: "m_123", at: { pos: [0, 0] } },
+			{ t: "BUILD", model: "house", at: {} },
+			{ t: "BUILD", model: "house", at: { pos: [0, 0], landmark: "cafe" } },
+			{ t: "BUILD", model: "house", at: { pos: [0, 0], offset: [1, 1] } },
+			{ t: "BUILD", model: "house", at: { landmark: "cafe", offset: [100, 0] } },
+			{ t: "BUILD", model: "house", at: { avatar: "x_1" } },
+			{ t: "BUILD", model: "house", at: { pos: [0, 0] }, scale: 10 },
+			{ t: "BUILD", model: "block", at: { pos: [0, 0] }, size: [0, 1, 1] },
+			{ t: "BUILD", model: "block", at: { pos: [0, 0] }, size: [1, 100, 1] },
+			{ t: "BUILD", model: "house", at: { pos: [0, 0] }, color: "chartreuse" },
+			{ t: "BUILD", model: "house", at: { pos: [0, 0] }, label: "あ".repeat(25) },
+			{ t: "BUILD", model: "house", at: { pos: [0, 0] }, ref: "has space" },
+			{ t: "UNBUILD", id: "x" },
+		];
+		for (const v of bad) expect(parse(v).ok, JSON.stringify(v)).toBe(false);
+	});
+
+	test("helpers", () => {
+		expect(modelUrl("house", "glb")).toBe("/models/house.glb");
+		expect(modelUrl("m_0123456789abcdef", "nav.json")).toBe("/api/models/m_0123456789abcdef.nav.json");
+		expect(facing([0, 0], [0, 5])).toBe(0);
+		expect(facing([0, 0], [5, 0])).toBe(90);
+		expect(facing([0, 0], [-5, 0])).toBe(270);
 	});
 });

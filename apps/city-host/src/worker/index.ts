@@ -44,6 +44,7 @@ import {
 	updateAccount,
 } from "./db.ts";
 import { isOpen, nextOpening, parseHours } from "./hours.ts";
+import { freePlayOn, isLocalHost } from "./modes.ts";
 import { officialUsage } from "./official.ts";
 import { authUrl, exchangeCode, googleKeys, newPkce, verifyIdToken } from "./oidc.ts";
 import type { JoinRequest, RoomCommand } from "./room.ts";
@@ -66,6 +67,8 @@ import { DEFAULT_PRESET, PRESETS, world } from "./world.ts";
 export { CityRoomDO } from "./room.ts";
 
 const DEV = env.DEV_AUTH === "1";
+/** Free play (docs/prd.md 3.7): only in `pnpm dev:free`, never in staging or production. */
+const FREE_PLAY = freePlayOn(env);
 
 // ---- free-tier usage of the gateway (docs/prd.md 2.5) ----
 /** The cost of the request being handled (AsyncLocalStorage keeps concurrent requests apart). */
@@ -104,6 +107,7 @@ function gatewayLabel(method: string, path: string): string {
 		"/api/usage/official": "公式の利用状況",
 		"/api/llm": "お試しAI（Workers AI）",
 		"/api/onboarding": "初回訪問の記録",
+		"/api/models": method === "POST" ? "モデルの登録" : "モデルの一覧",
 	};
 	return `API：${names[path] ?? `${method} ${path}`}`;
 }
@@ -119,8 +123,8 @@ function withUsageHeader(response: Response, cost: Partial<Usage>, label: string
 	r.headers.set("X-RJ-Usage-Label", encodeURIComponent(label));
 	return r;
 }
-/** Parsed at startup: a malformed OPEN_HOURS fails the deploy instead of going live. */
-const HOURS = parseHours(env.OPEN_HOURS);
+/** Parsed at startup: a malformed OPEN_HOURS fails the deploy instead of going live. Free play is always open. */
+const HOURS = FREE_PLAY ? "always" : parseHours(env.OPEN_HOURS);
 const AREA_RE = /^[a-z0-9-]{1,32}$/;
 /** Areas that moderation commands are sent to. */
 const AREAS = ["main"];
@@ -336,6 +340,7 @@ async function api(request: Request, url: URL): Promise<Response> {
 		return json({
 			ok: true,
 			dev: DEV,
+			freePlay: FREE_PLAY,
 			google: googleConfigured(),
 			hours: env.OPEN_HOURS,
 			open: isOpen(Date.now(), HOURS),
@@ -369,6 +374,7 @@ async function api(request: Request, url: URL): Promise<Response> {
 		return json(refusal ? { ok: false, ...refusal } : { ok: true });
 	}
 	if (path === "/api/presets") return json(Object.values(PRESETS));
+	if (path === "/api/models" || path.startsWith("/api/models/")) return models(request, path);
 
 	if (path === "/api/me" && request.method === "PATCH") {
 		const account = await currentAccount(request);
@@ -567,9 +573,15 @@ async function api(request: Request, url: URL): Promise<Response> {
 		} catch {
 			return error(400, "bad public key");
 		}
-		const r = await registerAgent(DB, account.id, { name, publicKey, runtime });
+		const r = await registerAgent(DB, account.id, { name, publicKey, runtime }, FREE_PLAY ? null : undefined);
 		if (typeof r === "string") return error(409, r);
 		return json({ id: r.id, name: r.name, trust: r.trust }, 201);
+	}
+
+	const builds = path.match(/^\/api\/dev\/rooms\/([a-z0-9-]{1,32})\/builds$/);
+	if (builds?.[1] && request.method === "DELETE" && FREE_PLAY && devAllowed(request, url)) {
+		const account = await currentAccount(request);
+		return roomCommand(builds[1], { op: "clear_builds", by: account?.id ?? "h_dev" });
 	}
 
 	const stats = path.match(/^\/api\/dev\/rooms\/([a-z0-9-]{1,32})\/stats$/);
@@ -584,6 +596,33 @@ async function api(request: Request, url: URL): Promise<Response> {
 
 	if (path === "/api/dev/selftest" && devAllowed(request, url)) return devSelftest();
 	return error(404, "not found");
+}
+
+/**
+ * Models to build with (free play, docs/prd.md 3.7). GET /api/models lists them; POST registers one
+ * (multipart from the model CLI, logged in); GET /api/models/<id>.glb|png|nav.json serves a registered one.
+ * They are stored in the main area's Durable Object.
+ */
+async function models(request: Request, path: string): Promise<Response> {
+	if (!FREE_PLAY) return error(403, "building is only in free play");
+	const room = env.ROOM.getByName(AREAS[0] ?? "main");
+	const inner = `https://room${path.slice("/api".length)}`;
+	if (request.method === "POST" && path === "/api/models") {
+		const account = await currentAccount(request);
+		if (!account) return error(401, "login required");
+		return room.fetch(
+			new Request(inner, {
+				method: "POST",
+				headers: {
+					"Content-Type": request.headers.get("Content-Type") ?? "",
+					"X-RJ-Owner": JSON.stringify({ id: account.id, name: account.display_name }),
+				},
+				body: request.body,
+			}),
+		);
+	}
+	if (request.method !== "GET") return error(405, "method not allowed");
+	return room.fetch(new Request(inner));
 }
 
 /** GET: how many trial calls are left today. POST: one LLM call for one of the caller's browser AIs. */
@@ -646,6 +685,8 @@ async function auth(request: Request, url: URL): Promise<Response> {
 }
 
 async function route(request: Request, url: URL): Promise<Response> {
+	// free play answers only on this machine, even if a development build were reachable from elsewhere
+	if (FREE_PLAY && !isLocalHost(url.hostname)) return error(403, "free play is local only");
 	if (DEV) await ensureSchema(DB);
 	if (url.pathname.startsWith("/api/")) return api(request, url);
 	if (url.pathname.startsWith("/auth/")) return auth(request, url);

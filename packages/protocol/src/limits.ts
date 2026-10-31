@@ -45,3 +45,36 @@ export const AI_REPLY_MIN_INTERVAL_MS = 3_000;
 export const CONTEXT_AVATAR_RADIUS = 15; // m
 export const CONTEXT_LANDMARK_RADIUS = 40; // m
 export const CONTEXT_MAX_ITEMS = 8;
+
+// ---- building in free play (docs/prd.md 3.7) ----
+
+/**
+ * Models every city has: Blender models in assets/models (tools/city-build makes them), except "block",
+ * a box of any size. Registered models have IDs "m_" + 16 hex digits.
+ */
+export const BUILTIN_MODELS = ["block", "house", "tower", "tree", "bench", "lamp", "deck", "bridge"] as const;
+/** Colour names a BUILD may use instead of "#rrggbb" (handy for AIs). */
+export const BUILD_COLORS: Readonly<Record<string, string>> = {
+	white: "#f2efe8",
+	black: "#2e2e2e",
+	gray: "#8d8d8d",
+	red: "#c8473d",
+	orange: "#e08b3e",
+	yellow: "#e9c84c",
+	green: "#5e9b52",
+	blue: "#4b7bbb",
+	purple: "#8b62b2",
+	pink: "#e79ab6",
+	brown: "#8b5d3d",
+	beige: "#dbc8a6",
+};
+/** Width and depth of a block (m). */
+export const BLOCK_SIZE_MIN = 0.2;
+export const BLOCK_SIZE_MAX = 30;
+export const BLOCK_HEIGHT_MAX = 50;
+/** Uniform scale of a model. Models people can walk on are always 1 (steps and slopes would change). */
+export const BUILD_SCALE_MIN = 0.25;
+export const BUILD_SCALE_MAX = 4;
+export const BUILD_LABEL_MAX = 24;
+/** An offset from the anchor may be at most this far (m). */
+export const BUILD_OFFSET_MAX = 50;

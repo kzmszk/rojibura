@@ -13,6 +13,11 @@ export class CityScene {
 	readonly controls: OrbitControls;
 	/** Meshes that count as ground for clicks and for snapping feet. */
 	private ground: THREE.Object3D[] = [];
+	/**
+	 * Height of the walkable area at (x, z) from the navmesh, when known: feet are found by looking down from
+	 * a little above it, so roofs and treetops overhead are not taken for the ground (docs/prd.md 3.7).
+	 */
+	heightHint: ((x: number, z: number) => number | null) | null = null;
 	private readonly down = new THREE.Raycaster();
 	private readonly root: HTMLElement;
 
@@ -68,18 +73,29 @@ export class CityScene {
 		this.scene.add(gltf.scene);
 	}
 
+	/** Things people can walk on that were built (decks, bridges) count as ground too. */
+	addGround(o: THREE.Object3D): void {
+		if (!this.ground.includes(o)) this.ground.push(o);
+	}
+
+	removeGround(o: THREE.Object3D): void {
+		this.ground = this.ground.filter((g) => g !== o);
+	}
+
 	/** Height of the walkable surface under (x, z), or null. */
 	heightAt(x: number, z: number): number | null {
-		this.down.set(new THREE.Vector3(x, 30, z), new THREE.Vector3(0, -1, 0));
-		const hit = this.down.intersectObjects(this.ground, false)[0];
+		const hint = this.heightHint?.(x, z) ?? null;
+		this.down.set(new THREE.Vector3(x, hint === null ? 30 : hint + 2, z), new THREE.Vector3(0, -1, 0));
+		// colliders of built models are hidden but still in the scene
+		const hit = this.down.intersectObjects(this.ground, true).find((h) => h.object.visible);
 		return hit ? hit.point.y : null;
 	}
 
-	/** Ground point under the pointer, or null. */
-	pickGround(ndc: THREE.Vector2): THREE.Vector3 | null {
+	/** Ground point under the pointer, or null. Objects in `also` (builds) stop the ray too. */
+	pickGround(ndc: THREE.Vector2, also: THREE.Object3D[] = []): THREE.Vector3 | null {
 		const ray = new THREE.Raycaster();
 		ray.setFromCamera(ndc, this.camera);
-		return ray.intersectObjects(this.ground, false)[0]?.point ?? null;
+		return ray.intersectObjects([...this.ground, ...also], true).find((h) => h.object.visible)?.point ?? null;
 	}
 
 	/** Puts the camera behind and above `target` (on first join). */

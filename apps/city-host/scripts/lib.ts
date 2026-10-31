@@ -2,7 +2,8 @@
 
 import { type ClientToHost, encode, type HostToClient, parseHostMessage } from "@rojibura/protocol";
 
-export const BASE = process.argv[2] ?? "http://localhost:5173";
+/** The first argument that is not a flag (scripts may take flags such as --clear). */
+export const BASE = process.argv.slice(2).find((a) => !a.startsWith("--")) ?? "http://localhost:5173";
 export const WS_BASE = BASE.replace(/^http/, "ws");
 
 /** Dev endpoints on a deployed dev build (staging) need the token from apps/city-host/.dev.vars.staging. */

@@ -1,10 +1,25 @@
 // The walkable ground and landmarks of the test city, from tools/city-build output (docs/prd.md 2.3).
 
-import { type LandmarksData, NavMesh, validatePath } from "@rojibura/nav";
-import type { Vec2 } from "@rojibura/protocol";
+import {
+	applyBuilds,
+	type LandmarksData,
+	type ModelNav,
+	NavMesh,
+	type NavMeshData,
+	validatePath,
+} from "@rojibura/nav";
+import type { ModelId, ModelInfo, Vec2 } from "@rojibura/protocol";
+import benchNav from "../../../../assets/models/bench.nav.json";
+import bridgeNav from "../../../../assets/models/bridge.nav.json";
+import deckNav from "../../../../assets/models/deck.nav.json";
+import houseNav from "../../../../assets/models/house.nav.json";
+import modelIndex from "../../../../assets/models/index.json";
+import lampNav from "../../../../assets/models/lamp.nav.json";
+import towerNav from "../../../../assets/models/tower.nav.json";
+import treeNav from "../../../../assets/models/tree.nav.json";
 import landmarksJson from "../../../../assets/test-city/landmarks.json";
 import navmeshJson from "../../../../assets/test-city/navmesh.json";
-import type { Walkable, World } from "./room-core.ts";
+import type { BuildWorld, Walkable, World } from "./room-core.ts";
 
 /** Segments are sampled this densely so a long segment cannot cut across an obstacle. */
 const SAMPLE_SPACING = 0.25;
@@ -12,11 +27,38 @@ const SAMPLE_SPACING = 0.25;
 export const navmesh = NavMesh.fromJSON(navmeshJson);
 const city = landmarksJson as LandmarksData;
 
-const walk: Walkable = {
-	isWalkable: (p) => navmesh.isWalkable(p),
-	validatePath: (path) => validatePath(navmesh, path, { sampleSpacing: SAMPLE_SPACING }).ok,
-	closestPoint: (p) => navmesh.closestPoint(p),
+export function walkFor(mesh: NavMesh): Walkable {
+	return {
+		isWalkable: (p) => mesh.isWalkable(p),
+		validatePath: (path) => validatePath(mesh, path, { sampleSpacing: SAMPLE_SPACING }).ok,
+		closestPoint: (p) => mesh.closestPoint(p),
+		findPath: (from, to) => mesh.findPath(from, to),
+	};
+}
+const walk = walkFor(navmesh);
+
+// ---- building in free play (docs/prd.md 3.7) ----
+
+/** The built-in models (assets/models, made by `pnpm build:models`); "block" is drawn in code. */
+export const BUILTIN_MODELS = modelIndex as ModelInfo[];
+const BUILTIN_NAVS: Record<string, ModelNav> = {
+	bench: benchNav as unknown as ModelNav,
+	bridge: bridgeNav as unknown as ModelNav,
+	deck: deckNav as unknown as ModelNav,
+	house: houseNav as unknown as ModelNav,
+	lamp: lampNav as unknown as ModelNav,
+	tower: towerNav as unknown as ModelNav,
+	tree: treeNav as unknown as ModelNav,
 };
+
+/** Building on the test city, with built-in models and the registered ones `registered` knows. */
+export function buildWorld(registered: (id: ModelId) => ModelNav | undefined): BuildWorld {
+	return {
+		model: (id) => BUILTIN_NAVS[id] ?? registered(id),
+		groundHeight: (p) => navmesh.heightAt(p),
+		walkWith: (placed) => walkFor(NavMesh.fromJSON(applyBuilds(navmeshJson as NavMeshData, placed))),
+	};
+}
 
 export const world: World = {
 	walk,

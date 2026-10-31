@@ -1,5 +1,34 @@
 // Navigation shared by the client, the AI runtimes and the host (docs/prd.md 2.3). Pure TypeScript:
 // no Wasm, no Node APIs, no DOM.
+export {
+	applyBuilds,
+	boxNav,
+	claimed,
+	GROUND_Y,
+	MODEL_LIMITS,
+	type ModelNav,
+	NAV_MARGIN,
+	occupied,
+	type PlacedModel,
+	toWorld,
+	WALK_RING,
+	walkRegion,
+} from "./builds.ts";
+export {
+	area2,
+	assemble,
+	carveObstacles,
+	ccw,
+	convexHull,
+	expand,
+	intersect,
+	overlaps,
+	type Piece,
+	piecesOf,
+	subtract,
+	type Vec3,
+	xz,
+} from "./carve.ts";
 export type { Landmark, LandmarksData, SpawnPoint } from "./landmarks.ts";
 export {
 	NAVMESH_VERSION,

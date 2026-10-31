@@ -87,4 +87,24 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #bfd6e8; }
 .rj-chip-neurons { background: #f3e8ff; }
 .rj-chip-sqlRowsWritten, .rj-chip-d1RowsWritten { background: #ffefe0; }
 .rj-chip-workerRequests, .rj-chip-doRequests { background: #e5f2ff; }
+.rj-free { pointer-events: auto; font-size: 12px; padding: 6px 10px; border-radius: 8px; background: rgba(255, 236, 200, .92); color: #6a4300; }
+.rj-build-label { font-size: 12px; padding: 2px 8px; border-radius: 6px; background: rgba(255,255,255,.85); color: #333; border: 1px solid #c9b48a; white-space: nowrap; }
+.rj-build { position: fixed; top: 52px; right: 12px; width: 300px; max-width: calc(100vw - 24px); max-height: calc(100vh - 220px); overflow-y: auto; box-sizing: border-box;
+  display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: 10px; background: rgba(255,255,255,.95); color: #222; font-size: 13px;
+  box-shadow: 0 2px 10px rgba(0,0,0,.15); pointer-events: auto; z-index: 5; }
+.rj-build.removing { outline: 2px solid #d64545; }
+.rj-build-head { display: flex; justify-content: space-between; align-items: center; }
+.rj-build-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.rj-build button { font: inherit; padding: 4px 10px; border-radius: 8px; border: 1px solid #bbc; background: #fff; color: #222; cursor: pointer; }
+.rj-build button.on { background: #2f6fae; border-color: #2f6fae; color: #fff; }
+.rj-build input { font: inherit; padding: 5px 8px; border-radius: 6px; border: 1px solid #bbc; min-width: 0; }
+.rj-build-row input[type=number] { width: 56px; }
+.rj-build-models { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.rj-build .rj-build-model { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px; font-size: 11px; }
+.rj-build-model img { width: 52px; height: 52px; object-fit: contain; }
+.rj-build-block { display: grid; place-items: center; width: 52px; height: 52px; font-size: 30px; color: #b59a6e; }
+.rj-build-colors { display: flex; flex-wrap: wrap; gap: 5px; }
+.rj-build .rj-swatch { width: 22px; height: 22px; padding: 0; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 0 1px #aab; }
+.rj-build .rj-swatch.on { box-shadow: 0 0 0 2px #2f6fae; }
+.rj-build-hint { font-size: 11px; color: #777; }
 `;

@@ -1,5 +1,10 @@
 import { bindings, defineConfig, exports } from "cf/config";
+import { freePlayFlag } from "./src/worker/free-play-flag.ts";
 import * as entrypoint from "./src/worker/index.ts" with { type: "cf-worker" };
+
+/** `pnpm dev:free` sets RJ_FREE_PLAY=1 (the config runs in Node; the Worker's types have no `process`). */
+const requestedFreePlay = (globalThis as { process?: { env: Record<string, string | undefined> } }).process
+	?.env.RJ_FREE_PLAY;
 
 // docs/prd.md 2.1: one Worker serves the client (static assets), the API and the WebSocket gateway.
 // Modes (docs/prd.md part 5): development (`cf dev`), staging (`cf deploy --mode staging`, a separate
@@ -40,6 +45,9 @@ export default defineConfig(({ mode }) => {
 				// Outside localhost the dev endpoints also require DEV_TOKEN (staging sets it).
 				DEV_AUTH: bindings.text(dev || staging ? "1" : "0"),
 				DEV_TOKEN: bindings.secret(),
+				// Free play (docs/prd.md 3.7): no free-tier limits, and building. Only `pnpm dev:free`
+				// (development mode); "0" in staging and production whatever RJ_FREE_PLAY says.
+				FREE_PLAY: bindings.text(freePlayFlag(mode, requestedFreePlay)),
 				// Optional, set with `cf workers secrets update` and not declared here so deploys work without
 				// them: CF_ANALYTICS_TOKEN (Account Analytics: Read) and CF_ACCOUNT_ID, for Cloudflare's own
 				// usage numbers on the dashboard (official.ts). Without them it shows the host's estimates.

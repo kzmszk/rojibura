@@ -1,7 +1,15 @@
 // Runtime validation of messages from participants (docs/prd.md 3.2.3).
 // Checks shape and protocol limits only; spatial checks (walkable area, position) are the host's job.
 
+import { isBuildId, isModelId, normalizeColor, normalizeRot } from "./build.ts";
 import {
+	BLOCK_HEIGHT_MAX,
+	BLOCK_SIZE_MAX,
+	BLOCK_SIZE_MIN,
+	BUILD_LABEL_MAX,
+	BUILD_OFFSET_MAX,
+	BUILD_SCALE_MAX,
+	BUILD_SCALE_MIN,
 	INTEREST_RADIUS_MAX,
 	INTEREST_RADIUS_MIN,
 	MAX_MESSAGE_BYTES,
@@ -9,7 +17,7 @@ import {
 	MAX_SAY_LENGTH,
 	MAX_SPEED,
 } from "./limits.ts";
-import type { ClientToHost, HostToClient, Motion, Status, Vec2 } from "./types.ts";
+import type { BuildAt, ClientToHost, HostToClient, Motion, Status, Vec2 } from "./types.ts";
 
 export type Parsed<T> = { ok: true; msg: T } | { ok: false; error: string };
 
@@ -18,6 +26,8 @@ const STATUSES: readonly Status[] = ["active", "busy", "resting"];
 const COORD_LIMIT = 10_000;
 const ID_RE = /^[ha]_[A-Za-z0-9_-]{1,64}$/;
 const CONV_RE = /^c_[A-Za-z0-9_-]{1,64}$/;
+const REF_RE = /^[A-Za-z0-9_-]{1,32}$/;
+const LANDMARK_RE = /^[A-Za-z0-9_-]{1,32}$/;
 
 type Obj = Record<string, unknown>;
 
@@ -132,9 +142,82 @@ export function parseClientMessage(raw: string | ArrayBuffer): Parsed<ClientToHo
 		case "WATCH_USAGE":
 			if (typeof v.on !== "boolean") return fail("bad on");
 			return { ok: true, msg: { t: "WATCH_USAGE", on: v.on } };
+		case "BUILD":
+			return parseBuild(v);
+		case "UNBUILD": {
+			if (!isBuildId(v.id)) return fail("bad id");
+			if (v.ref !== undefined && !(typeof v.ref === "string" && REF_RE.test(v.ref))) return fail("bad ref");
+			const msg: ClientToHost = { t: "UNBUILD", id: v.id };
+			if (v.ref !== undefined) msg.ref = v.ref as string;
+			return { ok: true, msg };
+		}
 		default:
 			return fail("unknown type");
 	}
+}
+
+function parseBuildAt(v: unknown): BuildAt | null {
+	if (!isObj(v)) return null;
+	const keys = ["pos", "landmark", "avatar", "build"].filter((k) => v[k] !== undefined);
+	if (keys.length !== 1) return null;
+	let offset: Vec2 | undefined;
+	if (v.offset !== undefined) {
+		const o = v.offset;
+		if (!isVec2(o) || Math.abs(o[0]) > BUILD_OFFSET_MAX || Math.abs(o[1]) > BUILD_OFFSET_MAX) return null;
+		offset = [o[0], o[1]];
+	}
+	const withOffset = <T extends object>(at: T) => (offset ? { ...at, offset } : at);
+	if (v.pos !== undefined)
+		return isVec2(v.pos) && offset === undefined ? { pos: [v.pos[0], v.pos[1]] } : null;
+	if (v.landmark !== undefined)
+		return typeof v.landmark === "string" && LANDMARK_RE.test(v.landmark)
+			? withOffset({ landmark: v.landmark })
+			: null;
+	if (v.avatar !== undefined) return isAvatarId(v.avatar) ? withOffset({ avatar: v.avatar }) : null;
+	return isBuildId(v.build) ? withOffset({ build: v.build }) : null;
+}
+
+function parseBuild(v: Obj): Parsed<ClientToHost> {
+	if (!isModelId(v.model)) return fail("bad model");
+	const at = parseBuildAt(v.at);
+	if (!at) return fail("bad at");
+	const msg: Extract<ClientToHost, { t: "BUILD" }> = { t: "BUILD", model: v.model, at };
+	if (v.rot !== undefined) {
+		if (!isNum(v.rot, -3600, 3600)) return fail("bad rot");
+		msg.rot = normalizeRot(v.rot);
+	}
+	if (v.scale !== undefined) {
+		if (!isNum(v.scale, BUILD_SCALE_MIN, BUILD_SCALE_MAX)) return fail("bad scale");
+		msg.scale = v.scale;
+	}
+	if (v.size !== undefined) {
+		const z = v.size;
+		if (
+			!Array.isArray(z) ||
+			z.length !== 3 ||
+			!isNum(z[0], BLOCK_SIZE_MIN, BLOCK_SIZE_MAX) ||
+			!isNum(z[1], BLOCK_SIZE_MIN, BLOCK_HEIGHT_MAX) ||
+			!isNum(z[2], BLOCK_SIZE_MIN, BLOCK_SIZE_MAX)
+		)
+			return fail("bad size");
+		msg.size = [z[0], z[1], z[2]];
+	}
+	if (v.color !== undefined) {
+		const color = typeof v.color === "string" ? normalizeColor(v.color) : null;
+		if (!color) return fail("bad color");
+		msg.color = color;
+	}
+	if (v.label !== undefined) {
+		if (typeof v.label !== "string") return fail("bad label");
+		const label = sanitizeText(v.label);
+		if (textLength(label) > BUILD_LABEL_MAX) return fail("bad label length");
+		if (label) msg.label = label;
+	}
+	if (v.ref !== undefined) {
+		if (typeof v.ref !== "string" || !REF_RE.test(v.ref)) return fail("bad ref");
+		msg.ref = v.ref;
+	}
+	return { ok: true, msg };
 }
 
 /**

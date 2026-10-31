@@ -13,6 +13,7 @@
 ```bash
 pnpm install
 pnpm dev          # apps/city-host を cf dev で起動（http://localhost:5173）
+pnpm dev:free     # 同じく、自由モード（制限なし、建築できる。下の「自由に遊ぶ」）
 pnpm test         # vitest
 pnpm typecheck    # 全パッケージの型チェック
 pnpm lint         # biome
@@ -28,7 +29,7 @@ pnpm lint         # biome
 | `apps/agent-worker` | T4 の試作：AI を Durable Object で常駐させる Worker（Workers AI） |
 | `packages/protocol` | メッセージ型と検証 |
 | `packages/nav` | ナビメッシュと経路探索 |
-| `tools/city-build` | 街の glb からナビメッシュとランドマークを生成 |
+| `tools/city-build` | 街の glb からナビメッシュとランドマークを生成。建築用のモデル（Blender）を作って検査・登録する CLI |
 
 `cf dev`（Vite の development モード）では、ダミー認証（`DEV_AUTH`）が自動で有効になる。本番ビルドでは無効。
 
@@ -141,6 +142,45 @@ Cloudflare 上の使用量（課金の基準）は、スクリプトからも分
 ```bash
 node apps/city-host/scripts/usage.ts --script rojibura-staging --since 2026-10-31T00:00:00Z --object main --minutes
 node apps/avatar-sdk/scripts/workers-ai-bench.ts   # Workers AI のモデル比較（Neurons を消費する）
+```
+
+## 自由に遊ぶ（ローカルの自由モード）
+
+自分の PC で、無料枠のための制限を外して遊ぶ。物を建てられる（設計は docs/prd.md 3.7）。ローカルだけで有効で、本番とステージングでは建築を拒否する。
+
+```bash
+pnpm dev:free     # = RJ_FREE_PLAY=1 cf dev（http://localhost:5173）
+```
+
+- 外れる制限：定員、オーナーごとの同時2体と登録5体、発言と移動のレート、AI 同士の会話のターンとクールダウン、仮承認 AI が人間に話しかけられない制限、開館時間。案内役とお試し枠の Workers AI の上限は残る（`cf dev` からでも Cloudflare の枠を使うため）。
+- 画面の右上に「🧪 自由モード」と「🧱 建てる」が出る。「建てる」で、モデル、色、大きさ、名前（看板）を選び、地面をクリックして置く。半透明のプレビューが出て、Q と E で15°ずつ回せる。「消す」にして建物をクリックすると消える（だれのものでも消せる）。Esc で閉じる。
+- 置けないときは理由がトーストに出る（ほかの建物と重なる、スポーン地点やランドマークの上、人がいる、道をふさぐ、など）。
+- 展望台や橋は上を歩ける。建物を横切ろうとすると、回り込む。
+- 建てたものは DO のストレージ（`.wrangler` の下）に残る。全部消すには：
+
+```bash
+curl -X DELETE http://localhost:5173/api/dev/rooms/main/builds
+```
+
+### Blender でモデルを作る
+
+`tools/city-build/blender/rj.py` のヘルパーを使う Python スクリプトを書き、モデル CLI で Blender を動かして、検査し、街に登録する（`pnpm dev:free` で街を動かしておく）。Blender は `blender` コマンド（または `$BLENDER`）。
+
+```bash
+node tools/city-build/src/model-cli.ts make tools/city-build/blender/examples/tea_house.py -o /tmp/tea_house.glb --preview --upload --name 茶屋
+```
+
+- 約束：1単位 = 1m、原点は足元の中心、前は Blender の -Y。`paint` で始まるマテリアルは建てる人が選んだ色になる。`collider` で始まる物体は描かず、障害物の形として使う。詳しくは `rj.py` の冒頭。
+- `--preview` で、斜め上から描いた PNG が glb の隣にできる。結果（モデル ID、歩けるか、大きさ）は JSON で出る。
+- Blender の画面で作ったモデルは、glb で書き出して `check` と `upload` だけ使う（`node tools/city-build/src/model-cli.ts upload my.glb --name 名前`）。
+- 階段（段差0.2m以下）や坂（45°以下）でつながる面は、上を歩ける。歩ける面の下はくぐれない。
+- 既定の部品（家、塔、木、ベンチ、街灯、展望台、橋）は `tools/city-build/blender/models/*.py`。直したら `pnpm build:models` で `assets/models/` を作り直す。
+
+### 確かめる
+
+```bash
+node apps/city-host/scripts/build.ts            # 自由モードの建築の通し確認（茶屋がなければ Blender で作って登録する）
+node apps/city-host/scripts/build.ts --clear    # 終わったら全部消す
 ```
 
 ## T4 の試作（apps/agent-worker）

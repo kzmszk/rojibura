@@ -1,6 +1,6 @@
 // rojibura city client (docs/prd.md 3.4): login, the 3D city, click-to-move, chat.
 
-import { NavMesh, type NavMeshData } from "@rojibura/nav";
+import { applyBuilds, NavMesh, type NavMeshData } from "@rojibura/nav";
 import {
 	type AvatarId,
 	type HostToClient,
@@ -16,6 +16,8 @@ import * as THREE from "three";
 import { showAgentPage } from "./agent-page.ts";
 import { api, onApiUsage } from "./api.ts";
 import { AvatarView } from "./avatars.ts";
+import { BuildPanel } from "./build-ui.ts";
+import { BuildsView, makeObject } from "./builds.ts";
 import { actionBar, Relations, showAdmin } from "./moderation.ts";
 import { CityConnection, type ConnState } from "./net.ts";
 import { rememberFirstVisit, reportFirstVisit } from "./onboarding.ts";
@@ -42,8 +44,11 @@ function el<K extends keyof HTMLElementTagNameMap>(
 	return e;
 }
 
-async function loadNavigator(): Promise<Navigator> {
-	const mesh = NavMesh.fromJSON((await (await fetch(`${CITY}/navmesh.json`)).json()) as NavMeshData);
+async function loadNavMesh(): Promise<NavMeshData> {
+	return (await (await fetch(`${CITY}/navmesh.json`)).json()) as NavMeshData;
+}
+
+function navigatorFor(mesh: NavMesh): Navigator {
 	return {
 		findPath: (from, to) => {
 			const start = mesh.closestPoint(from);
@@ -65,7 +70,9 @@ export async function mountApp(root: HTMLElement): Promise<void> {
 
 	const [meRes, health] = await Promise.all([
 		api("/api/me"),
-		api("/api/health").then((r) => r.json() as Promise<{ dev: boolean; google: boolean }>),
+		api("/api/health").then(
+			(r) => r.json() as Promise<{ dev: boolean; google: boolean; freePlay?: boolean }>,
+		),
 	]);
 	if (meRes.status === 401) {
 		showLogin(root, health);
@@ -86,7 +93,7 @@ export async function mountApp(root: HTMLElement): Promise<void> {
 		showWelcome(root, me, params.get("redirect") ?? "/");
 		return;
 	}
-	await startCity(root, me, health.dev);
+	await startCity(root, me, health.dev, health.freePlay === true);
 }
 
 interface Me {
@@ -169,10 +176,23 @@ function showLogin(root: HTMLElement, health: { dev: boolean; google: boolean })
 	name.focus();
 }
 
-async function startCity(root: HTMLElement, me: Me, devBuild: boolean): Promise<void> {
+async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay: boolean): Promise<void> {
 	const scene = new CityScene(root);
-	const nav = await loadNavigator();
+	const base = await loadNavMesh();
+	let mesh = NavMesh.fromJSON(base);
+	let nav = navigatorFor(mesh);
+	scene.heightHint = (x, z) => mesh.heightAt([x, z]);
 	await scene.loadCity(`${CITY}/test_city.glb`);
+	// free play (docs/prd.md 3.7): what has been built, and the walkable area with it
+	let navVersion = 0;
+	const builds = new BuildsView(scene, () => {
+		const v = ++navVersion;
+		void builds.placed().then((placed) => {
+			if (v !== navVersion) return;
+			mesh = NavMesh.fromJSON(placed.length > 0 ? applyBuilds(base, placed) : base);
+			nav = navigatorFor(mesh);
+		});
+	});
 
 	// ---- HUD ----
 	const hud = el("div", "rj-hud");
@@ -196,6 +216,16 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean): Promise<
 	myAi.href = "/agent";
 	myAi.target = "_blank";
 	right.append(myAi, approach, logout);
+	const panel = new BuildPanel(() => void updateGhost());
+	if (freePlay) {
+		const badge = el("span", "rj-free", "🧪 自由モード");
+		badge.title = "ローカルで、無料枠の制限なしに遊んでいます（pnpm dev:free）";
+		const buildButton = el("button", "rj-logout", "🧱 建てる");
+		buildButton.type = "button";
+		buildButton.onclick = () => panel.toggle();
+		right.prepend(badge, buildButton);
+		root.append(panel.el);
+	}
 	hud.append(status, right);
 	// free-tier usage for admins, moderators and development builds (docs/prd.md 2.5)
 	let usage: UsagePanel | null = null;
@@ -297,6 +327,15 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean): Promise<
 					for (const v of avatars.values()) v.dispose();
 					avatars.clear();
 					for (const a of m.avatars) add(a);
+					builds.set(m.builds ?? []);
+					break;
+				case "BUILT":
+					builds.add(m.build);
+					addLog("", `${m.build.byName} が${m.build.label ? `「${m.build.label}」を` : ""}建てました`, "sys");
+					break;
+				case "UNBUILT":
+					builds.remove(m.id);
+					addLog("", `${avatars.get(m.by)?.state.name ?? "だれか"} が建物を片付けました`, "sys");
 					break;
 				case "JOINED":
 					add(m.avatar);
@@ -347,7 +386,25 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean): Promise<
 	// debug hook for tools/snap.ts on development builds (cf dev and staging)
 	if (devBuild)
 		Object.assign(globalThis, {
-			__rj: { avatars, scene, conn, setTarget, startFollow: (id: string) => startFollow(id) },
+			__rj: {
+				avatars,
+				scene,
+				conn,
+				setTarget,
+				startFollow: (id: string) => startFollow(id),
+				builds,
+				panel,
+				walkTo: (x: number, z: number, speed = WALK_SPEED) => walkTo([x, z], speed),
+				mesh: () => mesh,
+				me: () => (myId ? avatars.get(myId) : undefined),
+				/** Stops following your avatar and looks at (x, z) from `dist` away. */
+				look: (x: number, z: number, dist = 16, height = 10) => {
+					followCamera = false;
+					scene.controls.target.set(x, 1, z);
+					scene.camera.position.set(x + dist * 0.55, height, z + dist * 0.85);
+					scene.controls.update();
+				},
+			},
 		});
 
 	// ---- input ----
@@ -410,21 +467,28 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean): Promise<
 		keys.clear();
 		steer(performance.now());
 	});
+	/** Typing in the chat or in the build menu: keys are text, not moves. */
+	const typing = () =>
+		document.activeElement instanceof HTMLInputElement ||
+		document.activeElement instanceof HTMLTextAreaElement;
 	addEventListener("keydown", (e) => {
 		const k = movementKey(e);
-		if (k && document.activeElement !== input) {
+		if (k && !typing()) {
 			e.preventDefault();
 			stopFollow();
 			keys.add(k);
 			steer(performance.now());
 			return;
 		}
-		if (e.key === "Enter" && document.activeElement !== input) {
+		if (e.key === "Enter" && !typing()) {
 			input.focus();
 			e.preventDefault();
-		} else if (e.key.toLowerCase() === "f" && document.activeElement !== input && talkTo) {
+		} else if (e.key.toLowerCase() === "f" && !typing() && talkTo) {
 			startFollow(talkTo);
+		} else if (panel.open && !typing() && (e.key.toLowerCase() === "q" || e.key.toLowerCase() === "e")) {
+			panel.turn(e.key.toLowerCase() === "q" ? -15 : 15);
 		} else if (e.key === "Escape") {
+			if (panel.open) panel.hide();
 			stopFollow();
 			setTarget(null);
 			input.blur();
@@ -433,17 +497,95 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean): Promise<
 
 	const canvas = scene.renderer.domElement;
 	let down: { x: number; y: number } | null = null;
+	const ndcOf = (e: PointerEvent) => {
+		const rect = canvas.getBoundingClientRect();
+		return new THREE.Vector2(
+			((e.clientX - rect.left) / rect.width) * 2 - 1,
+			-((e.clientY - rect.top) / rect.height) * 2 + 1,
+		);
+	};
+
+	// ---- building (free play) ----
+	/** A see-through copy of what a click would build, following the pointer. */
+	let ghost: THREE.Object3D | null = null;
+	let ghostKey = "";
+	let ghostAt: Vec2 | null = null;
+	let buildRef = 0;
+	const placeGhost = () => {
+		if (!ghost) return;
+		ghost.visible = ghostAt !== null && panel.open;
+		if (!ghostAt) return;
+		ghost.position.set(
+			ghostAt[0],
+			mesh.heightAt(ghostAt) ?? scene.heightAt(ghostAt[0], ghostAt[1]) ?? 0,
+			ghostAt[1],
+		);
+		ghost.rotation.y = (panel.rot * Math.PI) / 180;
+	};
+	async function updateGhost(): Promise<void> {
+		const c = panel.open ? panel.current : null;
+		const key = c ? JSON.stringify([c.model, c.color, c.scale, c.size]) : "";
+		if (key !== ghostKey) {
+			if (ghost) scene.scene.remove(ghost);
+			ghost = null;
+			ghostKey = key;
+			if (c) {
+				const made = await makeObject(
+					{ model: c.model, pos: [0, 0], y: 0, rot: 0, scale: c.scale ?? 1, size: c.size, color: c.color },
+					true,
+				);
+				if (made && ghostKey === key) {
+					ghost = made;
+					scene.scene.add(made);
+				}
+			}
+		}
+		placeGhost();
+	}
+	canvas.addEventListener("pointermove", (e) => {
+		if (!panel.open || panel.tool !== "place") return;
+		const p = scene.pickGround(ndcOf(e));
+		ghostAt = p ? [p.x, p.z] : null;
+		placeGhost();
+	});
+	/** A click while the build menu is open: build there, or take down what was clicked. */
+	function buildClick(ndc: THREE.Vector2): void {
+		if (panel.tool === "remove") {
+			const ray = new THREE.Raycaster();
+			ray.setFromCamera(ndc, scene.camera);
+			const hit = ray.intersectObjects(builds.objects, true).find((h) => h.object.visible);
+			const id = builds.buildOf(hit?.object ?? null);
+			if (id) conn.send({ t: "UNBUILD", id, ref: `ui${++buildRef}` });
+			else showToast("消すものをクリックしてください");
+			return;
+		}
+		const c = panel.current;
+		const p = scene.pickGround(ndc);
+		if (!c || !p) return;
+		const round = (v: number) => Math.round(v * 100) / 100;
+		conn.send({
+			t: "BUILD",
+			model: c.model,
+			at: { pos: [round(p.x), round(p.z)] },
+			rot: panel.rot,
+			...(c.color ? { color: c.color } : {}),
+			...(c.scale ? { scale: c.scale } : {}),
+			...(c.size ? { size: c.size } : {}),
+			...(c.label ? { label: c.label } : {}),
+			ref: `ui${++buildRef}`,
+		});
+	}
 	canvas.addEventListener("pointerdown", (e) => {
 		down = { x: e.clientX, y: e.clientY };
 	});
 	canvas.addEventListener("pointerup", (e) => {
 		if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) return;
 		down = null;
-		const rect = canvas.getBoundingClientRect();
-		const ndc = new THREE.Vector2(
-			((e.clientX - rect.left) / rect.width) * 2 - 1,
-			-((e.clientY - rect.top) / rect.height) * 2 + 1,
-		);
+		const ndc = ndcOf(e);
+		if (panel.open) {
+			buildClick(ndc);
+			return;
+		}
 		// avatars first: clicking someone selects them as the one to talk to
 		const ray = new THREE.Raycaster();
 		ray.setFromCamera(ndc, scene.camera);
@@ -460,7 +602,8 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean): Promise<
 				return;
 			}
 		}
-		const p = scene.pickGround(ndc);
+		// a click on something built walks up to it
+		const p = scene.pickGround(ndc, builds.objects);
 		if (!p) return;
 		stopFollow();
 		if (!walkTo([p.x, p.z], e.shiftKey ? RUN_SPEED : WALK_SPEED)) showToast("そこへは行けません");
@@ -527,6 +670,8 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean): Promise<
 	// ---- loop ----
 	let last = performance.now();
 	let placed = false;
+	/** __rj.look() stops the camera from following your avatar (for screenshots). */
+	let followCamera = true;
 	const frame = (t: number) => {
 		const dt = Math.min(0.1, (t - last) / 1000);
 		last = t;
@@ -544,7 +689,7 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean): Promise<
 			scene.jumpTo(mine.root.position);
 			placed = true;
 		}
-		if (mine) scene.follow(mine.root.position, dt);
+		if (mine && followCamera) scene.follow(mine.root.position, dt);
 		else scene.controls.update();
 		scene.render();
 		requestAnimationFrame(frame);

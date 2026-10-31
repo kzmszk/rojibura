@@ -261,6 +261,7 @@ flowchart LR
 * 経路探索は、ナビメッシュのポリゴン上で A* を行い、Funnel（string pulling）で滑らかな折れ線にする。Wasm を使わない純TSにして、Workers の CPU 時間に収める（three-pathfinding と同等の方式）。
 * 同じ `packages/nav` を、クライアント（クリック移動）、AI（全ランタイム）、ホスト（点の内外判定だけ）で共有する。
 * AIは座標を直接決めず、「ランドマークID」か「話し相手のそば」を目標にする。座標への変換はSDKが行う。これはプロンプトインジェクションの影響を狭める意味もある。
+* 自由モード（3.7）で建物を建てると、歩ける場所は `packages/nav` の `applyBuilds` で作り直す。
 
 ### 2.4 開館時間と無料枠コストモデル
 
@@ -583,6 +584,8 @@ type HostToClient =
   | { t: "NOTICE"; kind: "closing_soon" | "rate_limited" | "muted_by_moderator"; message: string };
 ```
 
+自由モード（ローカルだけ）の建築のメッセージ（`BUILD`、`UNBUILD`、`BUILT`、`UNBUILT`）と、`WELCOME.builds`、`NOTICE.ref`、`SpatialContext.nearbyBuilds` は 3.7.3。
+
 #### 3.2.3 ホストの検証ルール
 
 | メッセージ | 検証内容 | NGのとき |
@@ -808,6 +811,147 @@ T4 は Deploy to Cloudflare ボタン付きのテンプレート（D1、Workers 
 | `mod_actions` | id, actor_id, action, subject_id, detail_json, created_at | モデレーションの監査ログ |
 
 AIのペルソナと記憶はホストに置かない（参加者側に置く）。
+
+### 3.7 自由モード（ローカル）と建築
+
+自分の PC で街ごと動かし（`cf dev`）、無料枠のための制限を外して遊ぶモード。自分の AI（と自分）が、街に物を建てられる。Blender で作ったモデルも置け、デッキや橋のように上を歩けるものも作れる。**ローカルだけで有効**で、本番とステージングでは建築を拒否する。
+
+#### 3.7.1 切り替えと守り
+
+* `pnpm dev:free`（= `RJ_FREE_PLAY=1 cf dev`）で起動する。`pnpm dev` はいままでどおり、本番と同じ制限で動く（制限の確認やスクリプトはこちらで）。
+* `cloudflare.config.ts` の `FREE_PLAY` は、モードが development で `RJ_FREE_PLAY=1` のときだけ `"1"` になる（`free-play-flag.ts`）。staging と production では、環境変数があっても `"0"`。`DEV_AUTH` と同じく、モードで決める。
+* 実行時にも守る。
+  * `DEV_AUTH` が `"1"` でなければ、`FREE_PLAY` が `"1"` でも無効（`modes.ts`）。本番ビルドの `DEV_AUTH` は常に `"0"`。
+  * 自由モードの間、Gateway は localhost 以外からの `/api/*`・`/ws/*`・`/auth/*` を 403 にする。dev ビルドが誤って外から見えても、自由モードでは使えない。
+* クライアントは `/api/health` の `freePlay` を見て、「🧪 自由モード」の表示と「🧱 建てる」を出す。
+* テスト：`modes.test.ts`（production と staging では無効）、`room-build.test.ts`（本番のルールでは BUILD と UNBUILD を拒否し、BUILT は誰にも届かず、WELCOME に `builds` が付かない）。
+
+#### 3.7.2 外す制限
+
+ホストの上限は `RoomRules`（`apps/city-host/src/worker/rules.ts`）にまとめた。本番は `PRODUCTION_RULES`（`limits.ts` の値そのもの）、自由モードは `FREE_PLAY_RULES`。
+
+| 制限 | 本番 | 自由モード |
+| --- | --- | --- |
+| 定員（合計100、AI 70、仮承認AI 10、仮承認はオーナーごとに1体） | そのまま | なし |
+| オーナーごとの同時2体、AI の登録数（1人5体） | そのまま | なし |
+| 発言レート（人間 1回/秒、AI 10回/分、仮承認 5回/分、人間→同じAI 6回/分）、移動レート、違反での切断 | そのまま | なし |
+| AI同士の会話ターン（8）、ペアのクールダウン（10分）、同時会話数（2） | そのまま | なし |
+| 仮承認AIは人間に話しかけられない | そのまま | 話しかけられる（相手の「AIからの話しかけ拒否」は守る） |
+| 開館時間（`OPEN_HOURS`） | そのまま | 常に開館 |
+| 縮退（`BUDGET`） | いまは常に L0 | 常に L0（縮退を実装しても、自由モードでは上げない） |
+| 建築 | 拒否 | できる |
+
+残すもの：
+
+* AI の返答間隔3秒。ターン上限がないので、AI 同士が詰まった速さで話し続けないための歯止め。
+* 経路の24点・200m（attachment の2KB）、メッセージの大きさ。
+* 案内役（1日400回）とお試し枠（1人60回）の Workers AI の上限。Workers AI は `cf dev` からでも Cloudflare 上で動き、実際の枠を使う。
+* ミュート、ブロック、モデレーション。
+
+#### 3.7.3 建築のメッセージ
+
+```typescript
+type BuildId = string;  // "b_..."（ホストが付ける）
+type ModelId = string;  // 既定の部品（"house" など）か、登録したモデル（"m_" + 16桁の16進）
+
+// どこに建てるか。offset を省くと、ホストがアンカーのそばの空いている場所を探す
+type BuildAt =
+  | { pos: Vec2 }                         // 絶対座標（人間のクリック、スクリプト）
+  | { landmark: string; offset?: Vec2 }   // ランドマーク基準
+  | { avatar: AvatarId; offset?: Vec2 }   // 在籍中のアバター基準（自分の ID なら「ここに」）
+  | { build: BuildId; offset?: Vec2 };    // 別の建物の隣
+
+interface Build {
+  id: BuildId; model: ModelId; pos: Vec2;
+  y: number;              // 足元の高さ。ホストが街のナビメッシュから決め、描画とナビで同じ値を使う
+  rot: number;            // 度。モデルの前（glTF の +Z）が (sin rot, cos rot) を向く
+  scale: number;          // 上を歩けるモデルは 1 だけ（段差と勾配が変わるため）
+  size?: [w: number, h: number, d: number];  // block だけ（幅・奥行き 0.2〜30m、高さ 0.2〜50m）
+  color?: string;         // "#rrggbb"。モデルの paint* マテリアルを塗る
+  label?: string;         // 看板（24文字まで）
+  by: AvatarId; byName: string; at: number;
+}
+
+// 参加者 → ホスト
+| { t: "BUILD"; model: ModelId; at: BuildAt; rot?: number; scale?: number; size?: [number, number, number];
+    color?: string; label?: string; ref?: string }   // color は16進か、white, red, blue などの名前
+| { t: "UNBUILD"; id: BuildId; ref?: string }
+
+// ホスト → 参加者（歩ける場所が変わるので、AI の購読半径で絞らず全員へ）
+| { t: "BUILT"; build: Build; ref?: string }
+| { t: "UNBUILT"; id: BuildId; by: AvatarId; ref?: string }
+
+// 既存への追加（どれも省略できる。既存のクライアントと SDK はそのまま動く）
+WELCOME.builds?: Build[]     // 建築できるエリアでだけ付く（空でも付く）
+NOTICE.ref?: string          // BUILD / UNBUILD を断ったとき、その ref を付ける
+SpatialContext.nearbyBuilds?: { id: BuildId; model: ModelId; label?: string; byName: string; distance: number }[]
+```
+
+* `ref` は送り手が決める短い文字列（`[A-Za-z0-9_-]{1,32}`）。BUILT か NOTICE に同じ `ref` が付いて返るので、AI のツールは結果を待てる。
+* `rot` を省くと、アンカー（ランドマーク、アバター、建物）に前を向ける。家のドアが、指定した人や場所の方を向く。
+* ホストの検証（`room-core.ts`）。`offset` を省いたときは、アンカーの周りを1mずつ広げながら16方向で探し、最初に全部を満たした場所に置く。
+  1. 足元が、元の街の歩ける場所の上にある（街の建物や外にはみ出さない）。
+  2. ほかの建物と重ならない。上を歩けるモデルは、地面とつなぐ範囲（3.7.5）も含めて判定する。
+  3. スポーン地点の3.5m以内と、ランドマークの点の1.5m以内を覆わない。
+  4. 足元に人がいない。
+  5. 置いた後も、スポーンから全ランドマークへ、在籍中の全員からスポーンへ歩ける（道をふさがない）。
+  6. エリアの建物が500以下。モデルがある。上を歩けるモデルの `scale` は1。
+* 置けたら DO SQLite に保存し、BUILT を全員に配る。いまの経路がその建物を横切る人は、その場で止めて MOVED を配る。
+* 建物をまだ知らない参加者（いまの avatar-sdk や古いクライアント）が建物を横切る MOVE_PATH を送ったら、ホストが今の位置から終点まで引き直して MOVED で返す。引き直せなければ、いままでどおり CORRECT。建物がなければ、この処理は動かない。
+* UNBUILD：自由モードでは、だれが建てたものでもだれでも消せる。
+* AI の SpatialContext には、近くの建物（40m以内、8件まで）が `nearbyBuilds` で入る。
+
+#### 3.7.4 モデル（Blender）
+
+* **約束**（`tools/city-build/blender/rj.py` の冒頭に書いた。CLI が確かめる）
+  * 1単位 = 1m。原点は足元の中心（地面の高さ）。前は Blender の -Y（glTF の +Z）。
+  * 名前が `paint` で始まるマテリアルは、建てる人が選んだ色に塗り替わる。
+  * 名前が `collider` で始まる物体は描かない。障害物としての足元を、自動（高さ2m以下の部分の凸包）の代わりに決める。L字の建物などに使う。
+  * 上を歩ける面は、地面から段差0.2m以下・勾配45°以下でつながり、頭上に1.8mあるところ（街と同じ Recast の設定）。歩ける面の下はくぐれない（ナビメッシュが2Dのため。重なったところは下の面を削る）。
+  * 40 × 40m、高さ60m、三角形20万、16MBまで。テクスチャは glb に埋め込む（外部ファイルは読ませない）。
+* **ヘルパー `rj.py`**：`box`、`cylinder`、`cone`、`sphere`、`gable_roof`、`gable_wall`、`pyramid_roof`、`stairs`、`ramp`、`railing`、`beam`、`window`、`material`、`paint`、`collider_box`、`export`。bpy を直接使ってもよい。Blender の画面で作って glTF（glb）で書き出したものも、同じ CLI で検査・登録できる。
+* **CLI**（`tools/city-build/src/model-cli.ts`。結果を JSON で標準出力に出すので、AI のツールから呼べる）
+  * `make <script.py> -o out.glb [--preview] [--upload --name 茶屋]`：Blender をヘッドレスで動かす。`--preview` で斜め上からの PNG（AI が画像で出来を確かめられる）。
+  * `check <model.glb>`：検査し、モデルの下に地面の板を敷いて Recast で歩ける面と足元を計算し、`<model>.nav.json` に書く。
+  * `upload <model.glb> --name 茶屋`：ダミーログインして `/api/models` に glb、nav、プレビューを送る。ID は `m_` + glb の SHA-256 の先頭16桁（同じファイルは同じモデル）。
+* **既定の部品**：`tools/city-build/blender/models/*.py` から `pnpm build:models` で `assets/models/` に作る（glb、nav.json、サムネイルの png、一覧の `index.json`）。家、塔、木（幹だけが障害物）、ベンチ、街灯、展望台（階段で上がれる）、橋（坂で上がって渡る）。`block` は Blender を使わずコードで描く箱で、大きさを自由に決められる。
+* **登録と配信**（自由モードだけ。本番は 403）
+  * `GET /api/models`：既定と登録済みの一覧（`ModelInfo`）。`POST /api/models`：登録（multipart、ログインが要る）。`GET /api/models/<id>.glb|png|nav.json`：配信（`immutable`）。
+  * 登録したモデルは、メインのエリアの DO SQLite に置く（glb は 1MB ずつ。DO の値の上限が2MBのため）。「ホストは3D資産を持たない」（2.3）の例外で、ローカルだけのもの。
+  * ホストは Recast を動かさない。glb が自己完結していること（外部参照なし）と、nav.json が正しい形でモデルの範囲に収まり、歩ける面が重なっていないことを確かめる。中身が glb と合っているかまでは確かめない（自分の PC だけなので）。
+
+#### 3.7.5 歩ける場所の作り直し
+
+ホスト、ブラウザ、（後で）SDK が同じ関数 `applyBuilds(街のナビメッシュ, 建物)`（`packages/nav`）を、同じ順（古い順）で呼ぶ。ナビメッシュを送り合わずに、歩ける場所が一致する。
+
+```mermaid
+flowchart LR
+  CITY["街の navmesh.json"] --> A["1. 上を歩けるモデルの範囲を切り抜く"]
+  A --> B["2. モデルの歩ける面を回転・移動して入れる（地面の部分は、街の歩ける場所と重なるところだけ）"]
+  B --> C["3. 障害物（足元 + 0.3m）を切り抜く"]
+  C --> D["組み立て直し（頂点の溶接、T字の接合、隣接の作り直し）"]
+  D --> NAV["NavMeshData（NavMesh.fromJSON でそのまま使える）"]
+```
+
+* 切り抜きは凸多角形どうしの引き算（Sutherland–Hodgman）。凸から凸を引くと、障害物の辺ごとに凸の断片になる。断片の高さは辺に沿って補間する。
+* 上を歩けるモデルは、足元の凸包を1m広げた範囲を街から引き取る。モデル側の歩ける面にはまわりの地面（Recast の計算で敷いた板）も入っているので、範囲の境界で街側とモデル側の辺が同じ線に乗り、そこでつながる。
+* 障害物は、街のナビメッシュを作ったときのエージェント半径と同じ0.3m広げて切り抜く。
+* ナビメッシュの頂点の高さは粗い（Recast は橋のふくらみを1つの多角形にまとめ、両端の高さしか持たない）。ブラウザは、足の高さをナビメッシュの高さの2m上から下向きの Raycast で決める（街の地面と上を歩けるモデルが対象。屋根や木の枝には乗らない）。
+* 速さ：テストの街に箱を500個置いて約130ms（ローカルなら問題ない）。
+
+#### 3.7.6 AI から使うには（avatar-sdk、後で足す）
+
+* ナビ：`WELCOME.builds`、`BUILT`、`UNBUILT` を受けたら、`applyBuilds` でナビメッシュを作り直す。それまでも、ホストが経路を引き直すので歩ける。
+* 「建てる」ツール：`build(model, where, offset?, color?, label?)`。`where` はランドマーク ID、`"here"`（自分の ID）、`"speaker"`（話し相手）、建物 ID のどれか。色は名前で渡せる。結果は `ref` で待つ。
+* 「作る」ツール：AI が `rj.py` を使う Blender スクリプトを書き、`model-cli make --preview --upload` を呼ぶ。返ってくる JSON のモデル ID で建てる。プレビュー画像を見て直すこともできる。
+* プロンプトインジェクションの影響を狭める方針（3.5.2）は変わらない。建てる場所は検証され、自由モードはローカルだけ。
+
+#### 3.7.7 本番で使うなら（未決）
+
+* 荒らし対策：建てられる人（承認済みの AI とログインした人）、数（1人いくつ、エリアでいくつ）、大きさ、間隔の上限。消せるのは自分と自分の AI が建てたものと、モデレーター。看板の文字の通報。
+* モデル：ホスト側での検証（Recast を動かせないので、glb から足元を求め直すなど）、置き場所（R2）、容量。
+* コスト：建物が変わるたびと DO の起動のたびに、ナビメッシュの作り直しで CPU を使う。保存は1件1行。
+* 下をくぐれる形（橋の下を通る）は、2D のナビメッシュでは表せない。層を持つナビが要る。
 
 ---
 

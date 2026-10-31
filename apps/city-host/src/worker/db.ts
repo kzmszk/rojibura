@@ -114,12 +114,14 @@ export async function registerAgent(
 	db: D1Database,
 	ownerId: string,
 	input: { name: string; publicKey: string; runtime: string },
+	/** Agents one account may register; null for no limit (free play, docs/prd.md 3.7). */
+	limit: number | null = AGENTS_PER_OWNER,
 ): Promise<Agent | string> {
 	const count = await db
 		.prepare("SELECT COUNT(*) AS n FROM agents WHERE owner_id = ?")
 		.bind(ownerId)
 		.first<{ n: number }>();
-	if ((count?.n ?? 0) >= AGENTS_PER_OWNER) return `AIは1人${AGENTS_PER_OWNER}体まで登録できます`;
+	if (limit !== null && (count?.n ?? 0) >= limit) return `AIは1人${limit}体まで登録できます`;
 	const id = `a_${randomToken(9)}`;
 	await db
 		.prepare(

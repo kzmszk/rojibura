@@ -42,6 +42,60 @@ export interface SpatialContext {
 	pos: Vec2;
 	nearbyAvatars: { id: AvatarId; name: string; kind: AvatarKind; distance: number }[];
 	nearbyLandmarks: { id: string; name: string; distance: number }[];
+	/** Free play: what has been built nearby (docs/prd.md 3.7). */
+	nearbyBuilds?: { id: BuildId; model: ModelId; label?: string; byName: string; distance: number }[];
+}
+
+// ---- building in free play (docs/prd.md 3.7) ----
+
+/** Host-issued: "b_...". */
+export type BuildId = string;
+/** A built-in model ("house", BUILTIN_MODELS) or a registered one ("m_" + 16 hex digits). */
+export type ModelId = string;
+
+/** Where to build. Without `offset`, the host looks for the nearest free spot around the anchor. */
+export type BuildAt =
+	/** World coordinates (a click, a script). */
+	| { pos: Vec2 }
+	/** Relative to a landmark (landmarks.json ID). */
+	| { landmark: string; offset?: Vec2 }
+	/** Relative to someone present; your own ID means "here". */
+	| { avatar: AvatarId; offset?: Vec2 }
+	/** Next to something already built. */
+	| { build: BuildId; offset?: Vec2 };
+
+export interface Build {
+	id: BuildId;
+	model: ModelId;
+	pos: Vec2;
+	/** Height of the base, from the city's navmesh (the host decides; renderers and navmeshes use it). */
+	y: number;
+	/** Degrees: the model's front (+Z in glTF) faces (sin rot, cos rot) on the XZ plane. */
+	rot: number;
+	scale: number;
+	/** Blocks only: width, height, depth (m). */
+	size?: [w: number, h: number, d: number];
+	/** "#rrggbb", painted on the model's `paint*` materials. */
+	color?: string;
+	label?: string;
+	by: AvatarId;
+	byName: string;
+	at: number;
+}
+
+/** GET /api/models: what can be built. */
+export interface ModelInfo {
+	id: ModelId;
+	name: string;
+	builtin: boolean;
+	/** People can walk on it (decks, stairs, bridges). */
+	walkable: boolean;
+	/** Bounding box at scale 1: width, height, depth (m). */
+	size: [number, number, number];
+	/** Default colour of `paint*` materials. */
+	color?: string;
+	/** Who registered it. */
+	byName?: string;
 }
 
 export type ClientToHost =
@@ -53,7 +107,20 @@ export type ClientToHost =
 	| { t: "STATUS"; status: Status }
 	| { t: "INTEREST"; radius: number }
 	/** Admins and development: live free-tier usage of the area (docs/prd.md 2.5). */
-	| { t: "WATCH_USAGE"; on: boolean };
+	| { t: "WATCH_USAGE"; on: boolean }
+	/** Free play: build something (docs/prd.md 3.7). `ref` comes back with BUILT or the refusal (NOTICE). */
+	| {
+			t: "BUILD";
+			model: ModelId;
+			at: BuildAt;
+			rot?: number;
+			scale?: number;
+			size?: [w: number, h: number, d: number];
+			color?: string;
+			label?: string;
+			ref?: string;
+	  }
+	| { t: "UNBUILD"; id: BuildId; ref?: string };
 
 export type LeaveReason = "quit" | "timeout" | "kicked" | "closing";
 export type ConvEndReason = "max_turns" | "timeout" | "left" | "budget";
@@ -61,7 +128,15 @@ export type NoticeKind = "closing_soon" | "rate_limited" | "muted_by_moderator" 
 
 export type HostToClient =
 	| { t: "CHALLENGE"; nonce: string }
-	| { t: "WELCOME"; you: AvatarId; serverTime: number; budget: BudgetLevel; avatars: AvatarState[] }
+	| {
+			t: "WELCOME";
+			you: AvatarId;
+			serverTime: number;
+			budget: BudgetLevel;
+			avatars: AvatarState[];
+			/** Only where building is allowed (free play, docs/prd.md 3.7); may be empty. */
+			builds?: Build[];
+	  }
 	| { t: "JOINED"; avatar: AvatarState }
 	| { t: "LEFT"; id: AvatarId; reason: LeaveReason }
 	| { t: "MOVED"; id: AvatarId; move: MoveState }
@@ -81,7 +156,11 @@ export type HostToClient =
 	| { t: "CONV_END"; convId: string; reason: ConvEndReason }
 	| { t: "STATUS_CHANGED"; id: AvatarId; status: Status }
 	| { t: "BUDGET"; level: BudgetLevel }
-	| { t: "NOTICE"; kind: NoticeKind; message: string }
+	/** `ref`: the BUILD or UNBUILD this answers. */
+	| { t: "NOTICE"; kind: NoticeKind; message: string; ref?: string }
+	/** To everyone (builds change where people can walk). `ref` is the builder's. */
+	| { t: "BUILT"; build: Build; ref?: string }
+	| { t: "UNBUILT"; id: BuildId; by: AvatarId; ref?: string }
 	/** To watchers: today's totals (UTC day) and what used them since the last push. */
 	| { t: "USAGE"; day: string; totals: Usage; events: UsageEvent[] };
 

@@ -1,0 +1,10 @@
+[
+	{"id":"block","name":"ブロック","builtin":true,"walkable":false,"size":[1,1,1],"color":"#dbc8a6"},
+	{"id":"bench","name":"ベンチ","builtin":true,"walkable":false,"size":[1.6,0.92,0.56],"color":"#9b6c45"},
+	{"id":"bridge","name":"橋","builtin":true,"walkable":true,"size":[10.06,1.83,2.4],"color":"#c9bfae"},
+	{"id":"deck","name":"展望台","builtin":true,"walkable":true,"size":[4,2.23,6.43],"color":"#a97c55"},
+	{"id":"house","name":"家","builtin":true,"walkable":false,"size":[5.1,4.75,4.475],"color":"#ecdcc0"},
+	{"id":"lamp","name":"街灯","builtin":true,"walkable":false,"size":[0.4,3.3,0.93],"color":"#2c2e31"},
+	{"id":"tower","name":"塔","builtin":true,"walkable":false,"size":[4.2,12.4,4.2],"color":"#e7e2d7"},
+	{"id":"tree","name":"木","builtin":true,"walkable":false,"size":[3.255,4.8,2.7],"color":"#5e9b52"}
+]

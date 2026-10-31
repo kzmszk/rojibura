@@ -3,14 +3,18 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { type LLM, WorkersAiLLM } from "@rojibura/avatar-sdk";
+import type { ModelNav } from "@rojibura/nav";
 import {
 	AUTH_TIMEOUT_MS,
 	authPayload,
+	type Build,
 	type ClientToHost,
 	encode,
 	HEARTBEAT_PING,
 	HEARTBEAT_PONG,
 	type HostToClient,
+	type ModelId,
+	type ModelInfo,
 	parseClientMessage,
 	randomToken,
 	verifyAuth,
@@ -19,6 +23,8 @@ import { relationsOf } from "./db.ts";
 import { GUIDE_NAME, Guide, type GuideSaved } from "./guide.ts";
 import { GuideMemory, type Kv } from "./guide-memory.ts";
 import { CLOSING_NOTICE_MS, closingTime, describeHours, type Hours, isOpen, parseHours } from "./hours.ts";
+import { checkModelNav, cleanModelName, glbJson, modelIdOf, paintColor } from "./models.ts";
+import { freePlayOn } from "./modes.ts";
 import {
 	type ChatLine,
 	CLOSE_CLOSING,
@@ -27,8 +33,9 @@ import {
 	type Member,
 	RoomCore,
 } from "./room-core.ts";
+import { FREE_PLAY_RULES, PRODUCTION_RULES } from "./rules.ts";
 import { meteredD1, type SavedUsage, UsageMeter } from "./usage.ts";
-import { navmesh, world } from "./world.ts";
+import { BUILTIN_MODELS, buildWorld, world } from "./world.ts";
 
 /** The guide's connection: the room routes its messages to the Guide instead of a socket. */
 const GUIDE_CONN = { guide: true } as const;
@@ -63,7 +70,13 @@ const MESSAGE_LABELS: Record<ClientToHost["t"], string> = {
 	STATUS: "状態の変更",
 	INTEREST: "購読範囲の変更",
 	WATCH_USAGE: "利用状況の表示",
+	BUILD: "建築",
+	UNBUILD: "建物を消す",
 };
+/** Registered models are stored in pieces: a DO SQLite value may be at most 2 MB. */
+const MODEL_CHUNK = 1024 * 1024;
+const PREVIEW_MAX_BYTES = 2 * 1024 * 1024;
+const MODEL_FILE = /^\/models\/(m_[0-9a-f]{16})\.(glb|png|nav\.json)$/;
 const CHAT_KEEP_MS = 24 * 60 * 60 * 1000;
 
 /** Internal requests from the gateway (moderation and relations, docs/prd.md 4.2). */
@@ -71,7 +84,9 @@ export type RoomCommand =
 	| { op: "relation"; accountId: string; targetId: string; kind: "mute" | "block"; on: boolean }
 	| { op: "kick"; id: string }
 	| { op: "mute"; id: string; until: number }
-	| { op: "excerpt"; id: string; minutes: number };
+	| { op: "excerpt"; id: string; minutes: number }
+	/** Free play, development: take down everything built. */
+	| { op: "clear_builds"; by: string };
 
 export class CityRoomDO extends DurableObject<Env> {
 	private readonly core: RoomCore<Conn>;
@@ -87,10 +102,15 @@ export class CityRoomDO extends DurableObject<Env> {
 	private readonly meter: UsageMeter;
 	private readonly db: D1Database;
 	private pushTimer: ReturnType<typeof setTimeout> | null = null;
+	/** Free play (docs/prd.md 3.7): building, registered models, and no free-tier limits. */
+	private readonly freePlay: boolean;
+	private readonly models = new Map<ModelId, { info: ModelInfo; nav: ModelNav }>();
 
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env);
-		this.hours = parseHours(env.OPEN_HOURS);
+		const freePlay = freePlayOn(env);
+		this.freePlay = freePlay;
+		this.hours = freePlay ? "always" : parseHours(env.OPEN_HOURS);
 		this.meter = new UsageMeter({
 			saved: ctx.storage.kv.get<SavedUsage>("usage"),
 			onEvent: () => this.schedulePush(),
@@ -113,16 +133,30 @@ export class CityRoomDO extends DurableObject<Env> {
 				close: (c, code, reason) => !isGuide(c) && safeClose(c, code, reason),
 				persist: (c, member) => (isGuide(c) ? this.guide.persist(member) : persistMember(c, member)),
 			},
-			world,
+			freePlay ? { ...world, build: buildWorld((id) => this.models.get(id)?.nav) } : world,
 			Date.now,
 			() => randomToken(9),
+			freePlay
+				? {
+						rules: FREE_PLAY_RULES,
+						store: {
+							save: (b) =>
+								this.sql("INSERT OR REPLACE INTO builds (id, data) VALUES (?, ?)", b.id, JSON.stringify(b)),
+							remove: (id) => this.sql("DELETE FROM builds WHERE id = ?", id),
+						},
+					}
+				: { rules: PRODUCTION_RULES },
 		);
 		this.guideMemory = new GuideMemory(kv, GUIDE_NAME);
 		this.guide = new Guide<Conn>({
 			core: this.core,
 			conn: GUIDE_CONN,
 			world,
-			findPath: (from, to) => navmesh.findPath(navmesh.closestPoint(from), navmesh.closestPoint(to)),
+			// the walkable area with whatever has been built (free play)
+			findPath: (from, to) => {
+				const w = this.core.terrain;
+				return w.findPath?.(w.closestPoint(from), w.closestPoint(to)) ?? null;
+			},
 			llm: env.AI ? this.meteredLlm(new WorkersAiLLM(env.AI)) : null,
 			load: () => kv.get<GuideSaved>("guide"),
 			save: (s) => kv.put("guide", s),
@@ -152,6 +186,8 @@ export class CityRoomDO extends DurableObject<Env> {
 			ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS chat (at INTEGER NOT NULL, lines TEXT NOT NULL)");
 			// mutes and blocks live only in memory; reload them after waking from hibernation
 			for (const id of restored) await this.loadRelations(id);
+			// free play only: production never creates or reads these
+			if (freePlay) this.loadBuilding();
 		});
 	}
 
@@ -171,7 +207,11 @@ export class CityRoomDO extends DurableObject<Env> {
 				? "統計の参照"
 				: url.pathname === "/command"
 					? "モデレーション・関係の変更"
-					: `${join?.info.name ?? "?"}：入場`;
+					: url.pathname.startsWith("/models")
+						? request.method === "POST"
+							? "モデルの登録"
+							: "モデルの取得"
+						: `${join?.info.name ?? "?"}：入場`;
 		return this.meter.track(label, () => this.handleFetch(request, url, join), { doRequests: 1 });
 	}
 
@@ -183,6 +223,8 @@ export class CityRoomDO extends DurableObject<Env> {
 		}
 		if (url.pathname === "/command" && request.method === "POST")
 			return Response.json(await this.command((await request.json()) as RoomCommand));
+		if (url.pathname === "/models" || url.pathname.startsWith("/models/"))
+			return this.modelRequest(request, url);
 		if (request.headers.get("Upgrade") !== "websocket")
 			return new Response("Expected WebSocket", { status: 426 });
 		if (!join) return new Response("Bad join", { status: 400 });
@@ -352,7 +394,123 @@ export class CityRoomDO extends DurableObject<Env> {
 				return { ok: this.core.muteFor(c.id, c.until) };
 			case "excerpt":
 				return { lines: this.excerpt(c.id, c.minutes * 60_000) };
+			case "clear_builds":
+				return { removed: this.freePlay ? this.core.clearBuilds(c.by) : 0 };
 		}
+	}
+
+	// ---- building in free play (docs/prd.md 3.7) ----
+
+	/** Creates the building tables and loads registered models and builds. */
+	private loadBuilding(): void {
+		this.sql("CREATE TABLE IF NOT EXISTS builds (id TEXT PRIMARY KEY, data TEXT NOT NULL)");
+		this.sql(
+			"CREATE TABLE IF NOT EXISTS models (id TEXT PRIMARY KEY, info TEXT NOT NULL, nav TEXT NOT NULL, created INTEGER NOT NULL)",
+		);
+		this.sql(
+			"CREATE TABLE IF NOT EXISTS model_files (id TEXT NOT NULL, kind TEXT NOT NULL, seq INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY (id, kind, seq))",
+		);
+		for (const row of this.sql<{ id: string; info: string; nav: string }>(
+			"SELECT id, info, nav FROM models ORDER BY created",
+		))
+			this.models.set(row.id, {
+				info: JSON.parse(row.info) as ModelInfo,
+				nav: JSON.parse(row.nav) as ModelNav,
+			});
+		this.core.loadBuilds(
+			this.sql<{ data: string }>("SELECT data FROM builds").map((r) => JSON.parse(r.data) as Build),
+		);
+	}
+
+	/** /models (list, register) and /models/<id>.glb|png|nav.json, from the gateway. */
+	private async modelRequest(request: Request, url: URL): Promise<Response> {
+		if (!this.freePlay) return Response.json({ error: "building is only in free play" }, { status: 403 });
+		if (url.pathname === "/models") {
+			if (request.method === "POST") return this.registerModel(request);
+			return Response.json([...BUILTIN_MODELS, ...[...this.models.values()].map((m) => m.info)]);
+		}
+		const file = url.pathname.match(MODEL_FILE);
+		const model = file?.[1] ? this.models.get(file[1]) : undefined;
+		if (!file || !model) return Response.json({ error: "no such model" }, { status: 404 });
+		const immutable = { "Cache-Control": "public, max-age=31536000, immutable" };
+		if (file[2] === "nav.json") return Response.json(model.nav, { headers: immutable });
+		const kind = file[2] as "glb" | "png";
+		const chunks = this.sql<{ data: ArrayBuffer }>(
+			"SELECT data FROM model_files WHERE id = ? AND kind = ? ORDER BY seq",
+			model.info.id,
+			kind,
+		);
+		if (chunks.length === 0) return Response.json({ error: "no such file" }, { status: 404 });
+		const body = new Blob(chunks.map((c) => c.data));
+		return new Response(body, {
+			headers: { ...immutable, "Content-Type": kind === "glb" ? "model/gltf-binary" : "image/png" },
+		});
+	}
+
+	/** POST /models (multipart: name, glb, nav, preview?), owner in X-RJ-Owner (set by the gateway). */
+	private async registerModel(request: Request): Promise<Response> {
+		const bad = (error: string) => Response.json({ error }, { status: 400 });
+		const owner = JSON.parse(request.headers.get("X-RJ-Owner") ?? "null") as {
+			id: string;
+			name: string;
+		} | null;
+		if (!owner) return bad("no owner");
+		const form = await request.formData();
+		const name = cleanModelName(form.get("name"));
+		if (!name) return bad("bad name (1-24 characters)");
+		const file = form.get("glb");
+		if (!(file instanceof File)) return bad("no glb");
+		const glb = new Uint8Array(await file.arrayBuffer());
+		const json = glbJson(glb);
+		if (typeof json === "string") return bad(json);
+		let rawNav: unknown;
+		try {
+			rawNav = JSON.parse(String(form.get("nav")));
+		} catch {
+			return bad("nav: not JSON");
+		}
+		const nav = checkModelNav(rawNav);
+		if (typeof nav === "string") return bad(nav);
+		const preview = form.get("preview");
+		const png = preview instanceof File ? new Uint8Array(await preview.arrayBuffer()) : null;
+		if (png && (png.byteLength > PREVIEW_MAX_BYTES || png[0] !== 0x89 || png[1] !== 0x50))
+			return bad("preview: not a PNG (at most 2 MB)");
+		const id = await modelIdOf(glb);
+		const known = this.models.get(id);
+		if (known) return Response.json(known.info);
+		const info: ModelInfo = {
+			id,
+			name,
+			builtin: false,
+			walkable: nav.walk !== undefined,
+			size: [0, 1, 2].map(
+				(c) => Math.round(((nav.max[c] as number) - (nav.min[c] as number)) * 100) / 100,
+			) as [number, number, number],
+			byName: owner.name,
+		};
+		const color = paintColor(json);
+		if (color) info.color = color;
+		const store = (kind: string, bytes: Uint8Array) => {
+			for (let seq = 0; seq * MODEL_CHUNK < bytes.byteLength; seq++)
+				this.sql(
+					"INSERT INTO model_files (id, kind, seq, data) VALUES (?, ?, ?, ?)",
+					id,
+					kind,
+					seq,
+					bytes.slice(seq * MODEL_CHUNK, (seq + 1) * MODEL_CHUNK).buffer,
+				);
+		};
+		store("glb", glb);
+		if (png) store("png", png);
+		this.sql(
+			"INSERT INTO models (id, info, nav, created) VALUES (?, ?, ?, ?)",
+			id,
+			JSON.stringify(info),
+			JSON.stringify(nav),
+			Date.now(),
+		);
+		this.models.set(id, { info, nav });
+		return Response.json(info, { status: 201 });
 	}
 
 	/** Chat lines by or to `id` in the last `ms`: unflushed lines from memory plus the stored batches. */
