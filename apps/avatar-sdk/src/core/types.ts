@@ -31,6 +31,8 @@ export interface Landmark {
 	id: string;
 	name: string;
 	pos: Vec2;
+	/** What the place is like (places.json next to the city's landmarks), for the AI to talk about. */
+	description?: string;
 }
 
 /** What the LLM decides for one reply (validated by the SDK, docs/prd.md 3.5.2). */

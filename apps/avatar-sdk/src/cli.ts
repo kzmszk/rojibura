@@ -96,7 +96,7 @@ if (args.mind === "pi") {
 	const mind = await createPiMind({
 		model: args.model,
 		llamaUrl: args["llama-url"],
-		system: residentSystemPrompt(persona),
+		system: residentSystemPrompt(persona, city.landmarks),
 		sessionDir: join(dir, `${encodeURIComponent(name)}.pi`),
 		fresh: args.fresh,
 		act: (tool, params) => (resident ? resident.act(tool, params) : Promise.resolve("まだ街にいない。")),
@@ -105,6 +105,8 @@ if (args.mind === "pi") {
 	resident = new Resident({
 		persona,
 		mind,
+		// the same notes file as --mind rules, so a name keeps what it knows about people across minds
+		memory: new FileMemory(join(dir, `${encodeURIComponent(name)}.memory.json`)),
 		nav: city.nav,
 		landmarks: city.landmarks,
 		logger: log,

@@ -84,11 +84,13 @@ export async function createPiMind(opts: PiMindOptions): Promise<Mind> {
 	const model = runtime.getModel(provider, id);
 	if (!model) throw new Error(`unknown model ${name} (pi --list-models shows the logged-in ones)`);
 
-	// every tool ends the turn, so a model cannot keep talking to itself; a failed call does not, so it can retry
+	// every action ends the turn, so a model cannot keep talking to itself; a failed call does not, so it can
+	// retry; writing a note does not either, so the model can still answer after it
 	const tool = (
 		toolName: string,
 		description: string,
 		parameters: Parameters<typeof defineTool>[0]["parameters"],
+		terminate = true,
 	) =>
 		defineTool({
 			name: toolName,
@@ -97,7 +99,7 @@ export async function createPiMind(opts: PiMindOptions): Promise<Mind> {
 			parameters,
 			async execute(_id, params) {
 				const text = await opts.act(toolName, params as Record<string, unknown>);
-				return { content: [{ type: "text", text }], details: {}, terminate: true };
+				return { content: [{ type: "text", text }], details: {}, terminate };
 			},
 		}) as ToolDefinition;
 	const tools = [
@@ -120,6 +122,12 @@ export async function createPiMind(opts: PiMindOptions): Promise<Mind> {
 			}),
 		),
 		tool("wait", "何もしないで、次の出来事を待つ。", Type.Object({})),
+		tool(
+			"remember",
+			"覚えておきたいことを書き留める。about はその人の id で、次にその人と話すときに見られる。自分のこと（今日やりたいことなど）は about を self にする。self にはほかの人の話を書かない。",
+			Type.Object({ about: Type.String(), note: Type.String({ maxLength: 160 }) }),
+			false,
+		),
 	];
 
 	const resources: ResourceLoader = {

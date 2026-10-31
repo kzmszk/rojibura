@@ -2,6 +2,7 @@ import type { AvatarState, ClientToHost, HostToClient } from "@rojibura/protocol
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { FALLBACK_REPLIES } from "./prompt.ts";
 import { type Mind, Resident } from "./resident.ts";
+import type { Memory } from "./types.ts";
 
 type Call = [tool: string, args: Record<string, unknown>];
 
@@ -33,6 +34,19 @@ function scripted(turns: { calls?: Call[]; text?: string; hold?: Promise<void> }
 	return { mind, prompts, results, ref };
 }
 
+/** Notes in memory, with the "YYYY-MM-DD HH:MM " prefix FileMemory adds. */
+function memory(): Memory & { notes: Record<string, string[]> } {
+	const notes: Record<string, string[]> = {};
+	const stamp = () => new Date().toISOString().slice(0, 16).replace("T", " ");
+	return {
+		notes,
+		recall: async (id) => [...(notes[id] ?? [])],
+		remember: async (id, n) => {
+			notes[id] = [...(notes[id] ?? []), `${stamp()} ${n}`];
+		},
+	};
+}
+
 const avatar = (
 	id: string,
 	kind: "human" | "ai",
@@ -51,7 +65,7 @@ const avatar = (
 
 function setup(
 	turns: Parameters<typeof scripted>[0],
-	opts: { trust?: "approved"; dailyTurnLimit?: number } = {},
+	opts: { trust?: "approved"; dailyTurnLimit?: number; memory?: Memory } = {},
 ) {
 	const { mind, prompts, results, ref } = scripted(turns);
 	const sent: ClientToHost[] = [];
@@ -63,6 +77,7 @@ function setup(
 		logger: { info: () => {}, warn: () => {} },
 		send: (m) => sent.push(m),
 		dailyTurnLimit: opts.dailyTurnLimit,
+		memory: opts.memory,
 		tickMs: [1e9, 1e9],
 		quietTickMs: [1e9, 1e9],
 	});
@@ -258,6 +273,68 @@ describe("Resident", () => {
 			s.resident.handle({ t: "BUDGET", level: 2 });
 			await vi.advanceTimersByTimeAsync(1e10);
 			expect(s.prompts).toHaveLength(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	test("keeps what a person said and shows it only when that person talks again", async () => {
+		const mem = memory();
+		const s = setup([{ calls: [["say", { text: "猫、いいですね。" }]] }, {}, {}], { memory: mem });
+		current = s.resident;
+		s.resident.handle(addressed("h_saki", "猫を2匹飼ってるんだ", "c_1"));
+		await until(() => s.prompts.length === 1 && !s.resident.busy);
+		s.resident.handle({ t: "CONV_END", convId: "c_1", reason: "timeout" });
+		expect(mem.notes.h_saki?.[0]).toContain("サキが話したこと: 「猫を2匹飼ってるんだ」");
+
+		s.resident.handle(addressed("a_mina", "やあ", "c_2", 8));
+		await until(() => s.prompts.length === 2 && !s.resident.busy);
+		expect(s.prompts[1]).not.toContain("猫");
+		s.resident.handle(addressed("h_saki", "また来たよ", "c_3"));
+		await until(() => s.prompts.length === 3);
+		expect(s.prompts[2]).toContain("サキについて覚えていること:");
+		expect(s.prompts[2]).toContain("猫を2匹飼ってるんだ");
+	});
+
+	test("remember writes a note on a person or on itself, and the latter comes back every turn", async () => {
+		const mem = memory();
+		const s = setup(
+			[
+				{
+					calls: [
+						["remember", { about: "h_saki", note: "猫が好き" }],
+						["remember", { about: "self", note: "今日は図書館に行きたい" }],
+						["remember", { about: "nobody", note: "?" }],
+					],
+				},
+				{},
+			],
+			{ memory: mem },
+		);
+		current = s.resident;
+		s.resident.handle(addressed("h_saki", "こんばんは"));
+		await until(() => s.results.length === 3);
+		expect(mem.notes.h_saki?.[0]).toMatch(/メモ: 猫が好き$/);
+		expect(mem.notes.self?.[0]).toMatch(/メモ: 今日は図書館に行きたい$/);
+		expect(s.results[2]).toMatch(/^error: nobody がだれか分からない/);
+		await until(() => !s.resident.busy);
+		s.resident.handle(addressed("a_mina", "やあ"));
+		await until(() => s.prompts.length === 2);
+		expect(s.prompts[1]).toContain("自分で書き留めたこと: 今日は図書館に行きたい");
+	});
+
+	test("decides what to do today on the first free turn of the day", async () => {
+		vi.useFakeTimers();
+		try {
+			const s = setup([{}, {}, {}], { memory: memory() });
+			current = s.resident;
+			s.resident.handle(addressed("h_saki", "こんばんは"));
+			await vi.advanceTimersByTimeAsync(10);
+			expect(s.prompts[0]).not.toContain("今日やってみたいこと");
+			await s.resident.turnNow();
+			expect(s.prompts[1]).toContain("今日やってみたいことを1つ決めて");
+			await s.resident.turnNow();
+			expect(s.prompts[2]).not.toContain("今日やってみたいこと");
 		} finally {
 			vi.useRealTimers();
 		}

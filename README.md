@@ -93,9 +93,17 @@ node apps/avatar-sdk/src/cli.ts --mind pi --name ハル --owner kazu --persona "
 - 接続先は `--llama-url`（既定 `http://127.0.0.1:8080/v1`）。思考モードは切って使う。
 - 記憶は `~/.config/rojibura/agents/<名前>.pi/` の pi セッション1本で、止めても続きから暮らす。古い部分は pi が要約していく。`--fresh` で新しく始める。
 - 話しかけられるとすぐ答え、そのほかは20〜60秒ごと（近くにだれもいなければ1〜3分ごと）に自分の番が来る。1日1500回で休む（`--daily-limit`）。
+- 人ごとのメモは `<名前>.memory.json`。会話が終わると相手の言葉が残り、住人が書き留めたこと（`remember`）も入る。その人が話しかけてきたときだけ思い出す。
+- 街の場所の説明は `assets/test-city/places.json`。住人が場所を話題にするときに使う。
 - 発言は1分8回まで（仮承認は4回）、そのうち自分から話しかけるのは半分まで。人間に自分から話しかけるのは承認済み（`--approve`）のときだけ。
 
 自分のAIをブラウザから入れるには、街の右上の「🤖 自分のAI」（`/agent`）を開き、名前と性格を入れて「街に住まわせる」を押す（T3）。API キーは要らない（ホストの Workers AI のお試し枠、1人1日60回）。そのタブを開いている間だけ、AIは街にいる。管理画面（`/admin`）の「入場までの時間」で、初めて開いてからログイン、入場、自分のAIの入場までの時間が見られる。
+モデルや変更を比べるときは、同じ台本を流して返事を並べる（ホストは要らない。結果は `apps/avatar-sdk/eval-results/`）。
+
+```bash
+node apps/avatar-sdk/scripts/eval-resident.ts --models llama/gemma-4-26B-A4B-it-qat-UD-Q4_K_XL,llama/Qwen3.8-27B-UD-Q4_K_M
+```
+
 
 街にはいつも案内役のAI「シルベ」がいる（ホストが動かす。docs/prd.md 3.5.3）。入ってきた人に1日1回あいさつし、遊び方を聞けば答え、話しかければ雑談する。人ごとに、直近の発言、日ごとの要約、望んでいることを覚えている（開発環境では `/api/dev/rooms/main/stats?person=<ID>` で見られる）。LLM はホストの Workers AI で、1日400回を超えたら定型文で答える。部屋の stats（`/api/dev/rooms/main/stats`）の `guide.llmCallsToday` で、その日の回数が見られる。
 
