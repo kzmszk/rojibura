@@ -206,6 +206,9 @@ function showLogin(root: HTMLElement, health: { dev: boolean; google: boolean })
 	for (const [v, label] of [
 		["saki", "サキ"],
 		["shibu", "シブ"],
+		["shino", "シノ"],
+		["fumiriya", "フミリヤ"],
+		["rei", "レイ"],
 		["capsule", "カプセル"],
 	]) {
 		const o = el("option", "", label);

@@ -171,7 +171,16 @@ export const DEFAULT_PRESET: Preset = {
 
 export const PRESETS: Record<string, Preset> = {
 	saki: DEFAULT_PRESET,
-	// VRoid's 千駄ヶ谷 渋 (casual clothes), slimmed with tools/city-build/src/avatar-cli.ts (docs/prd.md 3.4.4)
+	// VRoid's models, slimmed with tools/city-build/src/avatar-cli.ts (docs/prd.md 3.4.4):
+	// 千駄ヶ谷 渋 (casual clothes), her older sister 篠 (Welcome School Uniform 2019), their cousin 桜田 史利矢
+	// (school uniform), and AvatarSample_C, who has no name of his own and is 神宮 礼 here
 	shibu: { id: "shibu", name: "シブ", assets: { thumb: "", lod: "", vrm: "/avatars/shibu.vrm" } },
+	shino: { id: "shino", name: "シノ", assets: { thumb: "", lod: "", vrm: "/avatars/shino.vrm" } },
+	fumiriya: {
+		id: "fumiriya",
+		name: "フミリヤ",
+		assets: { thumb: "", lod: "", vrm: "/avatars/fumiriya.vrm" },
+	},
+	rei: { id: "rei", name: "レイ", assets: { thumb: "", lod: "", vrm: "/avatars/rei.vrm" } },
 	capsule: { id: "capsule", name: "カプセル", assets: { thumb: "", lod: "", vrm: "" } },
 };

@@ -4,7 +4,7 @@
 
 - 設計書：[docs/prd.md](docs/prd.md)（PRD・アーキテクチャ・概要設計）
 - テスト用の街：`assets/test-city/test_city.glb`（`blender -b --python tools/city-build/blender/test_city.py -- --preview` で再生成）
-- プリセットアバター：`assets/avatars/saki.glb`（TOKYO 2090 のサキ、stand / walk / run / sit）、`assets/avatars/shibu.vrm`（VRoid の千駄ヶ谷 渋。下の「見本アバター（VRM）」）
+- プリセットアバター：`assets/avatars/saki.glb`（TOKYO 2090 のサキ、stand / walk / run / sit）、`assets/avatars/*.vrm`（VRoid の千駄ヶ谷 渋、千駄ヶ谷 篠、桜田 史利矢、AvatarSample_C。下の「見本アバター（VRM）」）
 
 ## 開発
 
@@ -121,8 +121,9 @@ node tools/city-build/src/avatar-cli.ts slim ~/Downloads/model.vrm -o assets/ava
 pnpm build:motions    # saki.glb から motions.glb を作り直す（サキのクリップを直したとき）
 ```
 
-- `slim` は、テクスチャを WebP（最大 1024px）にし、ほとんど 0 の表情モーフを疎な形式にする。渋は 19.8MB から 3.4MB になった。テクスチャを縮めるので、改変を禁じているモデル（VRoid Hub の利用条件の「改変」）には使わない。
-- 渋（千駄ヶ谷渋_普段着Ver001、VRoid Hub）の利用条件：アバター利用、商用利用、再配布、改変がすべて OK、クレジット表記は不要（公式の千駄ヶ谷 渋に準じる）。
+- `slim` は、テクスチャを WebP（最大 1024px）にし、ほとんど 0 の表情モーフを疎な形式にする。どれも 20MB 前後から 2.5〜3.7MB になった。テクスチャを縮めるので、改変を禁じているモデル（VRoid Hub の利用条件の「改変」）には使わない。
+- 同梱している4体（千駄ヶ谷渋_普段着Ver001、千駄ヶ谷 篠 Welcome School Uniform 2019、桜田史利矢_標準制服Ver、AvatarSample_C。どれも VRoid Hub）の利用条件：アバター利用、商用利用、再配布、改変がすべて OK、クレジット表記は不要。
+- 同梱するのは、作者がモデルとキャラクターの両方の権利を持つもの（オリジナルか公式）だけ。ゲームのキャラクターは、VRoid Hub で再配布 OK でも、ゲームから抜き出したものや、ゲーム会社の MMD モデルを変換したものがある。
 
 ## エリアと門（ヴェネツィアへ行く）
 
