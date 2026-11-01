@@ -250,6 +250,12 @@ export class AvatarView {
 	private attention: THREE.Vector3 | null = null;
 	/** How far the head is turned towards them (radians, eased). */
 	private headTurn = 0;
+	/**
+	 * The turn laid on the neck and head this frame, taken off again before the motion's next frame: the
+	 * mixer leaves a bone alone while its value stays the same (standing still), so a turn left on would
+	 * add up frame after frame and spin the head round.
+	 */
+	private turned = 0;
 	/** What the eyes look at (three-vrm's lookAt follows an object). */
 	private readonly gaze = new THREE.Object3D();
 	/** Seen from its own eyes (the first-person view): the head is not drawn, nor the name over it. */
@@ -309,6 +315,7 @@ export class AvatarView {
 		this.model = vrm.scene;
 		this.root.add(vrm.scene);
 		this.vrm = vrm;
+		this.turned = 0;
 		// only your own avatar, and only once seen from inside: the first-person layers hide a head from the
 		// eyes view, which on anyone else would leave them faceless
 		if (this.inside) this.seenFromInside(true);
@@ -424,31 +431,40 @@ export class AvatarView {
 		this.smileWant = Math.max(this.smileWant, how);
 	}
 
+	/** Lays this frame's head turn on the neck (0.4 of it) and the head (0.6), or takes it off (-1). */
+	private twist(sign: 1 | -1): void {
+		const humanoid = this.vrm?.humanoid;
+		if (!humanoid || this.turned === 0) return;
+		const up = new THREE.Vector3(0, 1, 0);
+		for (const [bone, part] of [
+			["neck", 0.4],
+			["head", 0.6],
+		] as const) {
+			humanoid
+				.getNormalizedBoneNode(bone)
+				?.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(up, sign * this.turned * part));
+		}
+	}
+
 	/**
-	 * Turns the head (up to 70°, the neck taking part) and the eyes towards whoever it attends to, on top of
-	 * the motion playing; back to straight ahead when there is nobody.
+	 * Turns the head (the neck taking part) and the eyes towards whoever it attends to, on top of the motion
+	 * playing: up to 70° standing (the body turns too), and while walking only at someone beside or ahead,
+	 * up to 45° (not over the shoulder at someone behind). Back to straight ahead when there is nobody.
 	 */
-	private look(attended: number | null, lying: boolean, dt: number): void {
+	private look(attended: number | null, lying: boolean, moving: boolean, dt: number): void {
 		const vrm = this.vrm;
 		if (!vrm) return;
-		const limit = (70 * Math.PI) / 180;
-		const turn =
-			attended === null || lying
-				? 0
-				: Math.atan2(Math.sin(attended - this.facing), Math.cos(attended - this.facing));
-		this.headTurn += (Math.max(-limit, Math.min(limit, turn)) - this.headTurn) * Math.min(1, dt * 4);
-		if (Math.abs(this.headTurn) > 1e-3) {
-			const up = new THREE.Vector3(0, 1, 0);
-			const twist = (bone: VRMHumanBoneName, part: number) =>
-				vrm.humanoid
-					.getNormalizedBoneNode(bone)
-					?.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(up, this.headTurn * part));
-			twist("neck", 0.4);
-			twist("head", 0.6);
-		}
+		const limit = ((moving ? 45 : 70) * Math.PI) / 180;
+		const off =
+			attended === null ? 0 : Math.atan2(Math.sin(attended - this.facing), Math.cos(attended - this.facing));
+		const attends = attended !== null && !lying && !(moving && Math.abs(off) > Math.PI / 2);
+		const turn = attends ? Math.max(-limit, Math.min(limit, off)) : 0;
+		this.headTurn += (turn - this.headTurn) * Math.min(1, dt * 4);
+		this.turned = Math.abs(this.headTurn) > 1e-3 ? this.headTurn : 0;
+		this.twist(1);
 		const lookAt = vrm.lookAt;
 		if (!lookAt) return;
-		if (this.attention && !lying) {
+		if (this.attention && attends) {
 			this.gaze.position.copy(this.attention);
 			lookAt.target = this.gaze;
 		} else if (lookAt.target) {
@@ -569,9 +585,10 @@ export class AvatarView {
 		const action = this.actions[want];
 		if (pace && action && speed > 0) action.timeScale = Math.min(2.5, Math.max(0.4, speed / pace));
 
+		this.twist(-1);
 		this.mixer?.update(dt);
 		if (this.vrm) {
-			this.look(attended, posture === "lie", dt);
+			this.look(attended, posture === "lie", pose.moving, dt);
 			this.express(hostNow, dt);
 			if (!this.settled) {
 				this.root.updateMatrixWorld(true);
