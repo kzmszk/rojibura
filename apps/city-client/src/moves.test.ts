@@ -1,11 +1,11 @@
 import * as THREE from "three";
 import { describe, expect, test } from "vitest";
-import { groundSpeed, legLength, MOVES, REFERENCE_LEG, referenceRig } from "./moves.ts";
+import { clearance, groundSpeed, legLength, MOVES, REFERENCE_LEG, referenceRig } from "./moves.ts";
 
 const clip = (name: string) => (MOVES.find((m) => m.name === name) as (typeof MOVES)[number]).clip();
 
-/** World height of each named bone on the reference rig when `name` is at time `t`. */
-function heights(name: string, t: number): Record<string, number> {
+/** The reference rig posed as `name` is at time `t` (postures held after their end). */
+function posed(name: string, t: number): THREE.Object3D {
 	const rig = referenceRig();
 	const mixer = new THREE.AnimationMixer(rig);
 	const action = mixer.clipAction(clip(name));
@@ -14,12 +14,23 @@ function heights(name: string, t: number): Record<string, number> {
 	action.play();
 	mixer.setTime(t);
 	rig.updateMatrixWorld(true);
+	return rig;
+}
+
+/** World height of each named bone when `name` is at time `t`. */
+function heights(name: string, t: number): Record<string, number> {
 	const out: Record<string, number> = {};
-	rig.traverse((o) => {
+	posed(name, t).traverse((o) => {
 		if (o.name) out[o.name] = o.getWorldPosition(new THREE.Vector3()).y;
 	});
 	return out;
 }
+
+/** `name` at `n + 1` moments from start to end. */
+const moments = (name: string, n = 30) => {
+	const d = clip(name).duration;
+	return Array.from({ length: n + 1 }, (_, i) => (d * i) / n);
+};
 
 describe("moves", () => {
 	test("every motion builds a clip on the reference rig's bones", () => {
@@ -46,26 +57,32 @@ describe("moves", () => {
 		expect(legLength(Object.fromEntries(MOVES.length ? collect() : []))).toBeCloseTo(REFERENCE_LEG, 5);
 	});
 
-	test("feet stay on the ground while walking", () => {
-		const c = clip("walk");
-		let lowest = Number.POSITIVE_INFINITY;
-		for (let i = 0; i <= 20; i++) {
-			const h = heights("walk", (c.duration * i) / 20);
-			const low = Math.min(h.leftFoot as number, h.rightFoot as number);
-			lowest = Math.min(lowest, low);
-			// the lower ankle is where it is when standing (0.08 m up), neither floating nor sinking
-			expect(low).toBeCloseTo(0.08, 2);
+	test("nothing goes into the ground, at any moment of any motion", () => {
+		for (const m of MOVES) {
+			for (const t of moments(m.name))
+				expect(clearance(posed(m.name, t)), `${m.name} at ${t}`).toBeGreaterThan(-0.005);
 		}
-		expect(lowest).toBeGreaterThan(0.07);
+	});
+
+	test("walking, sitting and lying rest on the ground (nothing floats)", () => {
+		for (const t of moments("walk")) expect(clearance(posed("walk", t)), `walk at ${t}`).toBeLessThan(0.005);
+		for (const t of moments("sit")) expect(clearance(posed("sit", t)), `sit at ${t}`).toBeLessThan(0.005);
+		for (const t of moments("lie")) expect(clearance(posed("lie", t)), `lie at ${t}`).toBeLessThan(0.005);
 	});
 
 	test("sitting and lying end low, sitting upright and lying flat", () => {
 		const sit = heights("sit", 10);
 		expect(sit.hips).toBeLessThan(0.2);
 		expect(sit.head).toBeGreaterThan(0.6);
+		// leaning back on the hands
+		expect(sit.leftHand).toBeLessThan(0.12);
+		expect(sit.rightHand).toBeLessThan(0.12);
 		const lie = heights("lie", 10);
 		expect(lie.hips).toBeLessThan(0.2);
 		expect(lie.head).toBeLessThan(0.3);
+		// the arms lie on the ground by the sides, not in the air
+		for (const b of ["leftHand", "rightHand", "leftLowerArm", "rightLowerArm"])
+			expect(lie[b], b).toBeLessThan(0.09);
 	});
 });
 

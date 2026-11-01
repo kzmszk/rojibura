@@ -67,17 +67,48 @@ const euler = new THREE.Euler();
 const quat = new THREE.Quaternion();
 
 /**
- * Samples `f` at 30 fps into a clip on the reference rig's bones. `planted`: the hips go up and down so that
- * the lower foot is always on the ground (walking: neither floating nor sinking, whatever the legs do).
+ * Points of the body that can rest on the ground: [bone, offset in the bone's T-pose frame, radius]. The
+ * offsets reach from the joint to the skin (heels, toes, buttocks, back, the back of the head).
  */
+const CONTACTS: [string, [number, number, number], number][] = [
+	["leftFoot", [0, -0.07, -0.04], 0],
+	["rightFoot", [0, -0.07, -0.04], 0],
+	["leftFoot", [0, -0.06, 0.15], 0],
+	["rightFoot", [0, -0.06, 0.15], 0],
+	["leftLowerLeg", [0, 0, 0], 0.05],
+	["rightLowerLeg", [0, 0, 0], 0.05],
+	["hips", [0, -0.1, -0.08], 0],
+	["hips", [0, 0.04, -0.11], 0],
+	["spine", [0, 0.06, -0.11], 0],
+	["chest", [0, 0.1, -0.12], 0],
+	["head", [0, 0.1, -0.1], 0],
+	["head", [0, 0.22, 0], 0],
+	["leftUpperArm", [0, 0, 0], 0.05],
+	["rightUpperArm", [0, 0, 0], 0.05],
+	["leftLowerArm", [0, 0, 0], 0.04],
+	["rightLowerArm", [0, 0, 0], 0.04],
+	["leftHand", [0, 0, 0], 0.03],
+	["rightHand", [0, 0, 0], 0.03],
+	["leftHand", [0.09, -0.01, 0], 0.01],
+	["rightHand", [-0.09, -0.01, 0], 0.01],
+];
+
+/**
+ * How the hips keep the body on the ground: `touch` — the lowest point of the body just touches it (walking
+ * rolls from heel to toe, sitting and lying rest on it: nothing sinks or floats); `above` — nothing goes
+ * below it, but the body may leave it (running, jumping).
+ */
+type Ground = "touch" | "above";
+
+/** Samples `f` at 30 fps into a clip on the reference rig's bones, kept on the ground as `ground` says. */
 function sampled(
 	name: MoveName,
 	duration: number,
 	f: (t: number) => Frame,
-	planted = false,
+	ground?: Ground,
 ): THREE.AnimationClip {
 	const steps = Math.max(1, Math.round(duration * 30));
-	const rig = planted ? referenceRig() : null;
+	const rig = ground ? referenceRig() : null;
 	const times: number[] = [];
 	const rotations = new Map(RIG.map(([b]) => [b, [] as number[]]));
 	const hips: number[] = [];
@@ -91,7 +122,7 @@ function sampled(
 			(rotations.get(b) as number[]).push(quat.x, quat.y, quat.z, quat.w);
 		}
 		const [hx, hy, hz] = frame.hips ?? [0, 0, 0];
-		hips.push(hx, HIPS_Y + hy + (rig ? groundGap(rig, frame) : 0), hz);
+		hips.push(hx, HIPS_Y + hy + (rig && ground ? lift(rig, frame, ground) : 0), hz);
 	}
 	const tracks: THREE.KeyframeTrack[] = RIG.map(
 		([b]) => new THREE.QuaternionKeyframeTrack(`${b}.quaternion`, times, rotations.get(b) as number[]),
@@ -100,19 +131,30 @@ function sampled(
 	return new THREE.AnimationClip(name, duration, tracks);
 }
 
-/** How far the lower foot is above where it stands at rest, with `frame` applied to `rig`. */
-function groundGap(rig: THREE.Object3D, frame: Frame): number {
+const point = new THREE.Vector3();
+
+/** How far to raise the hips (negative: lower them) with `frame` applied to `rig`, to keep it on the ground. */
+function lift(rig: THREE.Object3D, frame: Frame, ground: Ground): number {
 	for (const [b] of RIG) {
 		const [x, y, z] = frame.bones[b] ?? [0, 0, 0];
 		(rig.getObjectByName(b) as THREE.Object3D).quaternion.setFromEuler(
 			euler.set(x * RAD, y * RAD, z * RAD, "XYZ"),
 		);
 	}
-	const hips = rig.getObjectByName("hips") as THREE.Object3D;
-	hips.position.set(0, HIPS_Y, 0);
+	const [hx, hy, hz] = frame.hips ?? [0, 0, 0];
+	(rig.getObjectByName("hips") as THREE.Object3D).position.set(hx, HIPS_Y + hy, hz);
+	const lowest = clearance(rig);
+	return ground === "touch" ? -lowest : Math.max(0, -lowest);
+}
+
+/** How far the lowest point of the reference rig's body is above the ground (negative: below it), as posed. */
+export function clearance(rig: THREE.Object3D): number {
 	rig.updateMatrixWorld(true);
-	const y = (b: string) => (rig.getObjectByName(b) as THREE.Object3D).getWorldPosition(new THREE.Vector3()).y;
-	return FOOT_Y - Math.min(y("leftFoot"), y("rightFoot"));
+	return Math.min(
+		...CONTACTS.map(
+			([b, at, r]) => (rig.getObjectByName(b) as THREE.Object3D).localToWorld(point.set(...at)).y - r,
+		),
+	);
 }
 
 const ease = (u: number) => u * u * (3 - 2 * u);
@@ -222,7 +264,7 @@ function gait(run: boolean): (t: number, duration: number) => Frame {
 			},
 			hips: [
 				-(run ? 0.01 : 0.012) * cos(u - 0.25),
-				// walking: the hips follow the planted foot (sampled with `planted`)
+				// walking: the hips follow the foot on the ground (sampled with `touch`)
 				run ? -0.03 - 0.035 * cos(2 * (u - 0.15)) : 0,
 				0,
 			],
@@ -276,55 +318,57 @@ const SQUAT: Frame = {
 	hips: [0, -0.45, -0.05],
 };
 
-/** Sitting on the ground, legs out and knees a little up, leaning back on the hands. */
+/**
+ * Sitting on the ground, leaning back on the hands behind: the thighs rise a little from the hips, the
+ * shins come down to the heels. (The hips' height comes from touching the ground, see `sampled`.)
+ */
 const SITTING: Frame = {
 	bones: {
-		hips: [-22, 0, 0],
-		spine: [6, 0, 0],
-		chest: [4, 0, 0],
-		neck: [6, 0, 0],
-		head: [6, 0, 0],
-		leftUpperArm: [42, 0, -68],
-		rightUpperArm: [42, 0, 68],
+		hips: [-35, 0, 0],
+		neck: [12, 0, 0],
+		head: [18, 0, 0],
+		// arms straight down to the ground, a little behind and outside the shoulders: the body leans back
+		// 35°, so they swing back 50° from it to point 15° behind straight down
+		leftUpperArm: [50, 0, -80],
+		rightUpperArm: [50, 0, 80],
 		leftLowerArm: [0, 0, 0],
 		rightLowerArm: [0, 0, 0],
-		leftHand: [0, 0, 60],
-		rightHand: [0, 0, -60],
-		leftUpperLeg: [-58, 0, -4],
-		rightUpperLeg: [-50, 0, 6],
-		leftLowerLeg: [38, 0, 0],
-		rightLowerLeg: [24, 0, 0],
-		leftFoot: [18, 0, 0],
+		leftUpperLeg: [-75, 0, -6],
+		rightUpperLeg: [-70, 0, 8],
+		leftLowerLeg: [44, 0, 0],
+		rightLowerLeg: [30, 0, 0],
+		leftFoot: [20, 0, 0],
 		rightFoot: [22, 0, 0],
 	},
-	hips: [0, -0.76, -0.12],
+	hips: [0, 0, -0.12],
 };
 
-/** Lying on the back, arms by the sides, one knee up. */
+/** Lying on the back, the arms by the sides on the ground, the left knee up with the foot flat. */
 const LYING: Frame = {
 	bones: {
 		hips: [-90, 0, 0],
-		neck: [8, 0, 0],
-		head: [6, 6, 0],
-		leftUpperArm: [-6, 0, -62],
-		rightUpperArm: [-6, 0, 62],
-		leftLowerArm: [0, -15, 0],
-		rightLowerArm: [0, 15, 0],
-		leftUpperLeg: [-42, 0, -3],
-		rightUpperLeg: [-2, 0, 4],
-		leftLowerLeg: [84, 0, 0],
-		rightLowerLeg: [3, 0, 0],
-		leftFoot: [-38, 0, 0],
-		rightFoot: [28, 0, 0],
+		neck: [10, 0, 0],
+		head: [8, 8, 0],
+		// x > 0 takes the arms back, which is down to the ground when lying
+		leftUpperArm: [12, 0, -72],
+		rightUpperArm: [12, 0, 72],
+		leftLowerArm: [0, -4, 0],
+		rightLowerArm: [0, 4, 0],
+		leftUpperLeg: [-45, 0, -4],
+		leftLowerLeg: [90, 0, 0],
+		leftFoot: [45, 0, 0],
+		rightUpperLeg: [0, 0, 5],
+		rightLowerLeg: [4, 0, 0],
+		rightFoot: [22, 0, 0],
 	},
-	hips: [0, -0.79, -0.25],
+	hips: [0, 0, -0.25],
 };
 
 /** Every motion, and how it plays: loops, once, or once and then held (a posture). */
 export const MOVES: { name: MoveName; play: "loop" | "once" | "hold"; clip: () => THREE.AnimationClip }[] = [
 	{ name: "stand", play: "loop", clip: () => sampled("stand", 4, breathe) },
-	{ name: "walk", play: "loop", clip: () => sampled("walk", 1.05, (t) => gait(false)(t, 1.05), true) },
-	{ name: "run", play: "loop", clip: () => sampled("run", 0.7, (t) => gait(true)(t, 0.7)) },
+	{ name: "walk", play: "loop", clip: () => sampled("walk", 1.05, (t) => gait(false)(t, 1.05), "touch") },
+	{ name: "run", play: "loop", clip: () => sampled("run", 0.7, (t) => gait(true)(t, 0.7), "above") },
 	{ name: "wave", play: "once", clip: () => sampled("wave", 2.1, wave) },
 	{
 		name: "nod",
@@ -367,6 +411,7 @@ export const MOVES: { name: MoveName; play: "loop" | "once" | "hold"; clip: () =
 					],
 					[2.2, { bones: {} }],
 				]),
+				"above",
 			),
 	},
 	{
@@ -455,6 +500,7 @@ export const MOVES: { name: MoveName; play: "loop" | "once" | "hold"; clip: () =
 					],
 					[1.2, { bones: {} }],
 				]),
+				"above",
 			),
 	},
 	{
@@ -469,6 +515,7 @@ export const MOVES: { name: MoveName; play: "loop" | "once" | "hold"; clip: () =
 					[0.55, SQUAT],
 					[1.5, SITTING],
 				]),
+				"touch",
 			),
 	},
 	{
@@ -484,6 +531,7 @@ export const MOVES: { name: MoveName; play: "loop" | "once" | "hold"; clip: () =
 					[1.4, SITTING],
 					[2.4, LYING],
 				]),
+				"touch",
 			),
 	},
 ];
