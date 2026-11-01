@@ -292,7 +292,7 @@ async function wsGateway(request: Request, areaId: string): Promise<Response> {
 				id: agent.id,
 				kind: "ai",
 				name: agent.name,
-				assets: DEFAULT_PRESET.assets,
+				assets: (PRESETS[agent.preset_id ?? ""] ?? DEFAULT_PRESET).assets,
 				ownerId: owner.id,
 				ownerName: owner.display_name,
 				trust: agent.trust,
@@ -567,9 +567,13 @@ async function api(request: Request, url: URL): Promise<Response> {
 			name?: string;
 			publicKey?: string;
 			runtime?: string;
+			/** The look, one of PRESETS (the AI keeps it). */
+			preset?: string;
 		} | null;
 		const name = cleanName(body?.name ?? "");
 		if (!name) return error(400, "bad name");
+		const preset = body?.preset;
+		if (preset !== undefined && !Object.hasOwn(PRESETS, preset)) return error(400, "bad preset");
 		const runtime = body?.runtime;
 		if (runtime !== "browser" && runtime !== "worker" && runtime !== "node") return error(400, "bad runtime");
 		const publicKey = body?.publicKey ?? "";
@@ -578,7 +582,12 @@ async function api(request: Request, url: URL): Promise<Response> {
 		} catch {
 			return error(400, "bad public key");
 		}
-		const r = await registerAgent(DB, account.id, { name, publicKey, runtime }, FREE_PLAY ? null : undefined);
+		const r = await registerAgent(
+			DB,
+			account.id,
+			{ name, publicKey, runtime, preset },
+			FREE_PLAY ? null : undefined,
+		);
 		if (typeof r === "string") return error(409, r);
 		return json({ id: r.id, name: r.name, trust: r.trust }, 201);
 	}

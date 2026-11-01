@@ -26,7 +26,7 @@ import {
 } from "@rojibura/protocol";
 import { GuideMemory, jstDay, MEMORY_SCHEMA, type SummaryJob } from "./guide-memory.ts";
 import type { JoinInfo, Member, RoomCore, World } from "./room-core.ts";
-import { DEFAULT_PRESET } from "./world.ts";
+import { GUIDE_PRESET } from "./world.ts";
 
 export const GUIDE_ID = "a_guide";
 export const GUIDE_NAME = "シルベ";
@@ -76,7 +76,7 @@ export function guideInfo(): JoinInfo {
 		id: GUIDE_ID,
 		kind: "ai",
 		name: GUIDE_NAME,
-		assets: DEFAULT_PRESET.assets,
+		assets: GUIDE_PRESET.assets,
 		ownerId: "system",
 		ownerName: "rojibura",
 		trust: "approved",
@@ -150,8 +150,9 @@ export class Guide<C> {
 	ensurePresent(): void {
 		if (this.me) return;
 		const saved = this.saved.member;
+		// the look is always today's (a saved state may be from before the guide changed it)
 		if (saved && this.d.core.size > 0)
-			this.d.core.restore(this.d.conn, { ...saved, convs: [], cooldowns: {} });
+			this.d.core.restore(this.d.conn, { ...saved, assets: GUIDE_PRESET.assets, convs: [], cooldowns: {} });
 		else this.d.core.join(this.d.conn, guideInfo());
 	}
 

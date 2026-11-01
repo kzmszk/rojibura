@@ -192,3 +192,6 @@ export const PRESETS: Record<string, Preset> = {
 	rei: { id: "rei", name: "レイ", assets: { thumb: "", lod: "", vrm: "/avatars/rei.vrm" } },
 	capsule: { id: "capsule", name: "カプセル", assets: { thumb: "", lod: "", vrm: "" } },
 };
+
+/** The guide's look (docs/prd.md 3.5.3): a VRM, so it shakes hands and hugs like everyone else. */
+export const GUIDE_PRESET = PRESETS.fumiriya as Preset;

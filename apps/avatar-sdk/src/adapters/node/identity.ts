@@ -40,12 +40,14 @@ export const devHeaders = (): Record<string, string> =>
 
 /**
  * Development registration: logs in as `owner` with the host's dummy login (cf dev only) and registers
- * a new agent. Production registration uses a one-time code from the owner portal (Phase 2).
+ * a new agent, with the look `preset` if given. Production registration uses a one-time code from the
+ * owner portal (Phase 2).
  */
 export async function registerWithDevLogin(
 	baseUrl: string,
 	owner: string,
 	name: string,
+	preset?: string,
 ): Promise<IdentityFile> {
 	const login = await fetch(`${baseUrl}/auth/dev/login?name=${encodeURIComponent(owner)}`, {
 		redirect: "manual",
@@ -58,7 +60,7 @@ export async function registerWithDevLogin(
 	const r = await fetch(`${baseUrl}/api/agents`, {
 		method: "POST",
 		headers: { Cookie: cookie, "Content-Type": "application/json" },
-		body: JSON.stringify({ name, publicKey, runtime: "node" }),
+		body: JSON.stringify({ name, publicKey, runtime: "node", ...(preset ? { preset } : {}) }),
 	});
 	const body = (await r.json()) as { id?: string; error?: string };
 	if (!r.ok || !body.id) throw new Error(`agent registration failed: ${body.error ?? r.status}`);

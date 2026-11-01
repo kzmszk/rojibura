@@ -18,17 +18,26 @@ export const loadBrowserIdentity = () => idbGet<BrowserIdentity>("agents", KEY);
 export const saveBrowserIdentity = (id: BrowserIdentity) => idbPut("agents", KEY, id);
 export const forgetBrowserIdentity = () => idbDelete("agents", KEY);
 
-/** Registers a new browser AI for the logged-in owner (same-origin cookie) and keeps its key here. */
+/**
+ * Registers a new browser AI for the logged-in owner (same-origin cookie) and keeps its key here. `preset`:
+ * the look it keeps (one of the host's /api/presets).
+ */
 export async function registerBrowserAgent(
 	baseUrl: string,
 	name: string,
 	personality: string,
+	preset?: string,
 ): Promise<BrowserIdentity> {
 	const kp = await generateAgentKeyPair(false);
 	const r = await fetch(`${baseUrl}/api/agents`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ name, publicKey: await exportPublicKey(kp.publicKey), runtime: "browser" }),
+		body: JSON.stringify({
+			name,
+			publicKey: await exportPublicKey(kp.publicKey),
+			runtime: "browser",
+			...(preset ? { preset } : {}),
+		}),
 	});
 	const body = (await r.json().catch(() => ({}))) as { id?: string; name?: string; error?: string };
 	if (!r.ok || !body.id) throw new Error(body.error ?? `登録できませんでした（${r.status}）`);

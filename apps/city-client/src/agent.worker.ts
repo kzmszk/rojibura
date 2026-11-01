@@ -15,7 +15,8 @@ import {
 
 export type FromPage =
 	| { cmd: "load" }
-	| { cmd: "start"; name: string; personality: string }
+	/** `preset`: the look of a new AI (kept once it is registered). */
+	| { cmd: "start"; name: string; personality: string; preset?: string }
 	| { cmd: "stop" }
 	| { cmd: "forget" };
 
@@ -47,12 +48,12 @@ function stop(): void {
 	conn = null;
 }
 
-async function start(name: string, personality: string): Promise<void> {
+async function start(name: string, personality: string, preset?: string): Promise<void> {
 	stop();
 	post({ t: "state", state: "starting" });
 	let id: BrowserIdentity | undefined = await loadBrowserIdentity();
 	if (!id) {
-		id = await registerBrowserAgent(base, name, personality);
+		id = await registerBrowserAgent(base, name, personality, preset);
 		log.info(`「${id.name}」を登録しました（${id.agentId}）`);
 	} else if (id.personality !== personality) {
 		id = { ...id, personality };
@@ -102,7 +103,7 @@ scope.onmessage = async (e) => {
 			const id = await loadBrowserIdentity();
 			post({ t: "identity", name: id?.name ?? null, personality: id?.personality ?? "" });
 		} else if (m.cmd === "start") {
-			await start(m.name, m.personality);
+			await start(m.name, m.personality, m.preset);
 		} else if (m.cmd === "stop") {
 			stop();
 			post({ t: "state", state: "stopped" });

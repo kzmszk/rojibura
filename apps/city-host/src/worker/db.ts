@@ -27,6 +27,8 @@ export interface Agent {
 	public_key: string;
 	key_revoked_at: number | null;
 	trust: "provisional" | "approved" | "suspended";
+	/** The preset look chosen when it was registered (PRESETS); null: the default one. */
+	preset_id: string | null;
 }
 
 let schemaReady: Promise<void> | null = null;
@@ -113,7 +115,7 @@ export async function listAgents(db: D1Database, ownerId: string): Promise<Agent
 export async function registerAgent(
 	db: D1Database,
 	ownerId: string,
-	input: { name: string; publicKey: string; runtime: string },
+	input: { name: string; publicKey: string; runtime: string; preset?: string | null },
 	/** Agents one account may register; null for no limit (free play, docs/prd.md 3.7). */
 	limit: number | null = AGENTS_PER_OWNER,
 ): Promise<Agent | string> {
@@ -125,9 +127,9 @@ export async function registerAgent(
 	const id = `a_${randomToken(9)}`;
 	await db
 		.prepare(
-			"INSERT INTO agents (id, owner_id, name, runtime, public_key, trust, created_at) VALUES (?, ?, ?, ?, ?, 'provisional', ?)",
+			"INSERT INTO agents (id, owner_id, name, runtime, public_key, trust, preset_id, created_at) VALUES (?, ?, ?, ?, ?, 'provisional', ?, ?)",
 		)
-		.bind(id, ownerId, input.name, input.runtime, input.publicKey, Date.now())
+		.bind(id, ownerId, input.name, input.runtime, input.publicKey, input.preset ?? null, Date.now())
 		.run();
 	const agent = await db.prepare("SELECT * FROM agents WHERE id = ?").bind(id).first<Agent>();
 	return agent ?? "登録に失敗しました";

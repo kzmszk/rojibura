@@ -1,5 +1,6 @@
 // Runs one AI agent from the command line (node adapter, T5 / development).
 //   node apps/avatar-sdk/src/cli.ts --name ミナ --persona "好奇心旺盛でカフェ好き" [--owner kazu] [--llm claude-code|pi|echo]
+//     [--avatar shino]   (the look, when it is registered: one of the host's /api/presets)
 //   node apps/avatar-sdk/src/cli.ts --name ハル --mind pi [--model llama/<id>] [--llama-url URL] [--fresh]
 // See README "AIを動かす".
 
@@ -32,6 +33,7 @@ const { values: args } = parseArgs({
 		area: { type: "string", default: "main" },
 		owner: { type: "string", default: "kazu" },
 		name: { type: "string", default: "ミナ" },
+		avatar: { type: "string" },
 		persona: { type: "string", default: "好奇心旺盛で人懐っこい。街を散歩するのとカフェが好き。" },
 		// rules: the rule-based Agent asking an LLM per reply; pi: a resident living in one long pi session
 		mind: { type: "string", default: "rules" },
@@ -64,7 +66,7 @@ const log: Logger = { info: (m) => write("info", m), warn: (m) => write("warn", 
 
 let identity = await loadIdentity(identityPath);
 if (!identity || identity.baseUrl !== base) {
-	identity = await registerWithDevLogin(base, args.owner ?? "kazu", name);
+	identity = await registerWithDevLogin(base, args.owner ?? "kazu", name, args.avatar);
 	await saveIdentity(identityPath, identity);
 	log.info(`registered as ${identity.agentId} (identity saved to ${identityPath})`);
 }

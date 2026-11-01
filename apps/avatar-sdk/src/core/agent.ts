@@ -117,8 +117,9 @@ export class Agent {
 		}
 		switch (msg.t) {
 			case "OFFERED":
-				// a handshake or a hug: the city's AIs say yes (docs/prd.md 3.4.6)
+				// a handshake or a hug: the city's AIs say yes (docs/prd.md 3.4.6), and stay put for it
 				this.o.send({ t: "ANSWER", to: msg.from, accept: true });
+				this.scheduleWander(10_000);
 				return;
 			case "ADDRESSED":
 				this.enqueue({

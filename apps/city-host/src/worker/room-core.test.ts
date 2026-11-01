@@ -423,6 +423,17 @@ describe("doing things together", () => {
 		expect(a.inbox.some((m) => m.t === "TOGETHER")).toBe(true);
 	});
 
+	test("the host's guide says yes at once", () => {
+		const a = conn("a");
+		const g = conn("guide");
+		place(a, human("alice"), [-10, -10]);
+		place(g, ai("guide", "system", { system: true }), [-9, -10]);
+		ctx.room.handle(a, { t: "OFFER", kind: "hug", to: "a_guide" });
+		expect(g.inbox.some((m) => m.t === "OFFERED")).toBe(false);
+		expect(a.inbox).toContainEqual({ t: "ANSWERED", by: "a_guide", kind: "hug", accept: true });
+		expect(a.inbox.some((m) => m.t === "TOGETHER")).toBe(true);
+	});
+
 	test("a no, a late yes, someone too far or blocked: nothing happens together", () => {
 		const a = conn("a");
 		const b = conn("b");

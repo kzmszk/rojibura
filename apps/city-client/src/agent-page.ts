@@ -42,6 +42,19 @@ export function showAgentPage(root: HTMLElement): void {
 	personality.rows = 3;
 	personality.required = true;
 	personality.placeholder = "性格や話し方、好きなこと";
+	// the look, chosen once when the AI is registered (docs/prd.md 3.4.4); VRMs move with the city's motions
+	const look = el("select", "");
+	look.title = "見た目（登録したあとは変えられません）";
+	void fetch("/api/presets")
+		.then((r) => (r.ok ? (r.json() as Promise<{ id: string; name: string; assets: { vrm: string } }[]>) : []))
+		.then((presets) => {
+			for (const p of presets) {
+				const o = el("option", "", p.name);
+				o.value = p.id;
+				look.append(o);
+			}
+			look.value = presets.find((p) => /\.vrm$/i.test(p.assets.vrm))?.id ?? presets[0]?.id ?? "";
+		});
 	const presets = el("div", "rj-report-actions");
 	for (const p of PRESETS) {
 		const b = el("button", "rj-secondary", p.split("。")[0]);
@@ -61,6 +74,8 @@ export function showAgentPage(root: HTMLElement): void {
 	form.append(
 		el("b", "", "名前と性格"),
 		name,
+		el("span", "rj-note", "見た目："),
+		look,
 		el("span", "rj-note", "性格の例："),
 		presets,
 		personality,
@@ -107,7 +122,12 @@ export function showAgentPage(root: HTMLElement): void {
 
 	form.onsubmit = (e) => {
 		e.preventDefault();
-		send({ cmd: "start", name: name.value.trim(), personality: personality.value.trim() });
+		send({
+			cmd: "start",
+			name: name.value.trim(),
+			personality: personality.value.trim(),
+			preset: look.value,
+		});
 	};
 
 	worker.onmessage = (e: MessageEvent<FromWorker>) => {
@@ -117,6 +137,8 @@ export function showAgentPage(root: HTMLElement): void {
 				// a returning AI keeps its name (it is registered); the personality can be changed
 				name.value = m.name ?? "";
 				name.disabled = m.name !== null;
+				// a registered AI keeps the look it was given
+				look.disabled = m.name !== null;
 				personality.value = m.personality || personality.value;
 				go.textContent = m.name ? `「${m.name}」を街に入れる` : "街に住まわせる";
 				form.hidden = false;

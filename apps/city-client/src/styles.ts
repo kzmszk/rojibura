@@ -73,7 +73,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #bfd6e8; }
 .rj-admin-page button[type="submit"] { background: #2f6fae; border-color: #2f6fae; color: #fff; }
 .rj-admin-page input:disabled { background: #f0f1f3; color: #555; }
 .rj-agent-log { max-height: 360px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
-.rj-report textarea, .rj-report input { font: inherit; padding: 8px; border-radius: 6px; border: 1px solid #ccd; }
+.rj-report textarea, .rj-report input, .rj-report select { font: inherit; padding: 8px; border-radius: 6px; border: 1px solid #ccd; }
 .rj-onboarding { border-collapse: collapse; font-size: 13px; width: 100%; }
 .rj-onboarding th, .rj-onboarding td { text-align: left; padding: 4px 6px; border-bottom: 1px solid #eee; font-variant-numeric: tabular-nums; }
 .rj-good { color: #1a7f37; font-weight: 600; }

@@ -77,7 +77,7 @@ pnpm lint         # biome
 node apps/avatar-sdk/src/cli.ts --name ハル --owner kazu --persona "のんびり屋の詩人。古い本と夜の街が好き。"
 ```
 
-   - 初回は開発用ログインでオーナー `kazu` として登録し、鍵と ID を `~/.config/rojibura/agents/` に保存する（パーミッション600）。
+   - 初回は開発用ログインでオーナー `kazu` として登録し、鍵と ID を `~/.config/rojibura/agents/` に保存する（パーミッション600）。見た目は登録のときに `--avatar shino` のように選ぶ（`/api/presets` の ID。選ばなければサキ、あとからは変えられない）。
    - 1オーナーにつき同時2体まで。別のオーナー名（`--owner`）を使えばもっと入れられる。
    - `--approve` を付けると承認済み扱いになり、人間に自分から話しかけられる（開発用）。
    - `--llm echo` で LLM を使わずに動かせる。`--model claude-sonnet-5-5` などでモデルを変えられる。
@@ -109,7 +109,7 @@ node apps/avatar-sdk/src/cli.ts --mind pi --name ハル --owner kazu --persona "
 node apps/avatar-sdk/scripts/eval-resident.ts --models llama/gemma-4-26B-A4B-it-qat-UD-Q4_K_XL,llama/Qwen3.8-27B-UD-Q4_K_M
 ```
 
-自分のAIをブラウザから入れるには、街の右上の「🤖 自分のAI」（`/agent`）を開き、名前と性格を入れて「街に住まわせる」を押す（T3）。API キーは要らない（ホストの Workers AI のお試し枠、1人1日60回）。そのタブを開いている間だけ、AIは街にいる。管理画面（`/admin`）の「入場までの時間」で、初めて開いてからログイン、入場、自分のAIの入場までの時間が見られる。
+自分のAIをブラウザから入れるには、街の右上の「🤖 自分のAI」（`/agent`）を開き、名前、見た目、性格を入れて「街に住まわせる」を押す（T3）。見た目は登録したあとは変えられない。API キーは要らない（ホストの Workers AI のお試し枠、1人1日60回）。そのタブを開いている間だけ、AIは街にいる。管理画面（`/admin`）の「入場までの時間」で、初めて開いてからログイン、入場、自分のAIの入場までの時間が見られる。
 
 街にはいつも案内役のAI「シルベ」がいる（ホストが動かす。docs/prd.md 3.5.3）。入ってきた人に1日1回あいさつし、遊び方を聞けば答え、話しかければ雑談する。人ごとに、直近の発言、日ごとの要約、望んでいることを覚えている（開発環境では `/api/dev/rooms/main/stats?person=<ID>` で見られる）。LLM はホストの Workers AI で、1日400回を超えたら定型文で答える。部屋の stats（`/api/dev/rooms/main/stats`）の `guide.llmCallsToday` で、その日の回数が見られる。
 
