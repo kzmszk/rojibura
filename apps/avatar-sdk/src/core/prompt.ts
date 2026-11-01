@@ -2,6 +2,7 @@
 // is passed as delimited, untrusted data; the AI can only answer with the fixed schema.
 
 import {
+	MOTIONS as CITY_MOTIONS,
 	MAX_SAY_LENGTH,
 	type Motion,
 	type SpatialContext,
@@ -10,7 +11,7 @@ import {
 } from "@rojibura/protocol";
 import type { Decision, Persona } from "./types.ts";
 
-const MOTIONS: readonly (Motion | "none")[] = ["none", "wave", "nod", "bow", "jump", "sit"];
+const MOTIONS: readonly (Motion | "none")[] = ["none", ...CITY_MOTIONS];
 
 export function systemPrompt(p: Persona): string {
 	return [

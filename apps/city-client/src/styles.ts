@@ -28,6 +28,9 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #bfd6e8; }
 .rj-line.sys { color: #777; font-size: 12px; }
 .rj-line.mine b { color: #b46a17; }
 .rj-say { display: flex; gap: 6px; }
+.rj-motions { display: flex; gap: 4px; }
+.rj-motions button { font-size: 18px; line-height: 1; padding: 6px 8px; border-radius: 8px; border: 1px solid #aab; background: rgba(255,255,255,.85); cursor: pointer; }
+.rj-motions button:hover { background: #fff; }
 .rj-say input { flex: 1; font-size: 15px; padding: 8px 10px; border-radius: 8px; border: 1px solid #aab; }
 .rj-target { font-size: 13px; padding: 0 10px; border-radius: 8px; border: 1px solid #aab; background: #f3f4f6; cursor: pointer; white-space: nowrap; }
 .rj-target.on { background: #2f6fae; color: #fff; border-color: #2f6fae; }

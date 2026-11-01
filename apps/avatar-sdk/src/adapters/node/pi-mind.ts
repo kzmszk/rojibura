@@ -14,6 +14,7 @@ import {
 	SettingsManager,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { MOTIONS } from "@rojibura/protocol";
 import { Type } from "typebox";
 import type { Mind } from "../../core/resident.ts";
 import type { Logger } from "../../core/types.ts";
@@ -115,9 +116,9 @@ export async function createPiMind(opts: PiMindOptions): Promise<Mind> {
 		),
 		tool(
 			"gesture",
-			"身ぶりをする。to は相手の id（任意）。",
+			"身ぶりをする。sit（座る）と lie（寝転がる）は、歩き出すまで続く。to は相手の id（任意）。",
 			Type.Object({
-				motion: Type.Union(["wave", "nod", "bow", "jump", "sit"].map((m) => Type.Literal(m))),
+				motion: Type.Union(MOTIONS.map((m) => Type.Literal(m))),
 				to: Type.Optional(Type.String()),
 			}),
 		),

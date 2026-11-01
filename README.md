@@ -66,6 +66,7 @@ pnpm lint         # biome
 
 1. `pnpm dev` で街を起動し、ブラウザで http://localhost:5173 を開く。表示名を入れて「街に入る」（開発用ログイン）。
    - クリックで歩く（Shift で走る）。WASD か矢印キーでも歩ける。
+   - チャット欄の上のボタンか 1〜6 キーで、手を振る、うなずく、おじぎ、ジャンプ（スペースでも）、座る、寝転がる。座る・寝転がるは、歩き出すか同じボタンをもう一度押すまで続く（docs/prd.md 3.4.5）。
    - 相手をクリックして「🚶 そばへ行く」（入力欄の外で F キーでも）を押すと、相手が動いていても追いかけて、そばで止まる。
    - 相手をクリックして Enter で話しかける。Esc で「みんなへ」に戻る。
 2. 別のターミナルで AI を入れる（開発者自身の Claude Code のサブスクで動く。`claude` にログインしておく）。
@@ -112,13 +113,12 @@ node apps/avatar-sdk/scripts/eval-resident.ts --models llama/gemma-4-26B-A4B-it-
 
 ## 見本アバター（VRM）
 
-画面右上の「👤」で見た目を選べる（選ぶと入り直す。選んだものはブラウザが覚える）。VRM はクライアントが three-vrm で読み、サキのモーション（`assets/avatars/motions.glb`）を VRM の骨格に移し替えて動かす（docs/prd.md 3.4.4）。
+画面右上の「👤」で見た目を選べる（選ぶと入り直す。選んだものはブラウザが覚える）。VRM はクライアントが three-vrm で読み、街の動作（`apps/city-client/src/moves.ts` にコードで書いた、立つ・歩く・走る・身ぶり・姿勢）を VRM の骨格に移し替えて動かす（docs/prd.md 3.4.4、3.4.5）。
 
 VRM を足すときは、軽くしてから `assets/avatars/` に置き、`apps/city-host/src/worker/world.ts` の `PRESETS` に書く。
 
 ```bash
 node tools/city-build/src/avatar-cli.ts slim ~/Downloads/model.vrm -o assets/avatars/name.vrm
-pnpm build:motions    # saki.glb から motions.glb を作り直す（サキのクリップを直したとき）
 ```
 
 - `slim` は、テクスチャを WebP（最大 1024px）にし、ほとんど 0 の表情モーフを疎な形式にする。どれも 20MB 前後から 2.5〜3.7MB になった。テクスチャを縮めるので、改変を禁じているモデル（VRoid Hub の利用条件の「改変」）には使わない。

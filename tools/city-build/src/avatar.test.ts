@@ -1,10 +1,6 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { describe, expect, test } from "vitest";
-import { extractMotions, SAKI_BONES, slimVrm } from "./avatar.ts";
-import { parseGlb, readAccessor, sceneNodes, writeGlb } from "./glb.ts";
-
-const ROOT = resolve(import.meta.dirname, "../../..");
+import { slimVrm } from "./avatar.ts";
+import { parseGlb, readAccessor, writeGlb } from "./glb.ts";
 
 interface Json {
 	accessors: Record<string, unknown>[];
@@ -14,8 +10,6 @@ interface Json {
 	textures: { source?: number; extensions?: Record<string, { source: number }> }[];
 	extensions: Record<string, unknown>;
 	extensionsRequired?: string[];
-	nodes: { name?: string }[];
-	animations: { name: string; channels: { target: { node: number; path: string } }[] }[];
 }
 
 /**
@@ -150,38 +144,3 @@ function parseBin(glb: Uint8Array): Uint8Array {
 	const binLength = view.getUint32(20 + jsonLength, true);
 	return glb.slice(28 + jsonLength, 28 + jsonLength + binLength);
 }
-
-describe("extractMotions", () => {
-	const out = extractMotions(readFileSync(resolve(ROOT, "assets/avatars/saki.glb")), SAKI_BONES, [
-		"stand",
-		"walk",
-	]);
-	const glb = parseGlb(out);
-	const json = glb.json as unknown as Json;
-
-	test("keeps the humanoid bones under their VRM names, and only the clips asked for", () => {
-		const names = json.nodes.map((n) => n.name);
-		for (const bone of Object.values(SAKI_BONES)) expect(names).toContain(bone);
-		expect(names).not.toContain("wing1.L");
-		expect(json.animations.map((a) => a.name)).toEqual(["stand", "walk"]);
-		expect(out.byteLength).toBeLessThan(100_000);
-	});
-
-	test("bones move by rotation, the hips also by translation", () => {
-		for (const animation of json.animations) {
-			for (const { target } of animation.channels) {
-				const name = json.nodes[target.node]?.name ?? "";
-				if (Object.values(SAKI_BONES).includes(name)) {
-					expect(target.path === "rotation" || (name === "hips" && target.path === "translation")).toBe(true);
-				}
-			}
-		}
-	});
-
-	test("a .L bone is the humanoid's left (-X while facing -Z, as Saki and VRM 0.x do)", () => {
-		const x = (name: string) => sceneNodes(glb).find((n) => n.node.name === name)?.world[12] as number;
-		expect(x("leftUpperArm")).toBeLessThan(0);
-		expect(x("rightUpperArm")).toBeGreaterThan(0);
-		expect(x("leftFoot")).toBeLessThan(0);
-	});
-});

@@ -35,7 +35,23 @@ export interface Navigator {
 	isWalkable(p: Vec2): boolean;
 }
 
-const MOTION_EMOJI: Record<Motion, string> = { wave: "👋", nod: "🙂", bow: "🙇", jump: "⤴️", sit: "🪑" };
+const MOTION_EMOJI: Record<Motion, string> = {
+	wave: "👋",
+	nod: "🙂",
+	bow: "🙇",
+	jump: "⤴️",
+	sit: "🪑",
+	lie: "🛌",
+};
+/** The action bar (docs/prd.md 3.4.5): motion, label, key. Space also jumps. */
+const ACTIONS: [Motion, string, string][] = [
+	["wave", "手を振る", "1"],
+	["nod", "うなずく", "2"],
+	["bow", "おじぎ", "3"],
+	["jump", "ジャンプ", "4"],
+	["sit", "座る", "5"],
+	["lie", "寝転がる", "6"],
+];
 
 function el<K extends keyof HTMLElementTagNameMap>(
 	tag: K,
@@ -346,7 +362,16 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 	input.maxLength = MAX_SAY_LENGTH;
 	input.placeholder = "Enter で話す（相手をクリックで話しかけ、WASD・矢印キーで歩く）";
 	form.append(target, input);
-	chat.append(log, form);
+	const motionBar = el("div", "rj-motions");
+	for (const [motion, label, key] of ACTIONS) {
+		const b = el("button", "", MOTION_EMOJI[motion]);
+		b.type = "button";
+		b.title = `${label}（${key}${motion === "jump" ? "、スペース" : ""}）`;
+		b.setAttribute("aria-label", label);
+		b.onclick = () => act(motion);
+		motionBar.append(b);
+	}
+	chat.append(log, motionBar, form);
 	const toast = el("div", "rj-toast");
 	// standing at a portal: the way to the other area (docs/prd.md 3.8)
 	const travel = el("button", "rj-travel");
@@ -459,9 +484,14 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 				case "CORRECT":
 					if (myId) avatars.get(myId)?.setMove(m.move);
 					break;
-				case "ACTED":
-					if (!relations.silenced(m.id)) avatars.get(m.id)?.say(MOTION_EMOJI[m.motion], conn.hostNow());
+				case "ACTED": {
+					if (relations.silenced(m.id)) break;
+					const v = avatars.get(m.id);
+					const towards = m.target ? avatars.get(m.target)?.root.position : undefined;
+					// shown with the body; an avatar that cannot (a capsule, or walking) shows the emoji
+					if (v && !v.act(m.motion, conn.hostNow(), towards)) v.say(MOTION_EMOJI[m.motion], conn.hostNow());
 					break;
+				}
 				case "SAID": {
 					if (relations.silenced(m.id)) break;
 					const v = avatars.get(m.id);
@@ -588,6 +618,11 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 		if (e.key === "Enter" && !typing()) {
 			input.focus();
 			e.preventDefault();
+		} else if (!typing() && !panel.open && (e.key === " " || ACTIONS.some(([, , key]) => key === e.key))) {
+			e.preventDefault();
+			act(
+				e.key === " " ? "jump" : (ACTIONS.find(([, , key]) => key === e.key) as (typeof ACTIONS)[number])[0],
+			);
 		} else if (e.key.toLowerCase() === "f" && !typing() && talkTo) {
 			startFollow(talkTo);
 		} else if (panel.open && !typing() && (e.key.toLowerCase() === "q" || e.key.toLowerCase() === "e")) {
@@ -747,6 +782,29 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 		stopGoing();
 		following = { id, until: performance.now() + FOLLOW_MAX_MS, plannedAt: 0 };
 		showToast(`${them.state.name} のそばへ向かいます`);
+	}
+	/**
+	 * A gesture or a posture (docs/prd.md 3.4.5), for the person talked to if any. Walking on a click's path
+	 * stops first, so the body can show it; pressing the posture you are in stands up.
+	 */
+	function act(motion: Motion): void {
+		const mine = myId ? avatars.get(myId) : undefined;
+		if (!mine) return;
+		const now = conn.hostNow();
+		const move = mine.state.move;
+		const { pos, moving } = poseAt(move, now);
+		if (move.kind === "idle" && move.posture === motion) {
+			mine.setMove({ kind: "idle", pos, at: now });
+			conn.send({ t: "MOVE_VEL", pos, dir: [0, 0], speed: 0, seq: ++seq });
+			return;
+		}
+		stopGoing();
+		const steering = ["w", "a", "s", "d"].some((k) => keys.has(k));
+		if (moving && !steering) {
+			mine.setMove({ kind: "idle", pos, at: now });
+			conn.send({ t: "MOVE_VEL", pos, dir: [0, 0], speed: 0, seq: ++seq });
+		}
+		conn.send(talkTo ? { t: "ACTION", motion, target: talkTo } : { t: "ACTION", motion });
 	}
 	/** Stops following someone or going to a portal (the person moves on their own). */
 	function stopGoing(): void {

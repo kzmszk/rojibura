@@ -19,6 +19,7 @@ import {
 	facing,
 	type HostToClient,
 	INTEREST_RADIUS_DEFAULT,
+	isPosture,
 	type LeaveReason,
 	MAX_PATH_LENGTH,
 	MAX_PATH_POINTS,
@@ -469,6 +470,12 @@ export class RoomCore<C> {
 					return;
 				}
 				if (msg.target && !this.byId.has(msg.target)) return;
+				// sitting and lying last until the avatar moves (docs/prd.md 3.4.5): it stops where it is
+				if (isPosture(msg.motion)) {
+					m.move = { kind: "idle", pos: this.positionOf(m, now), at: now, posture: msg.motion };
+					this.transport.persist(conn, m);
+					this.broadcastAbout(m, { t: "MOVED", id: m.id, move: m.move });
+				}
 				this.broadcastAbout(
 					m,
 					{ t: "ACTED", id: m.id, motion: msg.motion, target: msg.target, at: now },

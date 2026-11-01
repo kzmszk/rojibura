@@ -14,6 +14,7 @@ import {
 	type HostToClient,
 	MAX_PATH_POINTS,
 	MAX_SAY_LENGTH,
+	MOTIONS,
 	type Motion,
 	sanitizeText,
 	textLength,
@@ -73,7 +74,6 @@ interface Turn {
 	tools: string[];
 }
 
-const MOTIONS: readonly Motion[] = ["wave", "nod", "bow", "jump", "sit"];
 /** Ticks per budget level: L1 slower, L2 only answers, L3 and above (AIs sent out) nothing. */
 const TICK_FACTOR: Record<BudgetLevel, number | null> = { 0: 1, 1: 3, 2: null, 3: null, 4: null };
 /** People and public talk within this distance are reported (the default interest radius). */

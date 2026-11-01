@@ -6,14 +6,16 @@ import type { Usage, UsageEvent } from "./usage.ts";
 export type AvatarId = string;
 /** A point on the walkable plane. Paths are horizontal; renderers decide the height. */
 export type Vec2 = [x: number, z: number];
-export type Motion = "wave" | "nod" | "bow" | "jump" | "sit";
+export type Motion = "wave" | "nod" | "bow" | "jump" | "sit" | "lie";
+/** A motion that lasts until the avatar moves (docs/prd.md 3.4.5). */
+export type Posture = Extract<Motion, "sit" | "lie">;
 export type Status = "active" | "busy" | "resting";
 export type BudgetLevel = 0 | 1 | 2 | 3 | 4;
 export type AvatarKind = "human" | "ai";
 
 /** `at` is always host time in milliseconds (the moment the state started). */
 export type MoveState =
-	| { kind: "idle"; pos: Vec2; at: number }
+	| { kind: "idle"; pos: Vec2; at: number; posture?: Posture }
 	| { kind: "path"; path: Vec2[]; speed: number; at: number }
 	| { kind: "vel"; pos: Vec2; dir: Vec2; speed: number; at: number };
 

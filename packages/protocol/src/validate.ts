@@ -17,11 +17,14 @@ import {
 	MAX_SAY_LENGTH,
 	MAX_SPEED,
 } from "./limits.ts";
-import type { BuildAt, ClientToHost, HostToClient, Motion, Status, Vec2 } from "./types.ts";
+import type { BuildAt, ClientToHost, HostToClient, Motion, Posture, Status, Vec2 } from "./types.ts";
 
 export type Parsed<T> = { ok: true; msg: T } | { ok: false; error: string };
 
-const MOTIONS: readonly Motion[] = ["wave", "nod", "bow", "jump", "sit"];
+export const MOTIONS: readonly Motion[] = ["wave", "nod", "bow", "jump", "sit", "lie"];
+/** Motions that last until the avatar moves: the host keeps them in its idle MoveState. */
+export const POSTURES: readonly Posture[] = ["sit", "lie"];
+export const isPosture = (m: Motion): m is Posture => (POSTURES as readonly Motion[]).includes(m);
 const STATUSES: readonly Status[] = ["active", "busy", "resting"];
 const COORD_LIMIT = 10_000;
 const ID_RE = /^[ha]_[A-Za-z0-9_-]{1,64}$/;

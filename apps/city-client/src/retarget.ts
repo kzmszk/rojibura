@@ -1,9 +1,10 @@
-// Plays the shared motions on any VRM (docs/prd.md 3.4.4). assets/avatars/motions.glb is Saki's skeleton with
-// its bones renamed after VRM humanoid bones (tools/city-build/src/avatar.ts). A clip is sampled on it and
-// re-expressed on the VRM's normalized bones, so each bone points the same way as Saki's at every moment.
+// Plays a motion made for one humanoid skeleton on another (docs/prd.md 3.4.5): the city's motions are written
+// for a T-pose reference rig (moves.ts) and played on each VRM's normalized bones, and on Saki's own bones.
+// A clip is sampled on the source and re-expressed on the target, so each bone points the same way at
+// every moment, whatever the proportions.
 //
-// The two rest poses differ (Saki's arms hang lower than a VRM's T-pose), so each bone first gets the rotation
-// that turns its rest direction into Saki's, and then follows how far Saki's bone turned from its rest.
+// The two rest poses may differ (Saki's arms hang lower than a T-pose), so each bone first gets the rotation
+// that turns its rest direction into the source's, and then follows how far the source bone turned from its rest.
 
 import * as THREE from "three";
 

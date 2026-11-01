@@ -176,6 +176,40 @@ describe("movement", () => {
 		expect(types(bot)).not.toContain("ACTED");
 	});
 
+	test("sitting and lying stop the avatar and last until it moves, also for those who come later", () => {
+		const a = conn("a");
+		const b = conn("b");
+		const pos = joinAt(a, human("alice"));
+		ctx.room.join(b, human("bob"));
+		ctx.room.handle(a, { t: "MOVE_PATH", path: [pos, [-10, 10]], speed: 1.4, seq: 1 });
+		ctx.clock.advance(2000);
+		ctx.room.handle(a, { t: "ACTION", motion: "lie" });
+		expect(b.inbox.slice(-2)).toMatchObject([
+			{ t: "MOVED", id: "h_alice", move: { kind: "idle", posture: "lie" } },
+			{ t: "ACTED", id: "h_alice", motion: "lie" },
+		]);
+		const lying = b.inbox[b.inbox.length - 2] as Extract<HostToClient, { t: "MOVED" }>;
+		expect(lying.move.kind === "idle" && lying.move.pos[1]).toBeCloseTo(pos[1] + 2.8, 1);
+		const c = conn("c");
+		ctx.room.join(c, human("carol"));
+		const w = c.inbox[0] as Extract<HostToClient, { t: "WELCOME" }>;
+		expect(w.avatars.find((x) => x.id === "h_alice")?.move).toMatchObject({ kind: "idle", posture: "lie" });
+		// moving again stands up
+		ctx.room.handle(a, {
+			t: "MOVE_VEL",
+			pos: lying.move.kind === "idle" ? lying.move.pos : pos,
+			dir: [1, 0],
+			speed: 1.4,
+			seq: 2,
+		});
+		expect(last(b)).toMatchObject({ t: "MOVED", move: { kind: "vel" } });
+		expect(last(b)).not.toHaveProperty("move.posture");
+		// a gesture is not a pose
+		ctx.room.handle(a, { t: "ACTION", motion: "wave" });
+		expect(last(b)).toMatchObject({ t: "ACTED", motion: "wave" });
+		expect(b.inbox.at(-2)).toMatchObject({ t: "MOVED", move: { kind: "vel" } });
+	});
+
 	test("AIs hear about arrivals and departures anywhere in the area", () => {
 		const bot = conn("bot");
 		const a = conn("a");

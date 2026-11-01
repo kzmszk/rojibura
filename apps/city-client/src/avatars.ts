@@ -1,23 +1,96 @@
 // Avatars in the scene: model (shared glTF, cloned; or a VRM per avatar), animation, name label, chat bubble,
 // and pose from the host's move state (docs/prd.md 3.4, フロー④).
 
-import { type VRM, VRMLoaderPlugin, VRMUtils } from "@pixiv/three-vrm";
-import { type AvatarState, type MoveState, poseAt, type Status } from "@rojibura/protocol";
+import { type VRM, type VRMHumanBoneName, VRMLoaderPlugin, VRMUtils } from "@pixiv/three-vrm";
+import {
+	type AvatarState,
+	isPosture,
+	type Motion,
+	type MoveState,
+	poseAt,
+	type Status,
+} from "@rojibura/protocol";
 import * as THREE from "three";
 import { GLTFLoader, type GLTFParser } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { CSS2DObject } from "three/examples/jsm/renderers/CSS2DRenderer.js";
 import { clone as cloneSkinned } from "three/examples/jsm/utils/SkeletonUtils.js";
+import { groundSpeed, legLength, MOVES, type MoveName, REFERENCE_LEG, referenceRig } from "./moves.ts";
 import { retarget } from "./retarget.ts";
 import type { CityScene } from "./scene.ts";
+
+/** The city's motions on one skeleton, and how fast walk and run cover the ground at normal speed. */
+interface Motions {
+	clips: THREE.AnimationClip[];
+	pace: Partial<Record<MoveName, number>>;
+}
 
 interface Template {
 	scene: THREE.Object3D;
 	clips: THREE.AnimationClip[];
 	/** Lifts the model so its feet are at y = 0. */
 	footOffset: number;
+	/** Gestures and postures made for this skeleton, when it is one we know (Saki's). */
+	moves: Motions | null;
 }
 
 const BUBBLE_MS = 7000;
+const FADE = 0.3;
+const RAD = Math.PI / 180;
+
+const PLAY = new Map(MOVES.map((m) => [m.name as string, m.play]));
+let city: { clips: THREE.AnimationClip[]; pace: Record<"walk" | "run", number> } | null = null;
+
+/** The city's motions on the reference rig (made once). */
+function cityMoves() {
+	if (!city) {
+		const clips = MOVES.map((m) => m.clip());
+		const of = (name: MoveName) => clips.find((c) => c.name === name) as THREE.AnimationClip;
+		city = { clips, pace: { walk: groundSpeed(of("walk")), run: groundSpeed(of("run")) } };
+	}
+	return city;
+}
+
+/**
+ * The city's motions retargeted to a skeleton at rest (humanoid bone name -> node). `turned`: the skeleton
+ * faces -Z. `only`: just these motions (the avatar has its own for the rest).
+ */
+function motionsFor(bones: Record<string, THREE.Object3D>, turned: boolean, only?: MoveName[]): Motions {
+	const { clips, pace } = cityMoves();
+	const rig = referenceRig(turned);
+	const legs = legLength(bones) / REFERENCE_LEG;
+	return {
+		clips: clips
+			.filter((c) => !only || only.includes(c.name as MoveName))
+			.map((c) => retarget(rig, c, bones)),
+		pace: only ? {} : { walk: pace.walk * legs, run: pace.run * legs },
+	};
+}
+
+/** Humanoid bones of glTF avatars rigged like Saki (Blender's "upperarm.L"; three.js drops the dots). */
+const BLENDER_BONES: Record<string, string> = {
+	hips: "hips",
+	spine: "spine",
+	chest: "chest",
+	neck: "neck",
+	head: "head",
+	leftShoulder: "shoulderL",
+	leftUpperArm: "upperarmL",
+	leftLowerArm: "forearmL",
+	leftHand: "handL",
+	rightShoulder: "shoulderR",
+	rightUpperArm: "upperarmR",
+	rightLowerArm: "forearmR",
+	rightHand: "handR",
+	leftUpperLeg: "thighL",
+	leftLowerLeg: "shinL",
+	leftFoot: "footL",
+	rightUpperLeg: "thighR",
+	rightLowerLeg: "shinR",
+	rightFoot: "footR",
+};
+
+/** Saki walks, runs and stands her own way; the gestures and postures come from the city's motions. */
+const GESTURES: MoveName[] = ["wave", "nod", "bow", "jump", "sit", "lie"];
 
 class ModelCache {
 	private readonly loading = new Map<string, Promise<Template | null>>();
@@ -29,7 +102,29 @@ class ModelCache {
 				.loadAsync(url)
 				.then((g) => {
 					const box = new THREE.Box3().setFromObject(g.scene);
-					return { scene: g.scene, clips: g.animations, footOffset: -box.min.y };
+					const bones: Record<string, THREE.Object3D> = {};
+					for (const [human, name] of Object.entries(BLENDER_BONES)) {
+						const node = g.scene.getObjectByName(name);
+						if (node) bones[human] = node;
+					}
+					// glTF models face -Z (a +Y facing Blender model, exported)
+					const known = Object.keys(bones).length === Object.keys(BLENDER_BONES).length;
+					const moves = known ? motionsFor(bones, true, GESTURES) : null;
+					// bones the city's motions leave alone (Saki's wings) keep how they are while standing,
+					// instead of springing back to their rest pose
+					const stand = g.animations.find((c) => c.name === "stand");
+					const humanoid = new Set(Object.values(bones).map((b) => b.name));
+					for (const clip of moves?.clips ?? []) {
+						for (const track of stand?.tracks ?? []) {
+							if (humanoid.has(track.name.slice(0, track.name.lastIndexOf(".")))) continue;
+							const size = track.getValueSize();
+							const held = track.clone();
+							held.times = new Float32Array([0]);
+							held.values = track.values.slice(0, size);
+							clip.tracks.push(held);
+						}
+					}
+					return { scene: g.scene, clips: g.animations, footOffset: -box.min.y, moves };
 				})
 				.catch(() => null);
 			this.loading.set(url, p);
@@ -39,24 +134,6 @@ class ModelCache {
 }
 
 const models = new ModelCache();
-
-/** The motions every VRM plays (docs/prd.md 3.4.4): Saki's, on bones named after VRM humanoid bones. */
-const MOTIONS_URL = "/avatars/motions.glb";
-let motions: Promise<{ scene: THREE.Object3D; clips: THREE.AnimationClip[] } | null> | null = null;
-
-function loadMotions() {
-	motions ??= new GLTFLoader()
-		.loadAsync(MOTIONS_URL)
-		.then((g) => {
-			// Saki faces -Z; a VRM faces +Z once VRMUtils.rotateVRM0 has turned it
-			const scene = new THREE.Group();
-			scene.rotation.y = Math.PI;
-			scene.add(g.scene);
-			return { scene, clips: g.animations };
-		})
-		.catch(() => null);
-	return motions;
-}
 
 /**
  * Makes every VRM parsed from the same file share its textures: one decode and one GPU copy however many
@@ -80,7 +157,7 @@ interface VrmFile {
 	data: ArrayBuffer;
 	textures: Map<number, Promise<unknown>>;
 	/** The motions on this file's bones, made from the first VRM parsed (at rest). */
-	clips: Promise<THREE.AnimationClip[]> | null;
+	moves: Motions | null;
 }
 
 /**
@@ -90,12 +167,12 @@ interface VrmFile {
 class VrmCache {
 	private readonly files = new Map<string, Promise<VrmFile | null>>();
 
-	async get(url: string): Promise<{ vrm: VRM; clips: THREE.AnimationClip[] } | null> {
+	async get(url: string): Promise<{ vrm: VRM; moves: Motions } | null> {
 		let p = this.files.get(url);
 		if (!p) {
 			p = fetch(url)
 				.then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(`${r.status}`))))
-				.then((data) => ({ data, textures: new Map(), clips: null }))
+				.then((data) => ({ data, textures: new Map(), moves: null }))
 				.catch(() => null);
 			this.files.set(url, p);
 		}
@@ -109,22 +186,52 @@ class VrmCache {
 		if (!gltf || !vrm) return null;
 		VRMUtils.removeUnnecessaryVertices(gltf.scene);
 		VRMUtils.combineSkeletons(gltf.scene);
+		// a VRM 0.x faces -Z; turned, it faces +Z like a VRM 1.0 and the city's motions
 		VRMUtils.rotateVRM0(vrm);
-		file.clips ??= loadMotions().then((m) => {
-			if (!m) return [];
+		if (!file.moves) {
 			vrm.scene.updateMatrixWorld(true);
 			const bones: Record<string, THREE.Object3D> = {};
 			for (const name of Object.keys(vrm.humanoid.humanBones)) {
-				const node = vrm.humanoid.getNormalizedBoneNode(name as keyof typeof vrm.humanoid.humanBones);
+				const node = vrm.humanoid.getNormalizedBoneNode(name as VRMHumanBoneName);
 				if (node) bones[name] = node;
 			}
-			return m.clips.map((clip) => retarget(m.scene, clip, bones));
-		});
-		return { vrm, clips: await file.clips };
+			file.moves = motionsFor(bones, false);
+		}
+		return { vrm, moves: file.moves };
 	}
 }
 
 const vrms = new VrmCache();
+
+/** Curls the fingers a little: a VRM's hands rest flat and straight, which looks stiff (they are not animated). */
+function relaxFingers(vrm: VRM): void {
+	for (const [side, s] of [
+		["left", -1],
+		["right", 1],
+	] as const) {
+		for (const [finger, more] of [
+			["Index", 0],
+			["Middle", 4],
+			["Ring", 8],
+			["Little", 12],
+		] as const) {
+			for (const [joint, deg] of [
+				["Proximal", 16],
+				["Intermediate", 26],
+				["Distal", 16],
+			] as const) {
+				const node = vrm.humanoid.getNormalizedBoneNode(`${side}${finger}${joint}` as VRMHumanBoneName);
+				node?.rotation.set(0, 0, s * (deg + more) * RAD);
+			}
+		}
+		vrm.humanoid
+			.getNormalizedBoneNode(`${side}ThumbProximal` as VRMHumanBoneName)
+			?.rotation.set(0, s * 12 * RAD, 0);
+		vrm.humanoid
+			.getNormalizedBoneNode(`${side}ThumbDistal` as VRMHumanBoneName)
+			?.rotation.set(0, s * 18 * RAD, 0);
+	}
+}
 
 function capsule(color: number): THREE.Object3D {
 	const g = new THREE.Group();
@@ -155,7 +262,14 @@ export class AvatarView {
 	private disposed = false;
 	private mixer: THREE.AnimationMixer | null = null;
 	private actions: Record<string, THREE.AnimationAction> = {};
+	private pace: Motions["pace"] = {};
 	private current = "";
+	/** A gesture playing once, until this host time. */
+	private gesture: { name: string; until: number } | null = null;
+	/** The next play starts over even if it is the motion already playing (the same gesture again). */
+	private replay = false;
+	/** Heading to turn to while standing (towards whom a gesture is for). */
+	private faceTo: number | null = null;
 	private readonly label: HTMLDivElement;
 	private readonly bubble: HTMLDivElement;
 	private bubbleUntil = 0;
@@ -191,7 +305,7 @@ export class AvatarView {
 	private async loadVrm(url: string): Promise<void> {
 		const loaded = await vrms.get(url);
 		if (!loaded) return;
-		const { vrm, clips } = loaded;
+		const { vrm, moves } = loaded;
 		if (this.disposed) {
 			disposeVrm(vrm);
 			return;
@@ -202,13 +316,13 @@ export class AvatarView {
 			// spring bones and expressions move vertices outside the bind-pose bounds
 			o.frustumCulled = false;
 		});
+		relaxFingers(vrm);
 		this.root.remove(this.model);
 		this.model = vrm.scene;
 		this.root.add(vrm.scene);
 		this.vrm = vrm;
-		this.mixer = new THREE.AnimationMixer(vrm.scene);
-		for (const clip of clips) this.actions[clip.name] = this.mixer.clipAction(clip);
-		this.current = "";
+		this.setClips(new THREE.AnimationMixer(vrm.scene), moves.clips);
+		this.pace = moves.pace;
 	}
 
 	private async loadModel(url: string): Promise<void> {
@@ -226,8 +340,20 @@ export class AvatarView {
 		this.root.remove(this.model);
 		this.model = holder;
 		this.root.add(holder);
-		this.mixer = new THREE.AnimationMixer(m);
-		for (const clip of t.clips) this.actions[clip.name] = this.mixer.clipAction(clip);
+		// the city's gestures and postures replace the model's own ones of the same name
+		this.setClips(new THREE.AnimationMixer(m), [...t.clips, ...(t.moves?.clips ?? [])]);
+	}
+
+	private setClips(mixer: THREE.AnimationMixer, clips: THREE.AnimationClip[]): void {
+		this.mixer = mixer;
+		for (const clip of clips) {
+			const action = mixer.clipAction(clip);
+			if ((PLAY.get(clip.name) ?? "loop") !== "loop") {
+				action.setLoop(THREE.LoopOnce, 1);
+				action.clampWhenFinished = true;
+			}
+			this.actions[clip.name] = action;
+		}
 		this.current = "";
 	}
 
@@ -246,6 +372,25 @@ export class AvatarView {
 		this.bubbleUntil = now + BUBBLE_MS;
 		// the mouth moves for about as long as the line takes to say
 		this.talkUntil = now + Math.min(4000, 400 + [...text].length * 90);
+	}
+
+	/**
+	 * Shows a motion with the body (docs/prd.md 3.4.5), turned towards `towards` if given. Postures (sit, lie)
+	 * come with the move state and last; gestures play once while standing. Returns false when the avatar
+	 * cannot show it (no such motion, or on the move), so the caller can show it some other way.
+	 */
+	act(motion: Motion, hostNow: number, towards?: THREE.Vector3): boolean {
+		const action = this.actions[motion];
+		if (!action || poseAt(this.state.move, hostNow).moving) return false;
+		if (towards) {
+			const p = this.root.position;
+			if (Math.hypot(towards.x - p.x, towards.z - p.z) > 0.3)
+				this.faceTo = Math.atan2(towards.x - p.x, towards.z - p.z);
+		}
+		if (isPosture(motion)) return true;
+		this.gesture = { name: motion, until: hostNow + action.getClip().duration * 1000 };
+		this.replay = true;
+		return true;
 	}
 
 	/** Blinks now and then, and moves the mouth while talking (VRM expressions). */
@@ -268,26 +413,42 @@ export class AvatarView {
 		this.label.title = s.owner ? `オーナー: ${s.owner}` : "";
 	}
 
+	private turnTo(heading: number, rate: number): void {
+		const diff = Math.atan2(Math.sin(heading - this.facing), Math.cos(heading - this.facing));
+		this.facing += diff * Math.min(1, rate);
+	}
+
 	update(hostNow: number, dt: number, scene: CityScene): void {
-		const pose = poseAt(this.state.move, hostNow);
+		const move = this.state.move;
+		const pose = poseAt(move, hostNow);
 		const ground = scene.heightAt(pose.pos[0], pose.pos[1]);
 		if (ground !== null)
 			this.y = Math.abs(ground - this.y) > 2 ? ground : this.y + (ground - this.y) * Math.min(1, dt * 12);
 		this.root.position.set(pose.pos[0], this.y, pose.pos[1]);
 		if (pose.moving) {
-			const target = Math.atan2(pose.dir[0], pose.dir[1]);
-			let diff = target - this.facing;
-			diff = Math.atan2(Math.sin(diff), Math.cos(diff));
-			this.facing += diff * Math.min(1, dt * 10);
+			this.gesture = null;
+			this.faceTo = null;
+			this.turnTo(Math.atan2(pose.dir[0], pose.dir[1]), dt * 10);
+		} else if (this.faceTo !== null) {
+			this.turnTo(this.faceTo, dt * 6);
 		}
 		this.root.rotation.y = this.facing;
-		this.play(
-			pose.moving
-				? this.state.move.kind === "path" && this.state.move.speed > 2.5
-					? "run"
-					: "walk"
-				: "stand",
-		);
+
+		const speed = move.kind === "idle" ? 0 : move.speed;
+		const posture = move.kind === "idle" ? move.posture : undefined;
+		let want = "stand";
+		if (pose.moving) want = speed > 2.5 && this.actions.run ? "run" : "walk";
+		else if (this.gesture && hostNow < this.gesture.until) want = this.gesture.name;
+		else if (posture && this.actions[posture]) want = posture;
+		// a posture that began before this avatar was drawn (someone who came later) shows as it is now
+		const settled =
+			posture === want && hostNow - move.at > (this.actions[want]?.getClip().duration ?? 0) * 1000;
+		this.play(want, settled);
+		// walk and run keep pace with the ground, so the feet do not slide
+		const pace = this.pace[want as MoveName];
+		const action = this.actions[want];
+		if (pace && action && speed > 0) action.timeScale = Math.min(2.5, Math.max(0.4, speed / pace));
+
 		this.mixer?.update(dt);
 		if (this.vrm) {
 			this.express(hostNow);
@@ -314,13 +475,16 @@ export class AvatarView {
 		return { clips: Object.keys(this.actions), playing: this.current };
 	}
 
-	private play(name: string): void {
-		if (name === this.current) return;
+	private play(name: string, settled = false): void {
+		if (name === this.current && !this.replay) return;
+		this.replay = false;
 		const next = this.actions[name] ?? this.actions.stand ?? this.actions.idle;
 		if (!next) return;
 		const prev = this.current ? this.actions[this.current] : undefined;
-		next.reset().fadeIn(0.25).play();
-		prev?.fadeOut(0.25);
+		next.reset();
+		if (settled) next.time = next.getClip().duration;
+		next.fadeIn(FADE).play();
+		if (prev !== next) prev?.fadeOut(FADE);
 		this.current = name;
 	}
 

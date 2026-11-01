@@ -1,8 +1,6 @@
 // Avatars shipped with the city (docs/prd.md 3.4.1, 3.4.4): slim a VRM to the budget without touching what
-// the VRM extension points at, and cut the motions everyone shares out of Saki's glb.
-//
-// Both only rewrite buffers and the JSON that points into them. Node, mesh, material and texture indices stay
-// as they are (except for the nodes `extractMotions` drops), because the VRM extension refers to them by index.
+// the VRM extension points at. Only buffers and the JSON that points into them are rewritten: node, mesh,
+// material and texture indices stay as they are, because the VRM extension refers to them by index.
 
 import { type Glb, parseGlb, readAccessor, writeGlb } from "./glb.ts";
 
@@ -35,22 +33,6 @@ interface Texture {
 	[key: string]: unknown;
 }
 
-interface Node {
-	name?: string;
-	children?: number[];
-	matrix?: number[];
-	translation?: number[];
-	rotation?: number[];
-	scale?: number[];
-	[key: string]: unknown;
-}
-
-interface Animation {
-	name?: string;
-	channels: { sampler: number; target: { node?: number; path: string } }[];
-	samplers: { input: number; output: number; interpolation?: string }[];
-}
-
 interface Json {
 	accessors?: Accessor[];
 	bufferViews?: BufferView[];
@@ -58,10 +40,6 @@ interface Json {
 	images?: { bufferView?: number; mimeType?: string; name?: string }[];
 	textures?: Texture[];
 	meshes?: { primitives: { targets?: Record<string, number>[] }[] }[];
-	nodes?: Node[];
-	scene?: number;
-	scenes?: { nodes?: number[] }[];
-	animations?: Animation[];
 	extensions?: Record<string, unknown>;
 	extensionsUsed?: string[];
 	extensionsRequired?: string[];
@@ -243,134 +221,4 @@ export async function slimVrm(
 	const out = writeGlb(json, pack(json, views));
 	report.bytes.after = out.byteLength;
 	return { glb: out, report };
-}
-
-/** Saki's bones (assets/avatars/saki.glb), by the VRM humanoid bone each one plays. */
-export const SAKI_BONES: Record<string, string> = {
-	hips: "hips",
-	spine: "spine",
-	chest: "chest",
-	neck: "neck",
-	head: "head",
-	"shoulder.L": "leftShoulder",
-	"upperarm.L": "leftUpperArm",
-	"forearm.L": "leftLowerArm",
-	"hand.L": "leftHand",
-	"shoulder.R": "rightShoulder",
-	"upperarm.R": "rightUpperArm",
-	"forearm.R": "rightLowerArm",
-	"hand.R": "rightHand",
-	"thigh.L": "leftUpperLeg",
-	"shin.L": "leftLowerLeg",
-	"foot.L": "leftFoot",
-	"thigh.R": "rightUpperLeg",
-	"shin.R": "rightLowerLeg",
-	"foot.R": "rightFoot",
-};
-
-/**
- * Cuts the humanoid motions out of a glb: the bones in `bones` (renamed to their VRM humanoid names) and
- * their ancestors, and only the `clips` named. Meshes, skins and textures are dropped. Mapped bones keep
- * their rotation tracks, the hips their translation, and the ancestors (the armature) every track.
- */
-export function extractMotions(
-	input: Uint8Array,
-	bones: Record<string, string>,
-	clips: string[],
-): Uint8Array {
-	const glb = parseGlb(input);
-	const json = glb.json as unknown as Json;
-	const nodes = json.nodes ?? [];
-	const parent = new Map<number, number>();
-	nodes.forEach((n, i) => {
-		for (const c of n.children ?? []) parent.set(c, i);
-	});
-	const humanoid = new Map<number, string>();
-	const keep = new Set<number>();
-	nodes.forEach((n, i) => {
-		const bone = n.name === undefined ? undefined : bones[n.name];
-		if (!bone) return;
-		humanoid.set(i, bone);
-		for (let at: number | undefined = i; at !== undefined && !keep.has(at); at = parent.get(at)) keep.add(at);
-	});
-	const missing = Object.keys(bones).filter((name) => !nodes.some((n) => n.name === name));
-	if (missing.length) throw new Error(`bones not found: ${missing.join(", ")}`);
-
-	const nodeIndex = new Map<number, number>();
-	const outNodes: Node[] = [];
-	nodes.forEach((n, i) => {
-		if (!keep.has(i)) return;
-		nodeIndex.set(i, outNodes.length);
-		const out: Node = { name: humanoid.get(i) ?? n.name };
-		for (const key of ["matrix", "translation", "rotation", "scale"] as const) if (n[key]) out[key] = n[key];
-		outNodes.push(out);
-	});
-	nodes.forEach((n, i) => {
-		const out = nodeIndex.has(i) ? outNodes[nodeIndex.get(i) as number] : undefined;
-		const children = (n.children ?? []).filter((c) => keep.has(c)).map((c) => nodeIndex.get(c) as number);
-		if (out && children.length) out.children = children;
-	});
-
-	const accessors: Accessor[] = [];
-	const views: Uint8Array[] = [];
-	const bufferViews: BufferView[] = [];
-	const accessorIndex = new Map<number, number>();
-	const copyAccessor = (index: number): number => {
-		const known = accessorIndex.get(index);
-		if (known !== undefined) return known;
-		const a = json.accessors?.[index];
-		if (!a || a.bufferView === undefined || a.sparse) throw new Error(`accessor ${index} cannot be copied`);
-		const view = json.bufferViews?.[a.bufferView];
-		const width = readAccessor(glb, index).length / a.count;
-		if (view?.byteStride && view.byteStride !== width * 4)
-			throw new Error(`accessor ${index} is interleaved`);
-		const start = a.byteOffset ?? 0;
-		views.push(viewBytes(glb, json, a.bufferView).subarray(start, start + a.count * width * 4));
-		bufferViews.push({ buffer: 0, byteLength: 0 });
-		const { byteOffset: _, ...rest } = a;
-		accessors.push({ ...rest, bufferView: bufferViews.length - 1 });
-		accessorIndex.set(index, accessors.length - 1);
-		return accessors.length - 1;
-	};
-
-	const animations: Animation[] = [];
-	for (const name of clips) {
-		const animation = json.animations?.find((a) => a.name === name);
-		if (!animation) throw new Error(`clip not found: ${name}`);
-		const out: Animation = { name, channels: [], samplers: [] };
-		const samplerIndex = new Map<number, number>();
-		for (const channel of animation.channels) {
-			const node = channel.target.node;
-			if (node === undefined || !keep.has(node)) continue;
-			const bone = humanoid.get(node);
-			const path = channel.target.path;
-			if (bone && path !== "rotation" && !(bone === "hips" && path === "translation")) continue;
-			let sampler = samplerIndex.get(channel.sampler);
-			if (sampler === undefined) {
-				const s = animation.samplers[channel.sampler];
-				if (!s) throw new Error(`clip ${name} has no sampler ${channel.sampler}`);
-				sampler = out.samplers.length;
-				out.samplers.push({
-					input: copyAccessor(s.input),
-					output: copyAccessor(s.output),
-					...(s.interpolation ? { interpolation: s.interpolation } : {}),
-				});
-				samplerIndex.set(channel.sampler, sampler);
-			}
-			out.channels.push({ sampler, target: { node: nodeIndex.get(node) as number, path } });
-		}
-		animations.push(out);
-	}
-
-	const roots = (json.scenes?.[json.scene ?? 0]?.nodes ?? []).filter((n) => keep.has(n));
-	const out: Json = {
-		asset: { version: "2.0", generator: "rojibura tools/city-build/src/avatar.ts" },
-		scene: 0,
-		scenes: [{ nodes: roots.map((n) => nodeIndex.get(n) as number) }],
-		nodes: outNodes,
-		animations,
-		accessors,
-		bufferViews,
-	};
-	return writeGlb(out, pack(out, views));
 }
