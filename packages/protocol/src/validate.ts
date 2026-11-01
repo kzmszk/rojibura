@@ -186,6 +186,9 @@ export function parseClientMessage(raw: string | ArrayBuffer): Parsed<ClientToHo
 		}
 		case "DROP":
 			return { ok: true, msg: { t: "DROP" } };
+		case "COMPANION":
+			if (typeof v.on !== "boolean") return fail("bad on");
+			return { ok: true, msg: { t: "COMPANION", on: v.on } };
 		case "BUILD":
 			return parseBuild(v);
 		case "UNBUILD": {

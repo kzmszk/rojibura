@@ -520,3 +520,57 @@ describe("small things", () => {
 		expect(ctx.room.itemList).toEqual([{ id: "i_x", kind: "box", pos: [1, 1] }]);
 	});
 });
+
+describe("walking with your AIs", () => {
+	test("they come just ahead to the right, walk along to the right of where you go, and do not wander", () => {
+		const a = conn("a");
+		const bot = conn("bot");
+		place(a, human("alice"), [-10, -10]);
+		place(bot, ai("bot", "alice"), [-14, -12]);
+		const w = (() => {
+			const c = conn("c");
+			ctx.room.join(c, human("carol"));
+			return c.inbox[0] as Extract<HostToClient, { t: "WELCOME" }>;
+		})();
+		expect(w.avatars.find((x) => x.id === "a_bot")?.ownerId).toBe("h_alice");
+		ctx.room.handle(a, { t: "COMPANION", on: true });
+		// facing +z (nothing walked yet): 2 m ahead, 0.8 m to the right (-x)
+		const first = last(a);
+		expect(first).toMatchObject({ t: "MOVED", id: "a_bot", move: { kind: "path" } });
+		const end = (m: HostToClient | undefined) =>
+			m?.t === "MOVED" && m.move.kind === "path" ? m.move.path.at(-1) : null;
+		expect(end(first)?.[0]).toBeCloseTo(-10.8, 3);
+		expect(end(first)?.[1]).toBeCloseTo(-8, 3);
+		// alice walks 10 m along +z; the AI goes along, ending ahead to her right, and takes as long
+		ctx.room.handle(a, {
+			t: "MOVE_PATH",
+			path: [
+				[-10, -10],
+				[-10, 0],
+			],
+			speed: 1.4,
+			seq: 1,
+		});
+		const along = last(a);
+		expect(end(along)?.[0]).toBeCloseTo(-10.8, 3);
+		expect(end(along)?.[1]).toBeCloseTo(2, 3);
+		// its own steps are not taken meanwhile
+		bot.inbox.length = 0;
+		ctx.room.handle(bot, {
+			t: "MOVE_PATH",
+			path: [
+				[-10.8, -8],
+				[10, 10],
+			],
+			speed: 1.4,
+			seq: 1,
+		});
+		expect(bot.inbox.map((m) => m.t)).toEqual(["CORRECT"]);
+		// company off: it walks on its own again
+		ctx.room.handle(a, { t: "COMPANION", on: false });
+		ctx.clock.advance(20_000);
+		const at = ctx.room.positionOf(ctx.room.members.get(bot) as never);
+		ctx.room.handle(bot, { t: "MOVE_PATH", path: [at, [-15, 15]], speed: 1.4, seq: 2 });
+		expect(last(a)).toMatchObject({ t: "MOVED", id: "a_bot", move: { kind: "path" } });
+	});
+});

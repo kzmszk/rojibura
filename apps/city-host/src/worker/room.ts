@@ -81,6 +81,7 @@ const MESSAGE_LABELS: Record<ClientToHost["t"], string> = {
 	PICK: "物を拾う",
 	THROW: "物を投げる",
 	DROP: "物を置く",
+	COMPANION: "自分のAIを連れて歩く",
 };
 /** Registered models are stored in pieces: a DO SQLite value may be at most 2 MB. */
 const MODEL_CHUNK = 1024 * 1024;

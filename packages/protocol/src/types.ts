@@ -57,6 +57,8 @@ export interface AvatarState {
 	kind: AvatarKind;
 	name: string;
 	owner?: string;
+	/** AIs only: the owner's avatar ID (so the owner's page knows its own AIs). */
+	ownerId?: AvatarId;
 	trust?: "provisional" | "approved";
 	/** Humans only: false if they do not want AIs to start conversations with them. */
 	acceptsAi?: boolean;
@@ -220,7 +222,9 @@ export type ClientToHost =
 	/** Small things (docs/prd.md 3.4.7): pick one up close by, throw it along `dir`, or put it down. */
 	| { t: "PICK"; item: ItemId }
 	| { t: "THROW"; dir: Vec2 }
-	| { t: "DROP" };
+	| { t: "DROP" }
+	/** Humans: your own AIs here walk with you, just ahead to one side (docs/prd.md 3.4.9). */
+	| { t: "COMPANION"; on: boolean };
 
 export type LeaveReason = "quit" | "timeout" | "kicked" | "closing";
 export type ConvEndReason = "max_turns" | "timeout" | "left" | "budget";

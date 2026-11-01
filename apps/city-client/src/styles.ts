@@ -16,6 +16,8 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #bfd6e8; }
 .rj-hud { position: absolute; top: 12px; left: 12px; right: 12px; display: flex; justify-content: space-between; align-items: flex-start; pointer-events: none; }
 .rj-status, .rj-logout { pointer-events: auto; font-size: 13px; padding: 6px 10px; border-radius: 8px; background: rgba(255,255,255,.8); color: #222; }
 .rj-logout { text-decoration: none; }
+.rj-logout.on { background: #2f6fae; color: #fff; }
+.rj-logout[hidden] { display: none; }
 .rj-right { display: flex; gap: 8px; align-items: center; }
 .rj-left { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
 .rj-gate { white-space: nowrap; }

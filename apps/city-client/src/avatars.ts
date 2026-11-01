@@ -237,6 +237,10 @@ export class AvatarView {
 	private faceTo: number | null = null;
 	private readonly label: HTMLDivElement;
 	private readonly bubble: HTMLDivElement;
+	private readonly tag: CSS2DObject;
+	/** Seen from its own eyes (the first-person view): the head is not drawn, nor the name over it. */
+	private inside = false;
+	private firstPersonReady = false;
 	private bubbleUntil = 0;
 	/** Smoothed height so stairs do not jitter. */
 	private y = 0;
@@ -260,6 +264,7 @@ export class AvatarView {
 		const obj = new CSS2DObject(tag);
 		obj.position.set(0, 2.05, 0);
 		this.root.add(obj);
+		this.tag = obj;
 		this.updateLabel();
 
 		const url = state.assets.lod || state.assets.vrm;
@@ -286,6 +291,7 @@ export class AvatarView {
 		this.model = vrm.scene;
 		this.root.add(vrm.scene);
 		this.vrm = vrm;
+		this.seenFromInside(this.inside);
 		this.setClips(new THREE.AnimationMixer(vrm.scene), moves.clips);
 		this.pace = moves.pace;
 	}
@@ -519,6 +525,39 @@ export class AvatarView {
 			this.bubble.classList.remove("show", "thinking");
 		}
 		if (hostNow > this.bubbleUntil) this.bubble.classList.remove("show");
+	}
+
+	/**
+	 * Seen from its own eyes or not (docs/prd.md 3.4.8). A VRM hides its head with three-vrm's first-person
+	 * layers (the camera picks the layer); other models hide altogether.
+	 */
+	seenFromInside(on: boolean): void {
+		this.inside = on;
+		this.tag.visible = !on;
+		if (this.vrm) {
+			if (!this.firstPersonReady) {
+				this.vrm.firstPerson?.setup();
+				this.firstPersonReady = true;
+			}
+			this.model.visible = true;
+		} else {
+			this.model.visible = !on;
+		}
+	}
+
+	/** Where the eyes are (world), for the first-person view. */
+	eyePosition(): THREE.Vector3 {
+		const ahead = new THREE.Vector3(Math.sin(this.facing), 0, Math.cos(this.facing));
+		const head = this.vrm?.humanoid.getRawBoneNode("head");
+		if (head)
+			return head
+				.getWorldPosition(new THREE.Vector3())
+				.add(new THREE.Vector3(0, 0.07, 0))
+				.addScaledVector(ahead, 0.09);
+		return this.root.position
+			.clone()
+			.add(new THREE.Vector3(0, 1.55, 0))
+			.addScaledVector(ahead, 0.12);
 	}
 
 	/** Where the avatar faces (radians; 0 is +Z). */

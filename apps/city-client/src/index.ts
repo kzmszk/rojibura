@@ -27,6 +27,7 @@ import { currentArea, travelUrl } from "./areas.ts";
 import { AvatarView, TRAVEL } from "./avatars.ts";
 import { BuildPanel } from "./build-ui.ts";
 import { BuildsView, makeObject, modelsFromHost } from "./builds.ts";
+import { VIEW_LABEL, VIEWS, type View, ViewController } from "./camera.ts";
 import { ItemsView } from "./items.ts";
 import { actionBar, Relations, showAdmin } from "./moderation.ts";
 import { CityConnection, type ConnState } from "./net.ts";
@@ -331,7 +332,40 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 	const myAi = el("a", "rj-logout", "🤖 自分のAI");
 	myAi.href = "/agent";
 	myAi.target = "_blank";
-	right.append(avatarPicker(avatarParam), myAi, approach, logout);
+	// where the camera looks from (docs/prd.md 3.4.8): the button or V goes round the three
+	const viewButton = el("button", "rj-logout", "");
+	viewButton.type = "button";
+	viewButton.title = "視点を切り替える（V）";
+	viewButton.onclick = () => nextView();
+	// your own AIs walk with you (docs/prd.md 3.4.9); shown while one of them is here
+	const companionButton = el("button", "rj-logout", "");
+	companionButton.type = "button";
+	companionButton.hidden = true;
+	let companion = false;
+	try {
+		companion = localStorage.getItem("rj.companion") === "1";
+	} catch {
+		// private mode
+	}
+	const showCompanion = () => {
+		companionButton.textContent = companion ? "🤖 そばにいる" : "🤖 自由に歩く";
+		companionButton.title = companion
+			? "自分のAIがそばを歩いています（押すと自由に歩かせる）"
+			: "自分のAIは自由に歩いています（押すとそばにいさせる）";
+		companionButton.classList.toggle("on", companion);
+	};
+	showCompanion();
+	companionButton.onclick = () => {
+		companion = !companion;
+		try {
+			localStorage.setItem("rj.companion", companion ? "1" : "0");
+		} catch {
+			// private mode
+		}
+		conn.send({ t: "COMPANION", on: companion });
+		showCompanion();
+	};
+	right.append(companionButton, viewButton, avatarPicker(avatarParam), myAi, approach, logout);
 	const panel = new BuildPanel(() => void updateGhost());
 	if (freePlay) {
 		const badge = el("span", "rj-free", "🧪 自由モード");
@@ -398,6 +432,12 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 		b.onclick = () => offer(kind);
 		motionBar.append(b);
 	}
+	// a thing close by can be picked up with a button (or E), not only by clicking it
+	const pickButton = el("button", "", "✋");
+	pickButton.type = "button";
+	pickButton.title = "近くの物を拾う（E）";
+	pickButton.hidden = true;
+	pickButton.onclick = () => pickNearest();
 	const throwButton = el("button", "rj-held", "🥏");
 	throwButton.type = "button";
 	throwButton.title = "投げる（T）";
@@ -406,7 +446,7 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 	dropButton.type = "button";
 	dropButton.title = "置く（G）";
 	dropButton.onclick = () => conn.send({ t: "DROP" });
-	motionBar.append(throwButton, dropButton);
+	motionBar.append(pickButton, throwButton, dropButton);
 	/** Asked to do something together: yes or no, for OFFER_TTL_MS. */
 	const offerBox = el("div", "rj-offer");
 	offerBox.hidden = true;
@@ -477,6 +517,24 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 		avatars.set(s.id, v);
 		scene.scene.add(v.root);
 	};
+	const view = new ViewController(scene);
+	const setView = (v: View) => {
+		view.set(v, myId ? (avatars.get(myId) ?? null) : null);
+		viewButton.textContent = `🎥 ${VIEW_LABEL[v]}`;
+		try {
+			localStorage.setItem("rj.view", v);
+		} catch {
+			// private mode: the view lasts as long as the page
+		}
+	};
+	const nextView = () => setView(VIEWS[(VIEWS.indexOf(view.view) + 1) % VIEWS.length] as View);
+	let savedView: string | null = null;
+	try {
+		savedView = localStorage.getItem("rj.view");
+	} catch {
+		// private mode
+	}
+	setView(VIEWS.includes(savedView as View) ? (savedView as View) : "orbit");
 	const items = new ItemsView(scene, (id) => avatars.get(id)?.handPosition() ?? null);
 	scene.scene.add(items.group);
 	/** The throw and put-down buttons show while holding something. */
@@ -507,6 +565,8 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 					if (m.builds) builds.set(m.builds);
 					items.reset(m.items ?? []);
 					showHeld();
+					// the host forgets on a new connection; tell it again
+					if (companion) conn.send({ t: "COMPANION", on: true });
 					break;
 				case "ITEM": {
 					const change = items.set(m.item, conn.hostNow());
@@ -706,6 +766,10 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 			act(
 				e.key === " " ? "jump" : (ACTIONS.find(([, , key]) => key === e.key) as (typeof ACTIONS)[number])[0],
 			);
+		} else if (!typing() && !panel.open && e.key.toLowerCase() === "v") {
+			nextView();
+		} else if (!typing() && !panel.open && e.key.toLowerCase() === "e") {
+			pickNearest();
 		} else if (!typing() && !panel.open && e.key.toLowerCase() === "t") {
 			throwHeld();
 		} else if (!typing() && !panel.open && e.key.toLowerCase() === "g") {
@@ -994,6 +1058,26 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 		}
 		conn.send({ t: "PICK", item: id });
 	}
+	/** Within this distance a thing can be picked up with the button or E (walking up to it first). */
+	const PICK_NEAR = 4;
+	/** The closest thing lying on the ground within PICK_NEAR, if not holding anything. */
+	function nearestThing(): ItemId | null {
+		const mine = myId ? avatars.get(myId) : undefined;
+		if (!mine || !myId || items.heldBy(myId)) return null;
+		const p = mine.root.position;
+		let best: { id: ItemId; d: number } | null = null;
+		for (const o of items.meshes) {
+			const item = items.itemAt(o);
+			if (!item || item.holder) continue;
+			const d = Math.hypot(o.position.x - p.x, o.position.z - p.z);
+			if (d <= PICK_NEAR && (!best || d < best.d)) best = { id: item.id, d };
+		}
+		return best?.id ?? null;
+	}
+	function pickNearest(): void {
+		const id = nearestThing();
+		if (id) pickUp(id);
+	}
 	/** Throws what is in hand the way the avatar faces. */
 	function throwHeld(): void {
 		const mine = myId ? avatars.get(myId) : undefined;
@@ -1094,6 +1178,10 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 		const now = conn.hostNow();
 		for (const v of avatars.values()) v.update(now, dt, scene);
 		items.update(now);
+		pickButton.hidden = nearestThing() === null;
+		companionButton.hidden = ![...avatars.values()].some(
+			(a) => a.state.kind === "ai" && a.state.ownerId === myId,
+		);
 		const mine = myId ? avatars.get(myId) : undefined;
 		if (keys.size > 0) steer(t);
 		followStep(t);
@@ -1122,7 +1210,7 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 				};
 			}
 		}
-		if (mine && followCamera) scene.follow(mine.root.position, dt);
+		if (mine && followCamera) view.update(mine, poseAt(mine.state.move, now).moving, dt);
 		else scene.controls.update();
 		scene.render();
 		requestAnimationFrame(frame);

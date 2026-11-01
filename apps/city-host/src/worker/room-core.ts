@@ -27,6 +27,7 @@ import {
 	type LeaveReason,
 	MAX_PATH_LENGTH,
 	MAX_PATH_POINTS,
+	MAX_SPEED,
 	type ModelId,
 	type MoveState,
 	OFFER_REACH,
@@ -73,6 +74,10 @@ export interface BuildStore {
 	save(b: Build): void;
 	remove(id: BuildId): void;
 }
+
+/** Where your AIs walk with you (docs/prd.md 3.4.9): this far ahead, and this far to one side (m). */
+const COMPANION_AHEAD = 2;
+const COMPANION_ASIDE = 0.8;
 
 /** Saves the area's small things whenever one changes (DO key-value storage). */
 export interface ItemStore {
@@ -131,6 +136,10 @@ export interface Member extends JoinInfo {
 	cooldowns?: Record<AvatarId, number>;
 	/** Watching the usage dashboard: the adapter pushes USAGE to them. */
 	watchUsage?: boolean;
+	/** Humans: their own AIs walk with them (docs/prd.md 3.4.9). */
+	companion?: boolean;
+	/** Which way the avatar last walked (the host knows no facing): companions keep to its front. */
+	heading?: Vec2;
 }
 
 /** Personal mutes and blocks that concern one avatar (docs/prd.md 4.2). */
@@ -390,6 +399,11 @@ export class RoomCore<C> {
 		if (this.items.size > 0) welcome.items = [...this.items.values()];
 		this.transport.send(conn, welcome);
 		this.broadcastAbout(member, { t: "JOINED", avatar: this.toState(member) }, conn);
+		// an AI whose owner is walking with company joins them at once
+		if (member.kind === "ai") {
+			const owner = this.memberById(member.ownerId);
+			if (owner?.companion) this.accompany(owner, now);
+		}
 		return true;
 	}
 
@@ -510,7 +524,19 @@ export class RoomCore<C> {
 					this.violation(conn, v, now);
 					return;
 				}
+				// walking with its owner: the host moves it, its own steps are not taken
+				if (this.accompanying(m)) {
+					this.transport.send(conn, { t: "CORRECT", move: m.move });
+					return;
+				}
 				msg.t === "MOVE_PATH" ? this.movePath(conn, m, msg, now) : this.moveVel(conn, m, msg, now);
+				if (m.companion) this.accompany(m, now);
+				return;
+			case "COMPANION":
+				if (m.kind !== "human") return;
+				m.companion = msg.on;
+				this.transport.persist(conn, m);
+				if (msg.on) this.accompany(m, now);
 				return;
 			case "ACTION":
 				if (!this.moveToken(v, now)) {
@@ -646,6 +672,102 @@ export class RoomCore<C> {
 		this.transport.persist(conn, m);
 		this.broadcastAbout(m, { t: "MOVED", id: m.id, move: m.move });
 		return walk ? (d / WALK_SPEED) * 1000 : 0;
+	}
+
+	// ---- walking with your AIs (docs/prd.md 3.4.9) ----------------------------
+
+	/** True if `m` is an AI whose owner is here and walking with company. */
+	private accompanying(m: Member): boolean {
+		return m.kind === "ai" && !!this.memberById(m.ownerId)?.companion;
+	}
+
+	/**
+	 * Moves the owner's AIs to keep just ahead of them, one to each side: along the owner's path shifted
+	 * sideways (or, walking with keys, to where the owner will be a few seconds on), at the speed that gets
+	 * there when the owner does, and to their places beside them when the owner stops.
+	 */
+	private accompany(owner: Member, now: number): void {
+		const move = owner.move;
+		if (move.kind === "path") {
+			const last = move.path[move.path.length - 1] as Vec2;
+			const prev = move.path[move.path.length - 2] ?? last;
+			const d = dist(prev, last);
+			if (d > 1e-3) owner.heading = [(last[0] - prev[0]) / d, (last[1] - prev[1]) / d];
+		} else if (move.kind === "vel" && move.speed > 0) {
+			owner.heading = move.dir;
+		}
+		const ahead = owner.heading ?? [0, 1];
+		let slot = 0;
+		for (const [conn, ai] of this.members) {
+			if (ai.kind !== "ai" || ai.ownerId !== owner.id) continue;
+			this.companionStep(conn, ai, owner, slot++ % 2 === 0 ? 1 : -1, ahead, now);
+		}
+	}
+
+	/** Just ahead of `at` facing `ahead`, to the right (side 1) or the left (-1); `strict`: there or nowhere. */
+	private beside(at: Vec2, ahead: Vec2, side: number, strict = false): Vec2 | null {
+		// facing +z the right hand is on -x: right = (-ahead.z, ahead.x)
+		const right: Vec2 = [-ahead[1], ahead[0]];
+		// far enough ahead to be in view from the owner's own eyes (the first-person view)
+		const p: Vec2 = [
+			at[0] + ahead[0] * COMPANION_AHEAD + right[0] * COMPANION_ASIDE * side,
+			at[1] + ahead[1] * COMPANION_AHEAD + right[1] * COMPANION_ASIDE * side,
+		];
+		if (this.walk.isWalkable(p)) return p;
+		return strict ? null : this.walk.closestPoint(p);
+	}
+
+	private companionStep(conn: C, ai: Member, owner: Member, side: number, ahead: Vec2, now: number): void {
+		const from = this.positionOf(ai, now);
+		const om = owner.move;
+		let path: Vec2[] | null = null;
+		let ms = 0;
+		if (om.kind === "path" && poseAt(om, now).moving) {
+			// the owner's way, shifted aside where that is walkable
+			const rest = remainingPath(om, now);
+			const steps = rest.slice(1).map((p, i) => {
+				const a = rest[i] as Vec2;
+				const d = dist(a, p);
+				const dir: Vec2 = d > 1e-3 ? [(p[0] - a[0]) / d, (p[1] - a[1]) / d] : ahead;
+				const last = i === rest.length - 2;
+				return (last ? this.beside(p, dir, side) : this.beside(p, dir, side, true)) ?? p;
+			});
+			path = [from, ...steps].slice(0, MAX_PATH_POINTS);
+			ms = (polylineLength(rest) / om.speed) * 1000;
+		} else if (om.kind === "vel" && om.speed > 0) {
+			// keys: where the owner will be a few seconds on, sooner if the way there is not clear
+			const walked = (now - om.at) / 1000;
+			for (const s of [6, 4, 2, 1]) {
+				const go = om.speed * (walked + s);
+				// where the owner's own way is still clear that far on
+				const ahead: Vec2 = [om.pos[0] + om.dir[0] * go, om.pos[1] + om.dir[1] * go];
+				if (!this.walk.validatePath([this.positionOf(owner, now), ahead])) continue;
+				const there = this.beside(ahead, om.dir, side);
+				if (there) {
+					path = [from, there];
+					ms = s * 1000;
+					break;
+				}
+			}
+		} else {
+			const there = this.beside(this.positionOf(owner, now), ahead, side);
+			if (there) path = [from, there];
+		}
+		// a fountain or a wall in the way: find a way round it to the same place, there at the same time
+		if (path && path.length >= 2 && !this.walk.validatePath(path)) {
+			const to = path[path.length - 1] as Vec2;
+			const round = this.walk.findPath?.(this.walk.closestPoint(from), this.walk.closestPoint(to));
+			path = round && round.length >= 2 ? [from, ...round.slice(1)].slice(0, MAX_PATH_POINTS) : null;
+		}
+		if (!path || path.length < 2 || polylineLength(path) > MAX_PATH_LENGTH || !this.walk.validatePath(path))
+			return;
+		const length = polylineLength(path);
+		if (length < 0.15) return;
+		// as long as the owner takes; when the owner has stopped, a walk (a run if far behind)
+		const speed = ms > 0 ? (length / ms) * 1000 : length > 6 ? 4 : WALK_SPEED;
+		ai.move = { kind: "path", path, speed: Math.min(MAX_SPEED, Math.max(0.5, speed)), at: now };
+		this.transport.persist(conn, ai);
+		this.broadcastAbout(ai, { t: "MOVED", id: ai.id, move: ai.move });
 	}
 
 	// ---- small things (docs/prd.md 3.4.7) -----------------------------------
@@ -1258,6 +1380,7 @@ export class RoomCore<C> {
 			move: m.move,
 		};
 		if (m.ownerName && m.kind === "ai") s.owner = m.ownerName;
+		if (m.kind === "ai") s.ownerId = m.ownerId;
 		if (m.trust) s.trust = m.trust;
 		if (m.kind === "human") s.acceptsAi = m.allowAiApproach !== false;
 		return s;
