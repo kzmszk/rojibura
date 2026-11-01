@@ -1,11 +1,13 @@
-// Avatars in the scene: model (shared glTF, cloned), animation, name label, chat bubble,
+// Avatars in the scene: model (shared glTF, cloned; or a VRM per avatar), animation, name label, chat bubble,
 // and pose from the host's move state (docs/prd.md 3.4, フロー④).
 
+import { type VRM, VRMLoaderPlugin, VRMUtils } from "@pixiv/three-vrm";
 import { type AvatarState, type MoveState, poseAt, type Status } from "@rojibura/protocol";
 import * as THREE from "three";
-import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { GLTFLoader, type GLTFParser } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { CSS2DObject } from "three/examples/jsm/renderers/CSS2DRenderer.js";
 import { clone as cloneSkinned } from "three/examples/jsm/utils/SkeletonUtils.js";
+import { retarget } from "./retarget.ts";
 import type { CityScene } from "./scene.ts";
 
 interface Template {
@@ -38,6 +40,92 @@ class ModelCache {
 
 const models = new ModelCache();
 
+/** The motions every VRM plays (docs/prd.md 3.4.4): Saki's, on bones named after VRM humanoid bones. */
+const MOTIONS_URL = "/avatars/motions.glb";
+let motions: Promise<{ scene: THREE.Object3D; clips: THREE.AnimationClip[] } | null> | null = null;
+
+function loadMotions() {
+	motions ??= new GLTFLoader()
+		.loadAsync(MOTIONS_URL)
+		.then((g) => {
+			// Saki faces -Z; a VRM faces +Z once VRMUtils.rotateVRM0 has turned it
+			const scene = new THREE.Group();
+			scene.rotation.y = Math.PI;
+			scene.add(g.scene);
+			return { scene, clips: g.animations };
+		})
+		.catch(() => null);
+	return motions;
+}
+
+/**
+ * Makes every VRM parsed from the same file share its textures: one decode and one GPU copy however many
+ * people wear it. GLTFLoader caches dependencies for one parse; this keeps textures for the file.
+ */
+function shareTextures(parser: GLTFParser, textures: Map<number, Promise<unknown>>) {
+	const load = parser.getDependency.bind(parser);
+	parser.getDependency = (type: string, index: number) => {
+		if (type !== "texture") return load(type, index);
+		let t = textures.get(index);
+		if (!t) {
+			t = load(type, index);
+			textures.set(index, t);
+		}
+		return t;
+	};
+	return { name: "RJ_shared_textures" };
+}
+
+interface VrmFile {
+	data: ArrayBuffer;
+	textures: Map<number, Promise<unknown>>;
+	/** The motions on this file's bones, made from the first VRM parsed (at rest). */
+	clips: Promise<THREE.AnimationClip[]> | null;
+}
+
+/**
+ * VRMs cannot be cloned like plain glTF (spring bones, expressions and the humanoid rig point at their own
+ * nodes), so each avatar parses its own copy from the downloaded bytes. Textures are shared between them.
+ */
+class VrmCache {
+	private readonly files = new Map<string, Promise<VrmFile | null>>();
+
+	async get(url: string): Promise<{ vrm: VRM; clips: THREE.AnimationClip[] } | null> {
+		let p = this.files.get(url);
+		if (!p) {
+			p = fetch(url)
+				.then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(`${r.status}`))))
+				.then((data) => ({ data, textures: new Map(), clips: null }))
+				.catch(() => null);
+			this.files.set(url, p);
+		}
+		const file = await p;
+		if (!file) return null;
+		const loader = new GLTFLoader();
+		loader.register((parser) => new VRMLoaderPlugin(parser));
+		loader.register((parser) => shareTextures(parser, file.textures));
+		const gltf = await loader.parseAsync(file.data, url.slice(0, url.lastIndexOf("/") + 1)).catch(() => null);
+		const vrm = gltf?.userData.vrm as VRM | undefined;
+		if (!gltf || !vrm) return null;
+		VRMUtils.removeUnnecessaryVertices(gltf.scene);
+		VRMUtils.combineSkeletons(gltf.scene);
+		VRMUtils.rotateVRM0(vrm);
+		file.clips ??= loadMotions().then((m) => {
+			if (!m) return [];
+			vrm.scene.updateMatrixWorld(true);
+			const bones: Record<string, THREE.Object3D> = {};
+			for (const name of Object.keys(vrm.humanoid.humanBones)) {
+				const node = vrm.humanoid.getNormalizedBoneNode(name as keyof typeof vrm.humanoid.humanBones);
+				if (node) bones[name] = node;
+			}
+			return m.clips.map((clip) => retarget(m.scene, clip, bones));
+		});
+		return { vrm, clips: await file.clips };
+	}
+}
+
+const vrms = new VrmCache();
+
 function capsule(color: number): THREE.Object3D {
 	const g = new THREE.Group();
 	const body = new THREE.Mesh(
@@ -59,6 +147,12 @@ export class AvatarView {
 	readonly root = new THREE.Group();
 	state: AvatarState;
 	private model: THREE.Object3D;
+	private vrm: VRM | null = null;
+	/** Spring bones settle once the avatar is where it belongs (not swinging in from the origin). */
+	private settled = false;
+	private nextBlink = 0;
+	private talkUntil = 0;
+	private disposed = false;
 	private mixer: THREE.AnimationMixer | null = null;
 	private actions: Record<string, THREE.AnimationAction> = {};
 	private current = "";
@@ -90,12 +184,36 @@ export class AvatarView {
 		this.updateLabel();
 
 		const url = state.assets.lod || state.assets.vrm;
-		if (url) void this.loadModel(url);
+		if (url)
+			void (/\.vrm$/i.test(new URL(url, location.href).pathname) ? this.loadVrm(url) : this.loadModel(url));
+	}
+
+	private async loadVrm(url: string): Promise<void> {
+		const loaded = await vrms.get(url);
+		if (!loaded) return;
+		const { vrm, clips } = loaded;
+		if (this.disposed) {
+			disposeVrm(vrm);
+			return;
+		}
+		vrm.scene.traverse((o) => {
+			if (!(o as THREE.Mesh).isMesh) return;
+			o.castShadow = true;
+			// spring bones and expressions move vertices outside the bind-pose bounds
+			o.frustumCulled = false;
+		});
+		this.root.remove(this.model);
+		this.model = vrm.scene;
+		this.root.add(vrm.scene);
+		this.vrm = vrm;
+		this.mixer = new THREE.AnimationMixer(vrm.scene);
+		for (const clip of clips) this.actions[clip.name] = this.mixer.clipAction(clip);
+		this.current = "";
 	}
 
 	private async loadModel(url: string): Promise<void> {
 		const t = await models.get(url);
-		if (!t) return;
+		if (!t || this.disposed) return;
 		const m = cloneSkinned(t.scene);
 		m.traverse((o) => {
 			if ((o as THREE.Mesh).isMesh) o.castShadow = true;
@@ -126,6 +244,19 @@ export class AvatarView {
 		this.bubble.textContent = text;
 		this.bubble.classList.add("show");
 		this.bubbleUntil = now + BUBBLE_MS;
+		// the mouth moves for about as long as the line takes to say
+		this.talkUntil = now + Math.min(4000, 400 + [...text].length * 90);
+	}
+
+	/** Blinks now and then, and moves the mouth while talking (VRM expressions). */
+	private express(hostNow: number): void {
+		const expressions = this.vrm?.expressionManager;
+		if (!expressions) return;
+		if (hostNow > this.nextBlink + 150) this.nextBlink = hostNow + 2000 + Math.random() * 4000;
+		const blink = Math.max(0, 1 - Math.abs(hostNow - this.nextBlink - 75) / 75);
+		expressions.setValue("blink", blink);
+		const talking = hostNow < this.talkUntil;
+		expressions.setValue("aa", talking ? 0.25 + 0.35 * Math.abs(Math.sin(hostNow / 70)) : 0);
 	}
 
 	private updateLabel(): void {
@@ -158,6 +289,15 @@ export class AvatarView {
 				: "stand",
 		);
 		this.mixer?.update(dt);
+		if (this.vrm) {
+			this.express(hostNow);
+			if (!this.settled) {
+				this.root.updateMatrixWorld(true);
+				this.vrm.springBoneManager?.reset();
+				this.settled = true;
+			}
+			this.vrm.update(dt);
+		}
 		const thinking = this.state.status === "busy" && this.state.kind === "ai";
 		if (thinking && !this.bubble.classList.contains("show")) {
 			this.bubble.textContent = "…";
@@ -185,9 +325,21 @@ export class AvatarView {
 	}
 
 	dispose(): void {
+		this.disposed = true;
 		this.root.removeFromParent();
 		this.root.traverse((o) => {
 			if (o instanceof CSS2DObject) o.element.remove();
 		});
+		if (this.vrm) disposeVrm(this.vrm);
 	}
+}
+
+/** Frees one avatar's geometry and materials. Textures are shared by the file (VrmCache) and stay. */
+function disposeVrm(vrm: VRM): void {
+	vrm.scene.traverse((o) => {
+		const mesh = o as THREE.Mesh;
+		if (!mesh.isMesh) return;
+		mesh.geometry.dispose();
+		for (const m of [mesh.material].flat()) m.dispose();
+	});
 }

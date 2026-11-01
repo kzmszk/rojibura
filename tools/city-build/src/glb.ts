@@ -83,6 +83,31 @@ export function parseGlb(data: Uint8Array): Glb {
 	return { json, bin };
 }
 
+const align4 = (n: number) => (n + 3) & ~3;
+
+/** Writes a glb: the JSON chunk (padded with spaces) and, if not empty, the BIN chunk (padded with zeros). */
+export function writeGlb(json: object, bin: Uint8Array): Uint8Array {
+	const text = new TextEncoder().encode(JSON.stringify(json));
+	const jsonLength = align4(text.byteLength);
+	const binLength = align4(bin.byteLength);
+	const total = 20 + jsonLength + (bin.byteLength ? 8 + binLength : 0);
+	const out = new Uint8Array(total);
+	const view = new DataView(out.buffer);
+	view.setUint32(0, GLB_MAGIC, true);
+	view.setUint32(4, 2, true);
+	view.setUint32(8, total, true);
+	view.setUint32(12, jsonLength, true);
+	view.setUint32(16, CHUNK_JSON, true);
+	out.set(text, 20);
+	out.fill(0x20, 20 + text.byteLength, 20 + jsonLength);
+	if (bin.byteLength) {
+		view.setUint32(20 + jsonLength, binLength, true);
+		view.setUint32(24 + jsonLength, CHUNK_BIN, true);
+		out.set(bin, 28 + jsonLength);
+	}
+	return out;
+}
+
 export function identity(): Mat4 {
 	const m = new Float64Array(16);
 	m[0] = m[5] = m[10] = m[15] = 1;

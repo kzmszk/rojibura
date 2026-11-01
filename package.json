@@ -12,6 +12,7 @@
 		"build": "pnpm --filter @rojibura/city-host build",
 		"build:city": "node tools/city-build/src/build.ts assets/test-city/test_city.glb assets/test-city",
 		"build:models": "node tools/city-build/src/model-cli.ts builtins",
+		"build:motions": "node tools/city-build/src/avatar-cli.ts motions",
 		"builds:publish": "node tools/city-build/src/publish.ts",
 		"test": "vitest run",
 		"typecheck": "pnpm -r --no-bail typecheck",

@@ -122,6 +122,49 @@ function patchMe(body: { name?: string; allowAiApproach?: boolean }): Promise<Re
 	});
 }
 
+const AVATAR = "rj.avatar";
+
+/** The preset avatar picked last time (an unknown one is Saki on the host). */
+function savedAvatar(): string | null {
+	try {
+		return localStorage.getItem(AVATAR);
+	} catch {
+		return null;
+	}
+}
+
+function saveAvatar(id: string): void {
+	try {
+		localStorage.setItem(AVATAR, id);
+	} catch {
+		// private mode: the choice lasts as long as the URL
+	}
+}
+
+/** Picks a preset avatar (T1). The host takes it when connecting, so picking one enters the area again. */
+function avatarPicker(current: string): HTMLSelectElement {
+	const select = el("select", "rj-logout rj-avatar");
+	select.title = "見た目を選ぶ（選ぶと入り直します）";
+	void api("/api/presets")
+		.then((r) => (r.ok ? (r.json() as Promise<{ id: string; name: string }[]>) : []))
+		.then((presets) => {
+			for (const p of presets) {
+				const o = el("option", "", `👤 ${p.name}`);
+				o.value = p.id;
+				select.append(o);
+			}
+			select.value = current;
+		});
+	select.onchange = () => {
+		saveAvatar(select.value);
+		const url = new URL(location.href);
+		url.searchParams.set("avatar", select.value);
+		url.searchParams.delete("at");
+		location.href = url.toString();
+	};
+	return select;
+}
+
 /** First Google login: Google gives no name (scope is openid only), so the person picks one. */
 function showWelcome(root: HTMLElement, me: Me, redirect: string): void {
 	const box = el("form", "rj-login");
@@ -162,6 +205,7 @@ function showLogin(root: HTMLElement, health: { dev: boolean; google: boolean })
 	const avatar = el("select", "");
 	for (const [v, label] of [
 		["saki", "サキ"],
+		["shibu", "シブ"],
 		["capsule", "カプセル"],
 	]) {
 		const o = el("option", "", label);
@@ -188,7 +232,8 @@ function showLogin(root: HTMLElement, health: { dev: boolean; google: boolean })
 
 async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay: boolean): Promise<void> {
 	const params = new URLSearchParams(location.search);
-	const avatarParam = params.get("avatar") ?? "saki";
+	const avatarParam = params.get("avatar") ?? savedAvatar() ?? "saki";
+	saveAvatar(avatarParam);
 	// the area this page is in (docs/prd.md 3.8): ?area=, and ?at= when arriving through a portal
 	const { area, all: areas } = await currentArea(params, devBuild);
 	/** Free play builds only in areas that allow it (the main one). */
@@ -252,7 +297,7 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 	const myAi = el("a", "rj-logout", "🤖 自分のAI");
 	myAi.href = "/agent";
 	myAi.target = "_blank";
-	right.append(myAi, approach, logout);
+	right.append(avatarPicker(avatarParam), myAi, approach, logout);
 	const panel = new BuildPanel(() => void updateGhost());
 	if (freePlay) {
 		const badge = el("span", "rj-free", "🧪 自由モード");

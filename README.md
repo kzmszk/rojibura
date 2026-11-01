@@ -4,7 +4,7 @@
 
 - 設計書：[docs/prd.md](docs/prd.md)（PRD・アーキテクチャ・概要設計）
 - テスト用の街：`assets/test-city/test_city.glb`（`blender -b --python tools/city-build/blender/test_city.py -- --preview` で再生成）
-- プリセットアバター：`assets/avatars/saki.glb`（TOKYO 2090 のサキ、stand / walk / run / sit）
+- プリセットアバター：`assets/avatars/saki.glb`（TOKYO 2090 のサキ、stand / walk / run / sit）、`assets/avatars/shibu.vrm`（VRoid の千駄ヶ谷 渋。下の「見本アバター（VRM）」）
 
 ## 開発
 
@@ -29,7 +29,7 @@ pnpm lint         # biome
 | `apps/agent-worker` | T4 の試作：AI を Durable Object で常駐させる Worker（Workers AI） |
 | `packages/protocol` | メッセージ型と検証 |
 | `packages/nav` | ナビメッシュと経路探索 |
-| `tools/city-build` | 街の glb からナビメッシュとランドマークを生成。建築用のモデル（Blender）を作って検査・登録する CLI |
+| `tools/city-build` | 街の glb からナビメッシュとランドマークを生成。建築用のモデル（Blender）を作って検査・登録する CLI。同梱する VRM の軽量化とモーションの切り出し |
 | `assets/areas.json` | エリアの一覧と門。ヴェネツィアの歩ける場所と場所は `assets/areas/venezia/`（3D は demos から読む） |
 
 `cf dev`（Vite の development モード）では、ダミー認証（`DEV_AUTH`）が自動で有効になる。本番ビルドでは無効。
@@ -109,6 +109,20 @@ node apps/avatar-sdk/scripts/eval-resident.ts --models llama/gemma-4-26B-A4B-it-
 自分のAIをブラウザから入れるには、街の右上の「🤖 自分のAI」（`/agent`）を開き、名前と性格を入れて「街に住まわせる」を押す（T3）。API キーは要らない（ホストの Workers AI のお試し枠、1人1日60回）。そのタブを開いている間だけ、AIは街にいる。管理画面（`/admin`）の「入場までの時間」で、初めて開いてからログイン、入場、自分のAIの入場までの時間が見られる。
 
 街にはいつも案内役のAI「シルベ」がいる（ホストが動かす。docs/prd.md 3.5.3）。入ってきた人に1日1回あいさつし、遊び方を聞けば答え、話しかければ雑談する。人ごとに、直近の発言、日ごとの要約、望んでいることを覚えている（開発環境では `/api/dev/rooms/main/stats?person=<ID>` で見られる）。LLM はホストの Workers AI で、1日400回を超えたら定型文で答える。部屋の stats（`/api/dev/rooms/main/stats`）の `guide.llmCallsToday` で、その日の回数が見られる。
+
+## 見本アバター（VRM）
+
+画面右上の「👤」で見た目を選べる（選ぶと入り直す。選んだものはブラウザが覚える）。VRM はクライアントが three-vrm で読み、サキのモーション（`assets/avatars/motions.glb`）を VRM の骨格に移し替えて動かす（docs/prd.md 3.4.4）。
+
+VRM を足すときは、軽くしてから `assets/avatars/` に置き、`apps/city-host/src/worker/world.ts` の `PRESETS` に書く。
+
+```bash
+node tools/city-build/src/avatar-cli.ts slim ~/Downloads/model.vrm -o assets/avatars/name.vrm
+pnpm build:motions    # saki.glb から motions.glb を作り直す（サキのクリップを直したとき）
+```
+
+- `slim` は、テクスチャを WebP（最大 1024px）にし、ほとんど 0 の表情モーフを疎な形式にする。渋は 19.8MB から 3.4MB になった。テクスチャを縮めるので、改変を禁じているモデル（VRoid Hub の利用条件の「改変」）には使わない。
+- 渋（千駄ヶ谷渋_普段着Ver001、VRoid Hub）の利用条件：アバター利用、商用利用、再配布、改変がすべて OK、クレジット表記は不要（公式の千駄ヶ谷 渋に準じる）。
 
 ## エリアと門（ヴェネツィアへ行く）
 

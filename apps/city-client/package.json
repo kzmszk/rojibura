@@ -9,6 +9,7 @@
 		"typecheck": "tsc"
 	},
 	"dependencies": {
+		"@pixiv/three-vrm": "3.5.5",
 		"@rojibura/avatar-sdk": "workspace:*",
 		"@rojibura/nav": "workspace:*",
 		"@rojibura/protocol": "workspace:*",

@@ -8,6 +8,7 @@
 	"dependencies": {
 		"@recast-navigation/core": "0.43.1",
 		"@recast-navigation/generators": "0.43.1",
-		"@rojibura/nav": "workspace:*"
+		"@rojibura/nav": "workspace:*",
+		"sharp": "0.35.5"
 	}
 }

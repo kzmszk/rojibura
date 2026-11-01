@@ -171,5 +171,7 @@ export const DEFAULT_PRESET: Preset = {
 
 export const PRESETS: Record<string, Preset> = {
 	saki: DEFAULT_PRESET,
+	// VRoid's 千駄ヶ谷 渋 (casual clothes), slimmed with tools/city-build/src/avatar-cli.ts (docs/prd.md 3.4.4)
+	shibu: { id: "shibu", name: "シブ", assets: { thumb: "", lod: "", vrm: "/avatars/shibu.vrm" } },
 	capsule: { id: "capsule", name: "カプセル", assets: { thumb: "", lod: "", vrm: "" } },
 };
