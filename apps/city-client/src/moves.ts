@@ -26,7 +26,12 @@ export type MoveName =
 	| "handshake"
 	| "hug"
 	| "pick"
-	| "throw";
+	| "throw"
+	| "look"
+	| "tilt"
+	| "shift"
+	| "hands"
+	| "stretch";
 
 type Angles = [x: number, y: number, z: number];
 type Bones = Record<string, Angles>;
@@ -485,6 +490,31 @@ const HUG: Bones = {
 	rightLowerArm: [0, 85, 0],
 };
 
+/**
+ * The hands meeting in front of the belly: the upper arms turn in (y) so the bent forearms point to the
+ * middle rather than straight ahead.
+ */
+const HANDS_TOGETHER: Bones = {
+	leftUpperArm: [-15, -45, -72],
+	rightUpperArm: [-15, 45, 72],
+	leftLowerArm: [0, -85, 0],
+	rightLowerArm: [0, 85, 0],
+	head: [6, 0, 0],
+};
+
+/** Arms up over the head, leaning back a little. */
+const STRETCH: Bones = {
+	leftShoulder: [0, 0, 10],
+	rightShoulder: [0, 0, -10],
+	leftUpperArm: [0, 0, 70],
+	rightUpperArm: [0, 0, -70],
+	leftLowerArm: [0, -10, 0],
+	rightLowerArm: [0, 10, 0],
+	spine: [-8, 0, 0],
+	chest: [-6, 0, 0],
+	head: [-10, 0, 0],
+};
+
 /** A whole-body turn (forward, about the hips) of `x` degrees with `bones`, the hips moved by `at`. */
 const turn = (x: number, bones: Bones, at: [number, number, number] = [0, 0, 0]): Frame => ({
 	bones: { ...bones, hips: [x, 0, 0] },
@@ -941,6 +971,118 @@ export const MOVES: {
 					[0.9, { bones: {} }],
 				]),
 				"above",
+			),
+	},
+	// standing about (docs/prd.md 3.4.5): one now and then while idle, so nobody stands frozen
+	{
+		name: "look",
+		play: "once",
+		clip: () =>
+			sampled(
+				"look",
+				3.6,
+				keyed([
+					[0, { bones: {} }],
+					[0.7, { bones: { spine: [0, 6, 0], neck: [0, 20, 0], head: [-3, 18, 0] } }],
+					[1.4, { bones: { spine: [0, 6, 0], neck: [0, 20, 0], head: [-3, 18, 0] } }],
+					[2.2, { bones: { spine: [0, -5, 0], neck: [0, -18, 0], head: [2, -16, 0] } }],
+					[2.8, { bones: { spine: [0, -5, 0], neck: [0, -18, 0], head: [2, -16, 0] } }],
+					[3.6, { bones: {} }],
+				]),
+				"touch",
+			),
+	},
+	{
+		// a head tilt, wondering
+		name: "tilt",
+		play: "once",
+		clip: () =>
+			sampled(
+				"tilt",
+				2.4,
+				keyed([
+					[0, { bones: {} }],
+					[0.5, { bones: { neck: [0, 4, -7], head: [4, 6, -14] } }],
+					[1.8, { bones: { neck: [0, 4, -7], head: [4, 6, -14] } }],
+					[2.4, { bones: {} }],
+				]),
+				"touch",
+			),
+	},
+	{
+		// the weight onto the left leg, the right knee easing
+		name: "shift",
+		play: "once",
+		clip: () =>
+			sampled(
+				"shift",
+				3.4,
+				keyed([
+					[0, { bones: {} }],
+					[
+						0.8,
+						{
+							bones: {
+								hips: [0, 4, -4],
+								spine: [0, -2, 3],
+								head: [0, 0, 2],
+								rightUpperLeg: [-8, 0, 3],
+								rightLowerLeg: [16, 0, 0],
+								rightFoot: [6, 0, 0],
+							},
+							hips: [0.04, 0, 0],
+						},
+					],
+					[
+						2.6,
+						{
+							bones: {
+								hips: [0, 4, -4],
+								spine: [0, -2, 3],
+								head: [0, 0, 2],
+								rightUpperLeg: [-8, 0, 3],
+								rightLowerLeg: [16, 0, 0],
+								rightFoot: [6, 0, 0],
+							},
+							hips: [0.04, 0, 0],
+						},
+					],
+					[3.4, { bones: {} }],
+				]),
+				"touch",
+			),
+	},
+	{
+		// the hands together in front, then down again
+		name: "hands",
+		play: "once",
+		clip: () =>
+			sampled(
+				"hands",
+				3.6,
+				keyed([
+					[0, { bones: {} }],
+					[0.7, { bones: HANDS_TOGETHER }],
+					[2.8, { bones: HANDS_TOGETHER }],
+					[3.6, { bones: {} }],
+				]),
+				"touch",
+			),
+	},
+	{
+		name: "stretch",
+		play: "once",
+		clip: () =>
+			sampled(
+				"stretch",
+				3.6,
+				keyed([
+					[0, { bones: {} }],
+					[0.9, { bones: STRETCH }],
+					[2.3, { bones: STRETCH }],
+					[3.6, { bones: {} }],
+				]),
+				"touch",
 			),
 	},
 ];

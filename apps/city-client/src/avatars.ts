@@ -32,6 +32,10 @@ interface Template {
 }
 
 const BUBBLE_MS = 7000;
+/** Small things done while standing about (moves.ts), one at random now and then. */
+const FIDGETS: MoveName[] = ["look", "tilt", "shift", "hands", "stretch"];
+/** Motions that come with a smile. */
+const SMILING = new Set<string>(["tilt", "wave", "jump", "handshake", "hug"]);
 const FADE = 0.3;
 const RAD = Math.PI / 180;
 
@@ -152,33 +156,36 @@ class VrmCache {
 
 const vrms = new VrmCache();
 
-/** Curls the fingers a little: a VRM's hands rest flat and straight, which looks stiff (they are not animated). */
+/**
+ * Relaxed hands: a VRM's rest flat, fingers fanned out and the thumb sticking out, which looks stiff (the
+ * fingers are not animated). Each finger: curl at its three joints (more towards the little finger) and how
+ * far it turns at the knuckle to lie against its neighbours. The thumb comes in along the index finger.
+ * Degrees for the right hand; the left is mirrored. A VRM 0.x's normalized bones keep its own frame, which
+ * faces -Z (VRMUtils.rotateVRM0 turns the scene, not the bones), so turns about X and Z go the other way.
+ */
+const FINGERS: [finger: string, curl: [number, number, number], together: number][] = [
+	["Index", [22, 32, 18], -12],
+	["Middle", [28, 38, 20], -4],
+	["Ring", [34, 42, 22], 6],
+	["Little", [40, 44, 22], 14],
+];
+
 function relaxFingers(vrm: VRM): void {
+	const bone = (name: string) => vrm.humanoid.getNormalizedBoneNode(name as VRMHumanBoneName);
+	const v0 = vrm.meta.metaVersion === "0" ? -1 : 1;
 	for (const [side, s] of [
 		["left", -1],
 		["right", 1],
 	] as const) {
-		for (const [finger, more] of [
-			["Index", 0],
-			["Middle", 4],
-			["Ring", 8],
-			["Little", 12],
-		] as const) {
-			for (const [joint, deg] of [
-				["Proximal", 16],
-				["Intermediate", 26],
-				["Distal", 16],
-			] as const) {
-				const node = vrm.humanoid.getNormalizedBoneNode(`${side}${finger}${joint}` as VRMHumanBoneName);
-				node?.rotation.set(0, 0, s * (deg + more) * RAD);
-			}
+		const z = s * v0 * RAD;
+		for (const [finger, [a, b, c], together] of FINGERS) {
+			bone(`${side}${finger}Proximal`)?.rotation.set(0, s * together * RAD, a * z);
+			bone(`${side}${finger}Intermediate`)?.rotation.set(0, 0, b * z);
+			bone(`${side}${finger}Distal`)?.rotation.set(0, 0, c * z);
 		}
-		vrm.humanoid
-			.getNormalizedBoneNode(`${side}ThumbProximal` as VRMHumanBoneName)
-			?.rotation.set(0, s * 12 * RAD, 0);
-		vrm.humanoid
-			.getNormalizedBoneNode(`${side}ThumbDistal` as VRMHumanBoneName)
-			?.rotation.set(0, s * 18 * RAD, 0);
+		bone(`${side}ThumbMetacarpal`)?.rotation.set(0, s * -35 * RAD, 25 * z);
+		bone(`${side}ThumbProximal`)?.rotation.set(0, s * -10 * RAD, 20 * z);
+		bone(`${side}ThumbDistal`)?.rotation.set(0, 0, 25 * z);
 	}
 }
 
@@ -208,6 +215,13 @@ export class AvatarView {
 	private settled = false;
 	private nextBlink = 0;
 	private talkUntil = 0;
+	/** The next fidget while standing about (host time; 0 until the first update). */
+	private nextFidget = 0;
+	/** A smile (the "relaxed" expression): how much now, how much wanted until when, and the next one. */
+	private smile = 0;
+	private smileWant = 0;
+	private smileUntil = 0;
+	private nextSmile = 0;
 	private disposed = false;
 	private mixer: THREE.AnimationMixer | null = null;
 	private actions: Record<string, THREE.AnimationAction> = {};
@@ -353,6 +367,7 @@ export class AvatarView {
 				this.faceTo = Math.atan2(towards.x - p.x, towards.z - p.z);
 		}
 		this.gesture = { name, until: hostNow + action.getClip().duration * 1000 };
+		if (SMILING.has(name)) this.smileFor(this.gesture.until, 0.6);
 		this.replay = true;
 		return true;
 	}
@@ -378,14 +393,51 @@ export class AvatarView {
 	}
 
 	/** Blinks now and then, and moves the mouth while talking (VRM expressions). */
-	private express(hostNow: number): void {
+	private smileFor(until: number, how: number): void {
+		this.smileUntil = Math.max(this.smileUntil, until);
+		this.smileWant = Math.max(this.smileWant, how);
+	}
+
+	/**
+	 * Blinks now and then, smiles now and then (and with friendly motions), and moves the mouth while talking
+	 * (VRM expressions). The smile is "relaxed": a closed-mouth smile ("happy" opens the mouth wide).
+	 */
+	private express(hostNow: number, dt: number): void {
 		const expressions = this.vrm?.expressionManager;
 		if (!expressions) return;
+		if (this.nextSmile === 0) this.nextSmile = hostNow + 4000 + Math.random() * 10_000;
+		if (hostNow > this.nextSmile) {
+			this.smileFor(hostNow + 1500 + Math.random() * 3000, 0.45 + Math.random() * 0.3);
+			this.nextSmile = this.smileUntil + 6000 + Math.random() * 14_000;
+		}
+		if (hostNow > this.smileUntil) this.smileWant = 0;
+		this.smile += (this.smileWant - this.smile) * Math.min(1, dt * 4);
+		expressions.setValue("relaxed", this.smile);
 		if (hostNow > this.nextBlink + 150) this.nextBlink = hostNow + 2000 + Math.random() * 4000;
-		const blink = Math.max(0, 1 - Math.abs(hostNow - this.nextBlink - 75) / 75);
+		// smiling eyes are already half closed: a full blink on top looks odd
+		const blink = Math.max(0, 1 - Math.abs(hostNow - this.nextBlink - 75) / 75) * (1 - this.smile);
 		expressions.setValue("blink", blink);
 		const talking = hostNow < this.talkUntil;
 		expressions.setValue("aa", talking ? 0.25 + 0.35 * Math.abs(Math.sin(hostNow / 70)) : 0);
+	}
+
+	/**
+	 * Standing about: a fidget now and then (looking round, a head tilt, the weight on one leg, the hands
+	 * together, a stretch), each picked at random, so nobody stands frozen. Not while moving, sitting or
+	 * doing something else; each avatar fidgets on its own clock (nothing goes to the host).
+	 */
+	private fidget(hostNow: number, busy: boolean): void {
+		if (this.nextFidget === 0) this.nextFidget = hostNow + 2000 + Math.random() * 6000;
+		const fidgeting = this.gesture !== null && FIDGETS.includes(this.gesture.name as MoveName);
+		if (busy) {
+			if (!fidgeting) this.nextFidget = Math.max(this.nextFidget, hostNow + 3000 + Math.random() * 5000);
+			return;
+		}
+		if (hostNow < this.nextFidget) return;
+		const can = FIDGETS.filter((f) => this.actions[f]);
+		const pick = can[Math.floor(Math.random() * can.length)];
+		if (pick) this.perform(pick, hostNow);
+		this.nextFidget = hostNow + (this.durationOf(pick ?? "") ?? 0) * 1000 + 3000 + Math.random() * 8000;
 	}
 
 	private updateLabel(): void {
@@ -420,6 +472,14 @@ export class AvatarView {
 		}
 		this.root.rotation.y = this.facing;
 
+		const posture0 = move.kind === "idle" ? move.posture : undefined;
+		this.fidget(
+			hostNow,
+			pose.moving ||
+				posture0 !== undefined ||
+				this.pending !== null ||
+				(this.gesture !== null && hostNow < this.gesture.until),
+		);
 		if (this.pending && hostNow >= this.pending.at && !pose.moving) {
 			this.perform(this.pending.name as MoveName, hostNow);
 			this.pending = null;
@@ -442,7 +502,7 @@ export class AvatarView {
 
 		this.mixer?.update(dt);
 		if (this.vrm) {
-			this.express(hostNow);
+			this.express(hostNow, dt);
 			if (!this.settled) {
 				this.root.updateMatrixWorld(true);
 				this.vrm.springBoneManager?.reset();
