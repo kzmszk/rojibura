@@ -189,6 +189,32 @@ describe("Resident", () => {
 		expect(Math.hypot(end[0] - 10, end[1])).toBeCloseTo(1.5);
 	});
 
+	test("walking with its owner, walk_to a place asks them along (not again soon); a person is not walked to", async () => {
+		const s = setup([
+			{
+				calls: [
+					["walk_to", { target: "cafe" }],
+					["walk_to", { target: "cafe" }],
+					["walk_to", { target: "a_mina" }],
+				],
+			},
+		]);
+		current = s.resident;
+		s.resident.handle({ t: "COMPANY", owner: "h_saki", on: true });
+		s.resident.handle(addressed("h_saki", "どこか行く？"));
+		await until(() => s.results.length === 3);
+		expect(s.prompts[0]).toContain("オーナーのサキ（id h_saki）が、いっしょに歩こうと言った");
+		expect(s.sent.filter((m) => m.t === "MOVE_PATH")).toEqual([]);
+		expect(s.sent.filter((m) => m.t === "LEAD")).toEqual([
+			{ t: "LEAD", to: [10, 0], place: "オープンカフェ" },
+		]);
+		expect(s.results).toEqual([
+			"サキに、オープンカフェへいっしょに行くか聞いた。返事を待つ。",
+			"さっきサキを誘ったばかり。しばらくサキのそばにいる。",
+			"いまはサキのそばを歩いている。ほかの人のところへは行けない。",
+		]);
+	});
+
 	test("does not talk to everyone when nobody is near", async () => {
 		vi.useFakeTimers();
 		try {

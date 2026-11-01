@@ -1,4 +1,4 @@
-import type { HostToClient, Item, Vec2 } from "@rojibura/protocol";
+import type { ClientToHost, HostToClient, Item, Vec2 } from "@rojibura/protocol";
 import { AI_CONV_MAX_TURNS, PRESENCE_TIMEOUT_MS } from "@rojibura/protocol";
 import { beforeEach, describe, expect, test } from "vitest";
 import { type JoinInfo, RoomCore, type Walkable, type World } from "./room-core.ts";
@@ -572,5 +572,91 @@ describe("walking with your AIs", () => {
 		const at = ctx.room.positionOf(ctx.room.members.get(bot) as never);
 		ctx.room.handle(bot, { t: "MOVE_PATH", path: [at, [-15, 15]], speed: 1.4, seq: 2 });
 		expect(last(a)).toMatchObject({ t: "MOVED", id: "a_bot", move: { kind: "path" } });
+	});
+});
+
+describe("an AI taking its owner somewhere", () => {
+	const lead: Extract<ClientToHost, { t: "LEAD" }> = {
+		t: "LEAD",
+		to: [-10, 12],
+		place: "公園",
+		text: "公園に行ってみない？",
+	};
+	function together() {
+		const a = conn("a");
+		const bot = conn("bot");
+		place(a, human("alice"), [-10, -10]);
+		place(bot, ai("bot", "alice"), [-12, -10]);
+		return { a, bot };
+	}
+
+	test("it asks while walking with its owner; on a yes it leads there and walks beside them again after", () => {
+		const { a, bot } = together();
+		ctx.room.handle(bot, lead);
+		expect(last(bot)).toMatchObject({ t: "NOTICE", kind: "rejected" });
+		ctx.room.handle(a, { t: "COMPANION", on: true });
+		expect(bot.inbox).toContainEqual({ t: "COMPANY", owner: "h_alice", on: true });
+		ctx.clock.advance(3000);
+		a.inbox.length = 0;
+		ctx.room.handle(bot, lead);
+		expect(last(a)).toEqual({
+			t: "LEAD_OFFERED",
+			from: "a_bot",
+			to: [-10, 12],
+			place: "公園",
+			text: lead.text,
+		});
+		// one ask a minute
+		ctx.room.handle(bot, lead);
+		expect(last(bot)).toMatchObject({ t: "NOTICE", kind: "rejected" });
+		a.inbox.length = 0;
+		bot.inbox.length = 0;
+		ctx.room.handle(a, { t: "ANSWER", to: "a_bot", accept: true });
+		expect(bot.inbox[0]).toMatchObject({ t: "LEAD_ANSWERED", by: "h_alice", accept: true, place: "公園" });
+		expect(a.inbox.map((m) => m.t)).toEqual(["MOVED", "LEADING"]);
+		expect(a.inbox[0]).toMatchObject({ id: "a_bot", move: { kind: "path", path: expect.any(Array) } });
+		const moved = a.inbox[0] as Extract<HostToClient, { t: "MOVED" }>;
+		expect(moved.move.kind === "path" && moved.move.path.at(-1)).toEqual([-10, 12]);
+		expect(a.inbox[1]).toEqual({ t: "LEADING", by: "a_bot", to: [-10, 12], place: "公園" });
+		// alice follows behind: it keeps going its own way, not to her side
+		ctx.clock.advance(2000);
+		a.inbox.length = 0;
+		const here = ctx.room.positionOf(ctx.room.members.get(a) as never);
+		ctx.room.handle(a, { t: "MOVE_PATH", path: [here, [-10, -6]], speed: 1.4, seq: 1 });
+		expect(a.inbox.filter((m) => m.t === "MOVED" && m.id === "a_bot")).toEqual([]);
+		// there: her page says so, and it comes to her side again
+		ctx.room.handle(a, { t: "COMPANION", on: true });
+		expect(last(a)).toMatchObject({ t: "MOVED", id: "a_bot", move: { kind: "path" } });
+	});
+
+	test("a no, a late answer, or someone else's answer leaves it beside its owner", () => {
+		const { a, bot } = together();
+		const c = conn("c");
+		place(c, human("carol"), [-8, -10]);
+		ctx.room.handle(a, { t: "COMPANION", on: true });
+		ctx.room.handle(bot, lead);
+		bot.inbox.length = 0;
+		ctx.room.handle(c, { t: "ANSWER", to: "a_bot", accept: true });
+		expect(bot.inbox).toEqual([]);
+		ctx.room.handle(a, { t: "ANSWER", to: "a_bot", accept: false });
+		expect(bot.inbox).toEqual([{ t: "LEAD_ANSWERED", by: "h_alice", accept: false, place: "公園" }]);
+		ctx.clock.advance(61_000);
+		ctx.room.handle(bot, lead);
+		ctx.clock.advance(16_000);
+		bot.inbox.length = 0;
+		a.inbox.length = 0;
+		ctx.room.handle(a, { t: "ANSWER", to: "a_bot", accept: true });
+		expect(bot.inbox).toEqual([]);
+		expect(a.inbox).toEqual([]);
+	});
+
+	test("somewhere right here, or with the owner far off, is not asked; the owner leaving ends the company", () => {
+		const { a, bot } = together();
+		ctx.room.handle(a, { t: "COMPANION", on: true });
+		ctx.room.handle(bot, { ...lead, to: [-11, -8] });
+		expect(last(bot)).toMatchObject({ t: "NOTICE", kind: "rejected", message: "そこはすぐそばです" });
+		bot.inbox.length = 0;
+		ctx.room.leave(a);
+		expect(bot.inbox).toContainEqual({ t: "COMPANY", owner: "h_alice", on: false });
 	});
 });

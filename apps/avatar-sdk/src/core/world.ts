@@ -16,6 +16,8 @@ export class World {
 	me: AvatarId | null = null;
 	readonly avatars = new Map<AvatarId, AvatarState>();
 	budget: BudgetLevel = 0;
+	/** The owner this agent walks with now (docs/prd.md 3.4.9): the host moves it meanwhile. */
+	company: AvatarId | null = null;
 	private offset = 0;
 
 	/** Applies a state message (WELCOME, JOINED, MOVED...). False for anything else. */
@@ -25,6 +27,7 @@ export class World {
 				this.me = msg.you;
 				this.offset = msg.serverTime - Date.now();
 				this.budget = msg.budget;
+				this.company = null;
 				this.avatars.clear();
 				for (const a of msg.avatars) this.avatars.set(a.id, a);
 				return true;
@@ -51,6 +54,9 @@ export class World {
 			}
 			case "BUDGET":
 				this.budget = msg.level;
+				return true;
+			case "COMPANY":
+				this.company = msg.on ? msg.owner : null;
 				return true;
 			default:
 				return false;

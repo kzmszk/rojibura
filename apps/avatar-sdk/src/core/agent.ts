@@ -8,6 +8,8 @@ import {
 	type ClientToHost,
 	dist,
 	type HostToClient,
+	LEAD_PLACE_MAX,
+	LEAD_TEXT_MAX,
 	MAX_PATH_POINTS,
 	poseAt,
 	type SpatialContext,
@@ -68,6 +70,19 @@ interface Conv {
 const TALK_RADIUS = 6;
 const TALK_AGAIN_MS = 10 * 60_000;
 const HISTORY = 6;
+/**
+ * Walking with its owner (docs/prd.md 3.4.10): ask them along to a place this far off, at most this often,
+ * less often after a no, and now and then rather than at every chance.
+ */
+const LEAD_FAR = 15;
+const LEAD_AGAIN_MS = 3 * 60_000;
+const LEAD_AFTER_NO_MS = 6 * 60_000;
+const LEAD_CHANCE = 0.35;
+const LEAD_LINES = [
+	"{place}に行ってみたいな。いっしょに来る？",
+	"ねえ、{place}のほうに行ってみない？",
+	"{place}まで歩こうよ。",
+];
 
 export class Agent {
 	private readonly world = new World();
@@ -80,6 +95,9 @@ export class Agent {
 	private readonly lastTalked = new Map<AvatarId, number>();
 	/** AI conversations this agent decided to end; further turns are not answered. */
 	private readonly ended = new Set<string>();
+	/** When it last asked its owner along, and when they last said no (Date.now). */
+	private leadAskedAt = 0;
+	private leadNoAt = 0;
 	private seq = 0;
 	private readonly o: AgentOptions;
 	private readonly random: () => number;
@@ -121,6 +139,19 @@ export class Agent {
 				this.o.send({ t: "ANSWER", to: msg.from, accept: true });
 				this.scheduleWander(10_000);
 				return;
+			case "LEAD_ANSWERED": {
+				const owner = this.world.avatars.get(msg.by)?.name ?? "オーナー";
+				if (!msg.accept) {
+					this.leadNoAt = Date.now();
+					this.o.logger.info(`${owner} would rather not go to ${msg.place}`);
+					return;
+				}
+				this.o.logger.info(`taking ${owner} to ${msg.place}`);
+				void this.o.memory.remember(msg.by, `いっしょに${msg.place}へ行った`);
+				// nothing else to do on the way
+				this.scheduleWander(Math.max(0, (msg.at ?? this.hostNow()) - this.hostNow()) + 20_000);
+				return;
+			}
 			case "ADDRESSED":
 				this.enqueue({
 					from: msg.from,
@@ -257,6 +288,12 @@ export class Agent {
 
 	private goTo(target: string, speaker: AvatarId): void {
 		if (target === "stay") return;
+		// walking with its owner the host moves it: a place is something to ask the owner along to
+		if (this.world.company) {
+			const place = this.o.landmarks.find((l) => l.id === target);
+			if (place) this.lead(place, false);
+			return;
+		}
 		let to: Vec2 | null = null;
 		if (target === "speaker") {
 			const me = this.world.me ? this.positionOf(this.world.me) : null;
@@ -329,6 +366,25 @@ export class Agent {
 		}
 	}
 
+	/**
+	 * Asks the owner it walks with to come along to `place` (docs/prd.md 3.4.10), with a line of its own
+	 * (`say`; after a reply that already said it, none). Not again soon, and not soon after a no.
+	 */
+	private lead(place: Landmark, say: boolean): void {
+		const now = Date.now();
+		if (now - this.leadAskedAt < LEAD_AGAIN_MS || now - this.leadNoAt < LEAD_AFTER_NO_MS) return;
+		this.leadAskedAt = now;
+		const line = LEAD_LINES[Math.floor(this.random() * LEAD_LINES.length)] ?? "{place}に行きたいな。";
+		const name = [...place.name].slice(0, LEAD_PLACE_MAX).join("");
+		this.o.send({
+			t: "LEAD",
+			to: place.pos,
+			place: name,
+			...(say ? { text: [...line.replace("{place}", name)].slice(0, LEAD_TEXT_MAX).join("") } : {}),
+		});
+		this.o.logger.info(`asking the owner along to ${place.name}`);
+	}
+
 	walkTo(to: Vec2): boolean {
 		const from = this.world.me ? this.positionOf(this.world.me) : null;
 		if (!from) return false;
@@ -375,6 +431,13 @@ export class Agent {
 			.sort((x, y) => x.d - y.d)[0];
 		if (near && this.world.budget === 0 && this.random() < 0.6) {
 			void this.initiate(near.a, near.d, here);
+			return;
+		}
+		// walking with its owner: no strolling off alone, but now and then it would like to go somewhere
+		if (this.world.company) {
+			const options = this.o.landmarks.filter((l) => dist(l.pos, here) > LEAD_FAR);
+			const pick = options[Math.floor(this.random() * options.length)];
+			if (pick && this.random() < LEAD_CHANCE) this.lead(pick, true);
 			return;
 		}
 		// approved AIs may greet people who accept it, less often than other AIs (docs/prd.md 3.3)

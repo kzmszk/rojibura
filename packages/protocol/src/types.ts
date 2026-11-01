@@ -224,7 +224,12 @@ export type ClientToHost =
 	| { t: "THROW"; dir: Vec2 }
 	| { t: "DROP" }
 	/** Humans: your own AIs here walk with you, just ahead to one side (docs/prd.md 3.4.9). */
-	| { t: "COMPANION"; on: boolean };
+	| { t: "COMPANION"; on: boolean }
+	/**
+	 * An AI walking with its owner asks them to come along to `to` (`place`: what it calls it; `text`: a line
+	 * of its own, shown only to the owner). The owner answers with ANSWER (docs/prd.md 3.4.10).
+	 */
+	| { t: "LEAD"; to: Vec2; place: string; text?: string };
 
 export type LeaveReason = "quit" | "timeout" | "kicked" | "closing";
 export type ConvEndReason = "max_turns" | "timeout" | "left" | "budget";
@@ -272,6 +277,14 @@ export type HostToClient =
 	| { t: "ANSWERED"; by: AvatarId; kind: Together; accept: boolean }
 	/** Both walk to where the host put them (MOVED) and start at host time `at`, facing each other. */
 	| { t: "TOGETHER"; kind: Together; a: AvatarId; b: AvatarId; at: number }
+	/** To an AI: its owner here walks with it now (or no longer); meanwhile the host moves it (3.4.9). */
+	| { t: "COMPANY"; owner: AvatarId; on: boolean }
+	/** To the owner only: their AI would like them to come along (LEAD). */
+	| { t: "LEAD_OFFERED"; from: AvatarId; to: Vec2; place: string; text?: string }
+	/** To the AI: the owner's answer; on a yes it walks there (MOVED), arriving at host time `at`. */
+	| { t: "LEAD_ANSWERED"; by: AvatarId; accept: boolean; place: string; at?: number }
+	/** To the owner, after their yes: their AI walks to `to`, and they follow behind it. */
+	| { t: "LEADING"; by: AvatarId; to: Vec2; place: string }
 	/** A small thing changed: picked up, thrown or put down. */
 	| { t: "ITEM"; item: Item }
 	/** To watchers: today's totals (UTC day) and what used them since the last push. */

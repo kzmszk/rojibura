@@ -341,3 +341,92 @@ test("an approved AI greets a nearby human who accepts it, never one who does no
 		vi.useRealTimers();
 	}
 });
+
+describe("walking with its owner", () => {
+	test("a place to go in a reply becomes an ask to the owner, not a walk", async () => {
+		const llm: LLM = {
+			name: "fake",
+			complete: async () => ({
+				reply: "カフェ行こうよ",
+				motion: "none",
+				goTo: "cafe",
+				endConversation: false,
+			}),
+		};
+		const { agent, sent } = setup(llm);
+		agent.handle({ t: "COMPANY", owner: "h_k", on: true });
+		agent.handle({
+			t: "ADDRESSED",
+			from: "h_k",
+			text: "どこ行く？",
+			convId: "c_1",
+			turn: 1,
+			maxTurns: null,
+			context,
+		});
+		await until(() => sent.some((m) => m.t === "STATUS" && m.status === "active"));
+		expect(sent.map((m) => m.t)).toEqual(["STATUS", "SAY", "LEAD", "STATUS"]);
+		expect(sent[2]).toEqual({ t: "LEAD", to: [10, 0], place: "オープンカフェ" });
+	});
+
+	test("now and then it asks the owner along somewhere far, never strolls off alone, and waits after a no", async () => {
+		vi.useFakeTimers();
+		try {
+			const sent: ClientToHost[] = [];
+			const agent = new Agent({
+				persona: { name: "ミナ", personality: "" },
+				llm: { name: "fake", complete: async () => null },
+				memory: memory(),
+				nav: { findPath: (a, b) => [a, b] },
+				landmarks: [
+					{ id: "cafe", name: "オープンカフェ", pos: [10, 0] },
+					{ id: "park", name: "公園", pos: [30, 0] },
+				],
+				logger: { info: () => {}, warn: () => {} },
+				send: (m) => sent.push(m),
+				wanderMs: [1000, 1000],
+				random: () => 0,
+			});
+			const blank = { thumb: "", lod: "", vrm: "" };
+			agent.handle({
+				t: "WELCOME",
+				you: "a_mina",
+				serverTime: Date.now(),
+				budget: 0,
+				avatars: [
+					{
+						id: "a_mina",
+						kind: "ai",
+						name: "ミナ",
+						status: "active",
+						assets: blank,
+						move: { kind: "idle", pos: [0, 0], at: 0 },
+					},
+					{
+						id: "h_k",
+						kind: "human",
+						name: "Kazu",
+						status: "active",
+						assets: blank,
+						move: { kind: "idle", pos: [2, 0], at: 0 },
+					},
+				],
+			});
+			agent.handle({ t: "COMPANY", owner: "h_k", on: true });
+			await vi.advanceTimersByTimeAsync(3100);
+			const asks = () => sent.filter((m) => m.t === "LEAD");
+			expect(asks()).toEqual([
+				{ t: "LEAD", to: [30, 0], place: "公園", text: "公園に行ってみたいな。いっしょに来る？" },
+			]);
+			agent.handle({ t: "LEAD_ANSWERED", by: "h_k", accept: false, place: "公園" });
+			await vi.advanceTimersByTimeAsync(4 * 60_000);
+			expect(asks()).toHaveLength(1);
+			await vi.advanceTimersByTimeAsync(3 * 60_000);
+			expect(asks()).toHaveLength(2);
+			expect(sent.filter((m) => m.t === "MOVE_PATH")).toEqual([]);
+			agent.stop();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+});

@@ -85,6 +85,13 @@ export const OFFER_TTL_MS = 15_000;
 /** How far apart two avatars stand (centre to centre) for each thing done together, in metres. */
 export const TOGETHER_GAP = { handshake: 0.65, hug: 0.4 } as const;
 
+// an AI taking its owner somewhere (docs/prd.md 3.4.10)
+export const LEAD_REACH = 12; // m: how close the owner must be
+export const LEAD_MIN_DISTANCE = 5; // m: somewhere farther than this
+export const LEAD_INTERVAL_MS = 60_000; // one ask per AI this often
+export const LEAD_PLACE_MAX = 24;
+export const LEAD_TEXT_MAX = 60;
+
 // small things (docs/prd.md 3.4.7)
 export const ITEM_REACH = 1.6; // m: how close a thing must be to pick it up
 export const THROW_RANGE = 6; // m

@@ -12,6 +12,8 @@ import {
 	type ClientToHost,
 	dist,
 	type HostToClient,
+	LEAD_MIN_DISTANCE,
+	LEAD_PLACE_MAX,
 	MAX_PATH_POINTS,
 	MAX_SAY_LENGTH,
 	MOTIONS,
@@ -92,6 +94,8 @@ const SELF = "self";
 const NOTES_SHOWN = 5;
 /** Lines of the other side kept per conversation, saved to memory when it ends. */
 const HEARD_KEPT = 6;
+/** Walking with its owner: ask them along somewhere at most this often (docs/prd.md 3.4.10). */
+const LEAD_AGAIN_MS = 3 * 60_000;
 
 export class Resident {
 	private readonly world = new World();
@@ -117,6 +121,8 @@ export class Resident {
 	private recent: { to: string; text: string }[] = [];
 	/** Where the resident has been staying and since when, so it knows when it has been idle for long. */
 	private place = { name: "", since: 0 };
+	/** When it last asked its owner along somewhere (Date.now; docs/prd.md 3.4.10). */
+	private leadAskedAt = 0;
 	private seq = 0;
 	private readonly o: ResidentOptions;
 	private readonly random: () => number;
@@ -173,6 +179,15 @@ export class Resident {
 				case "BUDGET":
 					if (!this.turn) this.scheduleTick();
 					return;
+				case "COMPANY": {
+					const owner = this.nameOf(msg.owner);
+					this.push(
+						msg.on
+							? `オーナーの${owner}（id ${msg.owner}）が、いっしょに歩こうと言った。しばらく${owner}のそばを歩く。どこかへ行きたくなったら walk_to でランドマークを選ぶと、${owner}をそこへ誘える。`
+							: `${owner}といっしょに歩くのは終わった。また好きに歩ける。`,
+					);
+					return;
+				}
 				default:
 					return;
 			}
@@ -209,6 +224,16 @@ export class Resident {
 				if (msg.target !== this.world.me) return;
 				const a = this.world.avatars.get(msg.id);
 				if (a) this.push(`${clean(a.name, 24)}（id ${a.id}）があなたに ${msg.motion} をした。`);
+				return;
+			}
+			case "LEAD_ANSWERED": {
+				const owner = this.nameOf(msg.by);
+				const place = clean(msg.place, 24);
+				this.push(
+					msg.accept
+						? `${owner}が「ついていく」と答えた。${owner}を連れて${place}へ歩いている。`
+						: `${owner}は${place}へは行かないと答えた。このまま${owner}のそばにいる。`,
+				);
 				return;
 			}
 			case "NOTICE":
@@ -548,6 +573,20 @@ export class Resident {
 		const landmark = this.o.landmarks.find((l) => l.id === raw || l.name === raw);
 		const person = landmark ? undefined : this.find(raw);
 		if (!landmark && !person) throw new Error(`${clean(raw, 24)} は知らない。ランドマークか人の id を使う。`);
+		// walking with its owner the host moves it: a place is something to ask the owner along to
+		const company = this.world.company;
+		if (company) {
+			const owner = this.nameOf(company);
+			if (!landmark) return `いまは${owner}のそばを歩いている。ほかの人のところへは行けない。`;
+			if (Date.now() - this.leadAskedAt < LEAD_AGAIN_MS)
+				return `さっき${owner}を誘ったばかり。しばらく${owner}のそばにいる。`;
+			if (dist(here, landmark.pos) < LEAD_MIN_DISTANCE) return `${clean(landmark.name, 24)}はすぐそこ。`;
+			this.leadAskedAt = Date.now();
+			const place = [...clean(landmark.name, 24)].slice(0, LEAD_PLACE_MAX).join("");
+			this.o.send({ t: "LEAD", to: landmark.pos, place });
+			this.o.logger.info(`asking ${owner} along to ${place}`);
+			return `${owner}に、${place}へいっしょに行くか聞いた。返事を待つ。`;
+		}
 
 		let path: Vec2[] | null = null;
 		if (landmark) {

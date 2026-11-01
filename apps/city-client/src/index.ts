@@ -359,6 +359,8 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 	showCompanion();
 	companionButton.onclick = () => {
 		companion = !companion;
+		// following your AI somewhere ends too (the host hears it from COMPANION)
+		if (following?.lead) following = null;
 		try {
 			localStorage.setItem("rj.companion", companion ? "1" : "0");
 		} catch {
@@ -567,7 +569,8 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 					if (m.builds) builds.set(m.builds);
 					items.reset(m.items ?? []);
 					showHeld();
-					// the host forgets on a new connection; tell it again
+					// the host forgets on a new connection; tell it again (a walk behind your AI is over then)
+					if (following?.lead) following = null;
 					if (companion) conn.send({ t: "COMPANION", on: true });
 					break;
 				case "ITEM": {
@@ -581,6 +584,12 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 				}
 				case "OFFERED":
 					showOffer(m.from, m.kind);
+					break;
+				case "LEAD_OFFERED":
+					showLead(m.from, m.place, m.text);
+					break;
+				case "LEADING":
+					trail(m.by, m.to, m.place);
 					break;
 				case "ANSWERED":
 					if (!m.accept)
@@ -940,7 +949,16 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 	const FOLLOW_STOP_M = 2;
 	const FOLLOW_REPLAN_MS = 1000;
 	const FOLLOW_MAX_MS = 60_000;
-	let following: { id: AvatarId; until: number; plannedAt: number } | null = null;
+	/** Behind your AI to a place (docs/prd.md 3.4.10): this far behind it, for at most this long. */
+	const LEAD_BEHIND_M = 1.5;
+	const LEAD_FOLLOW_MAX_MS = 5 * 60_000;
+	let following: {
+		id: AvatarId;
+		until: number;
+		plannedAt: number;
+		/** Following your AI to a place it asked you along to. */
+		lead?: { to: Vec2; place: string };
+	} | null = null;
 	function startFollow(id: AvatarId): void {
 		const them = avatars.get(id);
 		if (!them || id === myId) return;
@@ -1003,15 +1021,29 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 	/** Someone asks: yes or no, gone after OFFER_TTL_MS (no answer is a no). */
 	function showOffer(from: AvatarId, kind: Together): void {
 		const name = avatars.get(from)?.state.name ?? "だれか";
-		offerBox.replaceChildren(el("span", "", `${name}さんが${TOGETHER_LABEL[kind]}を申し込んでいます`));
+		ask(from, `${name}さんが${TOGETHER_LABEL[kind]}を申し込んでいます`, "受ける", "断る");
+	}
+	/** Your AI would like you to come along somewhere (docs/prd.md 3.4.10); its line is for you only. */
+	function showLead(from: AvatarId, place: string, text: string | undefined): void {
+		const ai = avatars.get(from);
+		const name = ai?.state.name ?? "AI";
+		if (text) {
+			ai?.say(text, conn.hostNow());
+			addLog(`${name} → あなた`, text);
+		}
+		ask(from, `${name}が${place}へ行きたがっています`, "ついていく", "やめとく");
+	}
+	/** The yes-or-no box: the answer goes to `from` (ANSWER). */
+	function ask(from: AvatarId, question: string, yes: string, no: string): void {
+		offerBox.replaceChildren(el("span", "", question));
 		const reply = (accept: boolean) => {
 			conn.send({ t: "ANSWER", to: from, accept });
 			offerBox.hidden = true;
 			clearTimeout(offerTimer);
 		};
 		for (const [label, accept] of [
-			["受ける", true],
-			["断る", false],
+			[yes, true],
+			[no, false],
 		] as const) {
 			const b = el("button", accept ? "" : "rj-secondary", label);
 			b.type = "button";
@@ -1095,8 +1127,21 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 	}
 	/** Stops following someone or going to a portal (the person moves on their own). */
 	function stopGoing(): void {
-		following = null;
+		endFollow();
 		toGate = null;
+	}
+	/** After your yes, your AI walks to a place and you follow behind it until it is there. */
+	function trail(id: AvatarId, to: Vec2, place: string): void {
+		const them = avatars.get(id);
+		if (!them) return;
+		toGate = null;
+		following = { id, until: performance.now() + LEAD_FOLLOW_MAX_MS, plannedAt: 0, lead: { to, place } };
+		showToast(`${them.state.name}について${place}へ向かいます`);
+	}
+	/** Stops following; behind your AI to a place, it walks beside you again (the host hears COMPANION). */
+	function endFollow(): void {
+		if (following?.lead && companion) conn.send({ t: "COMPANION", on: true });
+		following = null;
 	}
 	function followStep(t: number): void {
 		if (!following) return;
@@ -1104,13 +1149,36 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 		const them = avatars.get(following.id);
 		if (!mine || !them || t > following.until) {
 			if (!them) showToast("相手を見失いました");
-			following = null;
+			endFollow();
 			return;
 		}
 		const now = conn.hostNow();
 		const here = poseAt(mine.state.move, now).pos;
 		const there = poseAt(them.state.move, now).pos;
 		const d = Math.hypot(there[0] - here[0], there[1] - here[1]);
+		const lead = following.lead;
+		if (lead) {
+			// your AI stopped where it was going, with you just behind: there
+			const { moving } = poseAt(them.state.move, now);
+			if (!moving && dist(there, lead.to) < 1.5 && d <= FOLLOW_STOP_M + 0.5) {
+				showToast(`${lead.place}に着きました`);
+				addLog("", `${them.state.name}と${lead.place}に着きました`, "sys");
+				endFollow();
+				return;
+			}
+			if (t - following.plannedAt < FOLLOW_REPLAN_MS) return;
+			// a little short of where it will be in a moment, so you walk on with it rather than stop and go
+			const soon = poseAt(them.state.move, now + FOLLOW_REPLAN_MS).pos;
+			const ds = Math.hypot(soon[0] - here[0], soon[1] - here[1]);
+			if (ds < LEAD_BEHIND_M + 0.3) return;
+			following.plannedAt = t;
+			const k = LEAD_BEHIND_M / ds;
+			const goal: Vec2 = [soon[0] + (here[0] - soon[0]) * k, soon[1] + (here[1] - soon[1]) * k];
+			// a way not found now may be found at the next try
+			const speed = d > 5 ? RUN_SPEED : WALK_SPEED;
+			if (!walkTo(goal, speed)) walkTo(soon, speed);
+			return;
+		}
 		if (d <= FOLLOW_STOP_M) {
 			showToast(`${them.state.name} のそばに着きました`);
 			following = null;

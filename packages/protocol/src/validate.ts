@@ -12,6 +12,8 @@ import {
 	BUILD_SCALE_MIN,
 	INTEREST_RADIUS_MAX,
 	INTEREST_RADIUS_MIN,
+	LEAD_PLACE_MAX,
+	LEAD_TEXT_MAX,
 	MAX_MESSAGE_BYTES,
 	MAX_PATH_POINTS,
 	MAX_SAY_LENGTH,
@@ -189,6 +191,20 @@ export function parseClientMessage(raw: string | ArrayBuffer): Parsed<ClientToHo
 		case "COMPANION":
 			if (typeof v.on !== "boolean") return fail("bad on");
 			return { ok: true, msg: { t: "COMPANION", on: v.on } };
+		case "LEAD": {
+			if (!isVec2(v.to)) return fail("bad to");
+			if (typeof v.place !== "string") return fail("bad place");
+			const place = sanitizeText(v.place).trim();
+			if (place.length === 0 || textLength(place) > LEAD_PLACE_MAX) return fail("bad place length");
+			const msg: ClientToHost = { t: "LEAD", to: [v.to[0], v.to[1]], place };
+			if (v.text !== undefined) {
+				if (typeof v.text !== "string") return fail("bad text");
+				const text = sanitizeText(v.text).trim();
+				if (text.length === 0 || textLength(text) > LEAD_TEXT_MAX) return fail("bad text length");
+				msg.text = text;
+			}
+			return { ok: true, msg };
+		}
 		case "BUILD":
 			return parseBuild(v);
 		case "UNBUILD": {

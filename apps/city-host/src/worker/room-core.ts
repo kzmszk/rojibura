@@ -24,6 +24,9 @@ import {
 	type ItemId,
 	type ItemKind,
 	isPosture,
+	LEAD_INTERVAL_MS,
+	LEAD_MIN_DISTANCE,
+	LEAD_REACH,
 	type LeaveReason,
 	MAX_PATH_LENGTH,
 	MAX_PATH_POINTS,
@@ -78,6 +81,8 @@ export interface BuildStore {
 /** Where your AIs walk with you (docs/prd.md 3.4.9): this far ahead, and this far to one side (m). */
 const COMPANION_AHEAD = 2;
 const COMPANION_ASIDE = 0.8;
+/** How long after arriving an AI that took its owner somewhere waits for them before walking with them again. */
+const LEAD_GRACE_MS = 2 * 60_000;
 
 /** Saves the area's small things whenever one changes (DO key-value storage). */
 export interface ItemStore {
@@ -140,6 +145,10 @@ export interface Member extends JoinInfo {
 	companion?: boolean;
 	/** Which way the avatar last walked (the host knows no facing): companions keep to its front. */
 	heading?: Vec2;
+	/** AIs: taking the owner to a place (docs/prd.md 3.4.10); walking with them again after `until` at last. */
+	lead?: { to: Vec2; place: string; until: number };
+	/** AIs: when it last asked its owner to come along (one ask per LEAD_INTERVAL_MS). */
+	leadAskedAt?: number;
 }
 
 /** Personal mutes and blocks that concern one avatar (docs/prd.md 4.2). */
@@ -252,6 +261,8 @@ export class RoomCore<C> {
 	private walk: Walkable;
 	/** Offers to do something together, by "from to" (docs/prd.md 3.4.6); they lapse after OFFER_TTL_MS. */
 	private readonly offers = new Map<string, { kind: Together; at: number }>();
+	/** An AI's open ask to its owner to come along, by the AI (docs/prd.md 3.4.10); lapses after OFFER_TTL_MS. */
+	private readonly leads = new Map<AvatarId, { owner: AvatarId; to: Vec2; place: string; at: number }>();
 	/** Small things in the area (docs/prd.md 3.4.7). */
 	private readonly items = new Map<ItemId, Item>();
 	private readonly itemStore: ItemStore | undefined;
@@ -402,7 +413,10 @@ export class RoomCore<C> {
 		// an AI whose owner is walking with company joins them at once
 		if (member.kind === "ai") {
 			const owner = this.memberById(member.ownerId);
-			if (owner?.companion) this.accompany(owner, now);
+			if (owner?.companion) {
+				this.transport.send(conn, { t: "COMPANY", owner: owner.id, on: true });
+				this.accompany(owner, now);
+			}
 		}
 		return true;
 	}
@@ -534,10 +548,22 @@ export class RoomCore<C> {
 				return;
 			case "COMPANION":
 				if (m.kind !== "human") return;
+				// also how the owner's page says a walk to a place is over (arrived, or they went their own way)
+				this.endLeads(m);
+				if (m.companion !== msg.on) this.tellCompany(m, msg.on);
 				m.companion = msg.on;
 				this.transport.persist(conn, m);
 				if (msg.on) this.accompany(m, now);
 				return;
+			case "LEAD": {
+				if (!this.moveToken(v, now)) {
+					this.violation(conn, v, now);
+					return;
+				}
+				const err = this.askLead(conn, m, msg, now);
+				if (err) this.notice(conn, "rejected", err);
+				return;
+			}
 			case "ACTION":
 				if (!this.moveToken(v, now)) {
 					this.violation(conn, v, now);
@@ -603,7 +629,7 @@ export class RoomCore<C> {
 				return;
 			}
 			case "ANSWER":
-				this.answer(m, msg.to, msg.accept, now);
+				if (!this.answerLead(m, msg.to, msg.accept, now)) this.answer(m, msg.to, msg.accept, now);
 				return;
 			case "AUTH":
 				return; // handled by the adapter before join
@@ -700,7 +726,100 @@ export class RoomCore<C> {
 		let slot = 0;
 		for (const [conn, ai] of this.members) {
 			if (ai.kind !== "ai" || ai.ownerId !== owner.id) continue;
-			this.companionStep(conn, ai, owner, slot++ % 2 === 0 ? 1 : -1, ahead, now);
+			const side = slot++ % 2 === 0 ? 1 : -1;
+			// taking the owner somewhere: it leads, the owner follows (until it is over, or long past)
+			if (ai.lead && now < ai.lead.until) continue;
+			if (ai.lead) {
+				delete ai.lead;
+				this.transport.persist(conn, ai);
+			}
+			this.companionStep(conn, ai, owner, side, ahead, now);
+		}
+	}
+
+	/** Tells the owner's AIs here that they walk with the owner now, or no longer. */
+	private tellCompany(owner: Member, on: boolean): void {
+		for (const [conn, ai] of this.members)
+			if (ai.kind === "ai" && ai.ownerId === owner.id)
+				this.transport.send(conn, { t: "COMPANY", owner: owner.id, on });
+	}
+
+	// ---- an AI taking its owner somewhere (docs/prd.md 3.4.10) -----------------
+
+	/** The way from `from` to `to` as one move, or null; a way of more points ends where one move does. */
+	private leadPath(from: Vec2, to: Vec2): Vec2[] | null {
+		const way = this.walk.findPath?.(this.walk.closestPoint(from), to) ?? [from, to];
+		if (way.length < 2) return null;
+		const path = [from, ...way.slice(1)].slice(0, MAX_PATH_POINTS);
+		return polylineLength(path) <= MAX_PATH_LENGTH && this.walk.validatePath(path) ? path : null;
+	}
+
+	/** An AI walking with its owner asks them to come along to a place; the owner's page asks them. */
+	private askLead(conn: C, m: Member, msg: Extract<ClientToHost, { t: "LEAD" }>, now: number): string | null {
+		const owner = m.kind === "ai" ? this.memberById(m.ownerId) : undefined;
+		const oc = owner ? this.byId.get(owner.id) : undefined;
+		if (!owner || oc === undefined || !owner.companion) return "オーナーと歩いているときだけ誘えます";
+		if (m.leadAskedAt !== undefined && now - m.leadAskedAt < LEAD_INTERVAL_MS)
+			return "さっき誘ったばかりです";
+		const here = this.positionOf(m, now);
+		if (dist(here, this.positionOf(owner, now)) > LEAD_REACH) return "オーナーが遠すぎます";
+		const to = this.walk.closestPoint(msg.to);
+		if (dist(here, to) < LEAD_MIN_DISTANCE) return "そこはすぐそばです";
+		if (!this.leadPath(here, to)) return "そこへは歩いて行けません";
+		m.leadAskedAt = now;
+		this.transport.persist(conn, m);
+		this.leads.set(m.id, { owner: owner.id, to, place: msg.place, at: now });
+		this.transport.send(oc, {
+			t: "LEAD_OFFERED",
+			from: m.id,
+			to,
+			place: msg.place,
+			...(msg.text ? { text: msg.text } : {}),
+		});
+		return null;
+	}
+
+	/**
+	 * `m` answers their AI `to` asking them to come along. Yes: the AI walks there and the owner's page
+	 * follows it; the AI walks with the owner again when the page says it is over (COMPANION), or, if it
+	 * never does, a while after arriving. False if there was no such ask (an ANSWER to an OFFER, then).
+	 */
+	private answerLead(m: Member, to: AvatarId, accept: boolean, now: number): boolean {
+		const lead = this.leads.get(to);
+		if (!lead || lead.owner !== m.id) return false;
+		this.leads.delete(to);
+		const ai = this.memberById(to);
+		const ac = this.byId.get(to);
+		const mc = this.byId.get(m.id);
+		if (!ai || ac === undefined || mc === undefined || now - lead.at > OFFER_TTL_MS) return true;
+		const path = accept && this.accompanying(ai) ? this.leadPath(this.positionOf(ai, now), lead.to) : null;
+		if (accept && !path) this.notice(mc, "rejected", "そこへは行けなくなりました");
+		const ms = path ? (polylineLength(path) / WALK_SPEED) * 1000 : 0;
+		this.transport.send(ac, {
+			t: "LEAD_ANSWERED",
+			by: m.id,
+			accept: path !== null,
+			place: lead.place,
+			...(path ? { at: now + ms } : {}),
+		});
+		if (!path) return true;
+		const end = path[path.length - 1] as Vec2;
+		ai.lead = { to: end, place: lead.place, until: now + ms + LEAD_GRACE_MS };
+		ai.move = { kind: "path", path, speed: WALK_SPEED, at: now };
+		this.transport.persist(ac, ai);
+		this.broadcastAbout(ai, { t: "MOVED", id: ai.id, move: ai.move });
+		this.transport.send(mc, { t: "LEADING", by: ai.id, to: end, place: lead.place });
+		return true;
+	}
+
+	/** Ends the owner's AIs' walks to a place, and their open asks. */
+	private endLeads(owner: Member): void {
+		for (const [conn, ai] of this.members) {
+			if (ai.kind !== "ai" || ai.ownerId !== owner.id) continue;
+			this.leads.delete(ai.id);
+			if (!ai.lead) continue;
+			delete ai.lead;
+			this.transport.persist(conn, ai);
 		}
 	}
 
@@ -1355,6 +1474,9 @@ export class RoomCore<C> {
 			this.relations.delete(m.id);
 		}
 		for (const c of [...this.convs.values()]) if (c.a === m.id || c.b === m.id) this.endConv(c, "left");
+		this.leads.delete(m.id);
+		// their AIs no longer walk with them
+		if (m.companion) this.tellCompany(m, false);
 		// what they held stays where they were
 		const held = this.holding(m.id);
 		if (held) {
