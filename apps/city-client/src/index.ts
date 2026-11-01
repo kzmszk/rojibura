@@ -1,17 +1,22 @@
 // rojibura city client (docs/prd.md 3.4): login, the 3D city, click-to-move, chat.
 
-import { applyBuilds, NavMesh, type NavMeshData } from "@rojibura/nav";
+import { applyBuilds, NavMesh, type NavMeshData, validatePath } from "@rojibura/nav";
 import {
 	type AvatarId,
 	dist,
 	type HostToClient,
+	ITEM_REACH,
+	type ItemId,
 	MAX_SAY_LENGTH,
 	type Motion,
+	OFFER_REACH,
+	OFFER_TTL_MS,
 	type Portal,
 	type PublishedBuilds,
 	pathLeg,
 	poseAt,
 	RUN_SPEED,
+	type Together,
 	type Vec2,
 	WALK_SPEED,
 } from "@rojibura/protocol";
@@ -19,9 +24,10 @@ import * as THREE from "three";
 import { showAgentPage } from "./agent-page.ts";
 import { api, onApiUsage } from "./api.ts";
 import { currentArea, travelUrl } from "./areas.ts";
-import { AvatarView } from "./avatars.ts";
+import { AvatarView, TRAVEL } from "./avatars.ts";
 import { BuildPanel } from "./build-ui.ts";
 import { BuildsView, makeObject, modelsFromHost } from "./builds.ts";
+import { ItemsView } from "./items.ts";
 import { actionBar, Relations, showAdmin } from "./moderation.ts";
 import { CityConnection, type ConnState } from "./net.ts";
 import { rememberFirstVisit, reportFirstVisit } from "./onboarding.ts";
@@ -42,7 +48,12 @@ const MOTION_EMOJI: Record<Motion, string> = {
 	jump: "⤴️",
 	sit: "🪑",
 	lie: "🛌",
+	handstand: "🤸",
+	roll: "⤵️",
+	backroll: "↩️",
+	backflip: "🔄",
 };
+const TOGETHER_LABEL: Record<Together, string> = { handshake: "握手", hug: "ハグ" };
 /** The action bar (docs/prd.md 3.4.5): motion, label, key. Space also jumps. */
 const ACTIONS: [Motion, string, string][] = [
 	["wave", "手を振る", "1"],
@@ -51,6 +62,10 @@ const ACTIONS: [Motion, string, string][] = [
 	["jump", "ジャンプ", "4"],
 	["sit", "座る", "5"],
 	["lie", "寝転がる", "6"],
+	["handstand", "逆立ち", "7"],
+	["roll", "前転", "8"],
+	["backroll", "後転", "9"],
+	["backflip", "バク転", "0"],
 ];
 
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -371,13 +386,37 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 		b.onclick = () => act(motion);
 		motionBar.append(b);
 	}
+	// done together with the person chosen (docs/prd.md 3.4.6), and the thing in hand (3.4.7)
+	for (const [kind, icon, label] of [
+		["handshake", "🤝", "握手"],
+		["hug", "🫂", "ハグ"],
+	] as const) {
+		const b = el("button", "", icon);
+		b.type = "button";
+		b.title = `${label}を申し込む（相手をクリックして選んでから）`;
+		b.setAttribute("aria-label", label);
+		b.onclick = () => offer(kind);
+		motionBar.append(b);
+	}
+	const throwButton = el("button", "rj-held", "🥏");
+	throwButton.type = "button";
+	throwButton.title = "投げる（T）";
+	throwButton.onclick = () => throwHeld();
+	const dropButton = el("button", "rj-held", "🫳");
+	dropButton.type = "button";
+	dropButton.title = "置く（G）";
+	dropButton.onclick = () => conn.send({ t: "DROP" });
+	motionBar.append(throwButton, dropButton);
+	/** Asked to do something together: yes or no, for OFFER_TTL_MS. */
+	const offerBox = el("div", "rj-offer");
+	offerBox.hidden = true;
 	chat.append(log, motionBar, form);
 	const toast = el("div", "rj-toast");
 	// standing at a portal: the way to the other area (docs/prd.md 3.8)
 	const travel = el("button", "rj-travel");
 	travel.type = "button";
 	travel.hidden = true;
-	root.append(hud, chat, toast, travel);
+	root.append(hud, chat, toast, travel, offerBox);
 	if (area.credit) root.append(el("div", "rj-credit", area.credit));
 
 	const avatars = new Map<AvatarId, AvatarView>();
@@ -438,6 +477,15 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 		avatars.set(s.id, v);
 		scene.scene.add(v.root);
 	};
+	const items = new ItemsView(scene, (id) => avatars.get(id)?.handPosition() ?? null);
+	scene.scene.add(items.group);
+	/** The throw and put-down buttons show while holding something. */
+	const showHeld = () => {
+		const holding = !!(myId && items.heldBy(myId));
+		throwButton.hidden = !holding;
+		dropButton.hidden = !holding;
+	};
+	showHeld();
 
 	const conn = new CityConnection({
 		areaId: area.id,
@@ -457,7 +505,38 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 					avatars.clear();
 					for (const a of m.avatars) add(a);
 					if (m.builds) builds.set(m.builds);
+					items.reset(m.items ?? []);
+					showHeld();
 					break;
+				case "ITEM": {
+					const change = items.set(m.item, conn.hostNow());
+					// picking up faces the thing; throwing goes the way the avatar faces already
+					const towards =
+						change?.did === "pick" ? new THREE.Vector3(m.item.pos[0], 0, m.item.pos[1]) : undefined;
+					if (change) avatars.get(change.who)?.perform(change.did, conn.hostNow(), towards);
+					showHeld();
+					break;
+				}
+				case "OFFERED":
+					showOffer(m.from, m.kind);
+					break;
+				case "ANSWERED":
+					if (!m.accept)
+						showToast(
+							`${avatars.get(m.by)?.state.name ?? "相手"}さんは、いまは${TOGETHER_LABEL[m.kind]}しないようです`,
+						);
+					break;
+				case "TOGETHER": {
+					const a = avatars.get(m.a);
+					const b = avatars.get(m.b);
+					if (!a || !b) break;
+					const pa = poseAt(a.state.move, m.at).pos;
+					const pb = poseAt(b.state.move, m.at).pos;
+					a.together(m.kind, new THREE.Vector3(pb[0], 0, pb[1]), m.at);
+					b.together(m.kind, new THREE.Vector3(pa[0], 0, pa[1]), m.at);
+					addLog("", `${a.state.name} と ${b.state.name} が${TOGETHER_LABEL[m.kind]}しました`, "sys");
+					break;
+				}
 				case "BUILT":
 					builds.add(m.build);
 					addLog("", `${m.build.byName} が${m.build.label ? `「${m.build.label}」を` : ""}建てました`, "sys");
@@ -529,6 +608,10 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 				builds,
 				panel,
 				walkTo: (x: number, z: number, speed = WALK_SPEED) => walkTo([x, z], speed),
+				items,
+				pickUp: (id: string) => pickUp(id),
+				offer: (kind: Together) => offer(kind),
+				throwHeld: () => throwHeld(),
 				area,
 				mesh: () => mesh,
 				me: () => (myId ? avatars.get(myId) : undefined),
@@ -623,6 +706,10 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 			act(
 				e.key === " " ? "jump" : (ACTIONS.find(([, , key]) => key === e.key) as (typeof ACTIONS)[number])[0],
 			);
+		} else if (!typing() && !panel.open && e.key.toLowerCase() === "t") {
+			throwHeld();
+		} else if (!typing() && !panel.open && e.key.toLowerCase() === "g") {
+			if (myId && items.heldBy(myId)) conn.send({ t: "DROP" });
 		} else if (e.key.toLowerCase() === "f" && !typing() && talkTo) {
 			startFollow(talkTo);
 		} else if (panel.open && !typing() && (e.key.toLowerCase() === "q" || e.key.toLowerCase() === "e")) {
@@ -726,9 +813,15 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 			buildClick(ndc);
 			return;
 		}
-		// avatars first: clicking someone selects them as the one to talk to
 		const ray = new THREE.Raycaster();
 		ray.setFromCamera(ndc, scene.camera);
+		// a small thing: pick it up, walking up to it first if it is not at hand
+		const thing = items.itemAt(ray.intersectObjects(items.meshes, true)[0]?.object ?? new THREE.Object3D());
+		if (thing && !thing.holder) {
+			pickUp(thing.id);
+			return;
+		}
+		// avatars first: clicking someone selects them as the one to talk to
 		const hit = ray.intersectObjects(
 			[...avatars.values()].filter((v) => v.state.id !== myId).map((v) => v.root),
 			true,
@@ -804,7 +897,109 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 			mine.setMove({ kind: "idle", pos, at: now });
 			conn.send({ t: "MOVE_VEL", pos, dir: [0, 0], speed: 0, seq: ++seq });
 		}
+		// a roll goes somewhere: along the heading, as a path that takes as long as the roll (if it is clear)
+		const travel = TRAVEL.get(motion);
+		const duration = mine.durationOf(motion);
+		if (travel && duration && !steering) {
+			const h = mine.heading;
+			const to: Vec2 = [pos[0] + Math.sin(h) * travel, pos[1] + Math.cos(h) * travel];
+			if (validatePath(mesh, [pos, to]).ok) {
+				const speed = Math.abs(travel) / duration;
+				mine.setMove({ kind: "path", path: [pos, to], speed, at: now });
+				conn.send({ t: "MOVE_PATH", path: [pos, to], speed, seq: ++seq });
+			}
+		}
 		conn.send(talkTo ? { t: "ACTION", motion, target: talkTo } : { t: "ACTION", motion });
+	}
+	/** Asks the person chosen to do something together (docs/prd.md 3.4.6). */
+	function offer(kind: Together): void {
+		const mine = myId ? avatars.get(myId) : undefined;
+		const them = talkTo ? avatars.get(talkTo) : undefined;
+		if (!mine || !them || !talkTo) {
+			showToast(`${TOGETHER_LABEL[kind]}する相手をクリックして選んでください`);
+			return;
+		}
+		const now = conn.hostNow();
+		if (dist(poseAt(mine.state.move, now).pos, poseAt(them.state.move, now).pos) > OFFER_REACH) {
+			showToast(`${them.state.name}さんのそばに行ってから申し込んでください（F キーでそばへ）`);
+			return;
+		}
+		conn.send({ t: "OFFER", kind, to: talkTo });
+		showToast(`${them.state.name}さんに${TOGETHER_LABEL[kind]}を申し込みました`);
+	}
+	let offerTimer: ReturnType<typeof setTimeout> | undefined;
+	/** Someone asks: yes or no, gone after OFFER_TTL_MS (no answer is a no). */
+	function showOffer(from: AvatarId, kind: Together): void {
+		const name = avatars.get(from)?.state.name ?? "だれか";
+		offerBox.replaceChildren(el("span", "", `${name}さんが${TOGETHER_LABEL[kind]}を申し込んでいます`));
+		const reply = (accept: boolean) => {
+			conn.send({ t: "ANSWER", to: from, accept });
+			offerBox.hidden = true;
+			clearTimeout(offerTimer);
+		};
+		for (const [label, accept] of [
+			["受ける", true],
+			["断る", false],
+		] as const) {
+			const b = el("button", accept ? "" : "rj-secondary", label);
+			b.type = "button";
+			b.onclick = () => reply(accept);
+			offerBox.append(b);
+		}
+		offerBox.hidden = false;
+		clearTimeout(offerTimer);
+		offerTimer = setTimeout(() => (offerBox.hidden = true), OFFER_TTL_MS);
+	}
+	/** Picks up a thing (docs/prd.md 3.4.7): at once if it is at hand, otherwise after walking up to it. */
+	let pickAfter: ItemId | null = null;
+	/** Bend down this close to it (the host allows ITEM_REACH), so the hand meets the thing. */
+	const PICK_FROM = 0.6;
+	function pickUp(id: ItemId): void {
+		const mine = myId ? avatars.get(myId) : undefined;
+		const thing = items.meshes.find((o) => o.userData.itemId === id);
+		if (!mine || !thing) return;
+		if (myId && items.heldBy(myId)) {
+			showToast("もう何か持っています（G で置く、T で投げる）");
+			return;
+		}
+		stopGoing();
+		const here = poseAt(mine.state.move, conn.hostNow()).pos;
+		if (Math.hypot(thing.position.x - here[0], thing.position.z - here[1]) <= PICK_FROM) {
+			pickNow(id);
+			return;
+		}
+		if (walkTo([thing.position.x, thing.position.z], WALK_SPEED)) pickAfter = id;
+		else showToast("そこへは行けません");
+	}
+	function pickStep(): void {
+		const mine = myId ? avatars.get(myId) : undefined;
+		const thing = pickAfter ? items.meshes.find((o) => o.userData.itemId === pickAfter) : undefined;
+		if (!mine || !thing || !pickAfter) return;
+		const { pos, moving } = poseAt(mine.state.move, conn.hostNow());
+		const d = Math.hypot(thing.position.x - pos[0], thing.position.z - pos[1]);
+		if (d <= PICK_FROM || !moving) {
+			if (d <= ITEM_REACH) pickNow(pickAfter);
+			pickAfter = null;
+		}
+	}
+	/** Stops where it is (the body cannot bend down while walking), then picks up. */
+	function pickNow(id: ItemId): void {
+		const mine = myId ? avatars.get(myId) : undefined;
+		if (!mine) return;
+		const now = conn.hostNow();
+		const { pos, moving } = poseAt(mine.state.move, now);
+		if (moving) {
+			mine.setMove({ kind: "idle", pos, at: now });
+			conn.send({ t: "MOVE_VEL", pos, dir: [0, 0], speed: 0, seq: ++seq });
+		}
+		conn.send({ t: "PICK", item: id });
+	}
+	/** Throws what is in hand the way the avatar faces. */
+	function throwHeld(): void {
+		const mine = myId ? avatars.get(myId) : undefined;
+		if (!mine || !myId || !items.heldBy(myId)) return;
+		const h = mine.heading;
+		conn.send({ t: "THROW", dir: [Math.sin(h), Math.cos(h)] });
 	}
 	/** Stops following someone or going to a portal (the person moves on their own). */
 	function stopGoing(): void {
@@ -898,9 +1093,11 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 		last = t;
 		const now = conn.hostNow();
 		for (const v of avatars.values()) v.update(now, dt, scene);
+		items.update(now);
 		const mine = myId ? avatars.get(myId) : undefined;
 		if (keys.size > 0) steer(t);
 		followStep(t);
+		pickStep();
 		gateStep(t);
 		// stop at the edge of the walkable area instead of walking into walls
 		if (mine?.state.move.kind === "vel") {

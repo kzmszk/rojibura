@@ -1,10 +1,11 @@
 // Plays a motion made for one humanoid skeleton on another (docs/prd.md 3.4.5): the city's motions are written
-// for a T-pose reference rig (moves.ts) and played on each VRM's normalized bones, and on Saki's own bones.
-// A clip is sampled on the source and re-expressed on the target, so each bone points the same way at
-// every moment, whatever the proportions.
+// for a T-pose reference rig (moves.ts) and played on each VRM's normalized bones. A clip is sampled on the
+// source and re-expressed on the target, so each bone points the same way at every moment, whatever the
+// proportions.
 //
-// The two rest poses may differ (Saki's arms hang lower than a T-pose), so each bone first gets the rotation
-// that turns its rest direction into the source's, and then follows how far the source bone turned from its rest.
+// The two rest poses may differ (a model whose arms hang lower than a T-pose), so each bone first gets the
+// rotation that turns its rest direction into the source's, and then follows how far the source bone turned
+// from its rest.
 
 import * as THREE from "three";
 

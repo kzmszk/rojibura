@@ -116,6 +116,10 @@ export class Agent {
 			return;
 		}
 		switch (msg.t) {
+			case "OFFERED":
+				// a handshake or a hug: the city's AIs say yes (docs/prd.md 3.4.6)
+				this.o.send({ t: "ANSWER", to: msg.from, accept: true });
+				return;
 			case "ADDRESSED":
 				this.enqueue({
 					from: msg.from,

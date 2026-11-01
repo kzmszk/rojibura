@@ -1,7 +1,7 @@
-import type { HostToClient, Vec2 } from "@rojibura/protocol";
+import type { HostToClient, Item, Vec2 } from "@rojibura/protocol";
 import { AI_CONV_MAX_TURNS, PRESENCE_TIMEOUT_MS } from "@rojibura/protocol";
 import { beforeEach, describe, expect, test } from "vitest";
-import { type JoinInfo, RoomCore, type Walkable } from "./room-core.ts";
+import { type JoinInfo, RoomCore, type Walkable, type World } from "./room-core.ts";
 
 // 40 x 40 m square with a 10 x 10 m building in the middle (x, z in [-5, 5]).
 const inBuilding = (p: Vec2) => Math.abs(p[0]) < 5 && Math.abs(p[1]) < 5;
@@ -19,7 +19,7 @@ const walk: Walkable = {
 
 type Conn = { name: string; inbox: HostToClient[]; closed?: number };
 
-function setup() {
+function setup(extra: Partial<World> = {}, saved?: (items: Item[]) => void) {
 	let now = 1_000_000;
 	let n = 0;
 	const clock = { now: () => now, advance: (ms: number) => (now += ms) };
@@ -36,9 +36,11 @@ function setup() {
 			landmarks: [{ id: "cafe", name: "カフェ", pos: [10, 10] }],
 			spawn: [-10, -10],
 			areaName: "テスト街",
+			...extra,
 		},
 		clock.now,
 		() => String(++n),
+		saved ? { items: { save: saved } } : {},
 	);
 	return { room, clock };
 }
@@ -384,4 +386,126 @@ test("conversations survive hibernation through the persisted member state", () 
 	bot.inbox.length = 0;
 	after.leave(h);
 	expect(bot.inbox.find((m) => m.t === "CONV_END")).toMatchObject({ reason: "left" });
+});
+
+/** Joins `info` and puts them at `pos` (a key move from wherever they spawned would be refused if far). */
+function place(c: Conn, info: JoinInfo, pos: Vec2) {
+	ctx.room.join(c, info);
+	const me = ctx.room.members.get(c);
+	if (!me) throw new Error("not joined");
+	me.move = { kind: "idle", pos, at: ctx.clock.now() };
+	c.inbox.length = 0;
+}
+
+describe("doing things together", () => {
+	test("an offer, a yes: both step to their places facing each other and start together", () => {
+		const a = conn("a");
+		const b = conn("b");
+		place(a, human("alice"), [-10, -10]);
+		place(b, human("bob"), [-8, -10]);
+		ctx.room.handle(a, { t: "OFFER", kind: "handshake", to: "h_bob" });
+		expect(b.inbox).toEqual([{ t: "OFFERED", from: "h_alice", kind: "handshake" }]);
+		ctx.room.handle(b, { t: "ANSWER", to: "h_alice", accept: true });
+		expect(a.inbox).toContainEqual({ t: "ANSWERED", by: "h_bob", kind: "handshake", accept: true });
+		const moved = b.inbox.filter((m) => m.t === "MOVED");
+		expect(moved).toHaveLength(2);
+		const ends = moved.map((m) => (m.t === "MOVED" && m.move.kind === "path" ? m.move.path[1] : null));
+		// centred where they were, 0.65 m apart
+		expect(ends[0]?.[0]).toBeCloseTo(-9.325, 3);
+		expect(ends[1]?.[0]).toBeCloseTo(-8.675, 3);
+		const together = b.inbox.find((m) => m.t === "TOGETHER");
+		// the longer walk is 0.675 m at 1.4 m/s, then a little margin
+		expect(together).toMatchObject({ kind: "handshake", a: "h_alice", b: "h_bob" });
+		expect(together?.t === "TOGETHER" && together.at - ctx.clock.now()).toBeCloseTo(
+			(0.675 / 1.4) * 1000 + 200,
+			0,
+		);
+		expect(a.inbox.some((m) => m.t === "TOGETHER")).toBe(true);
+	});
+
+	test("a no, a late yes, someone too far or blocked: nothing happens together", () => {
+		const a = conn("a");
+		const b = conn("b");
+		place(a, human("alice"), [-10, -10]);
+		place(b, human("bob"), [-8, -10]);
+		ctx.room.handle(a, { t: "OFFER", kind: "hug", to: "h_bob" });
+		ctx.room.handle(b, { t: "ANSWER", to: "h_alice", accept: false });
+		expect(a.inbox).toContainEqual({ t: "ANSWERED", by: "h_bob", kind: "hug", accept: false });
+		ctx.room.handle(a, { t: "OFFER", kind: "hug", to: "h_bob" });
+		ctx.clock.advance(16_000);
+		a.inbox.length = 0;
+		ctx.room.handle(b, { t: "ANSWER", to: "h_alice", accept: true });
+		expect(a.inbox).toEqual([]);
+		const far = conn("far");
+		place(far, human("carol"), [-10, 10]);
+		ctx.room.handle(a, { t: "OFFER", kind: "hug", to: "h_carol" });
+		expect(last(a)).toMatchObject({ t: "NOTICE", kind: "rejected" });
+		ctx.room.setRelations("h_alice", { mutes: [], blocks: ["h_bob"], blockedBy: [] });
+		ctx.room.handle(b, { t: "OFFER", kind: "hug", to: "h_alice" });
+		expect(last(b)).toMatchObject({ t: "NOTICE", kind: "rejected" });
+		expect(a.inbox.some((m) => m.t === "OFFERED")).toBe(false);
+	});
+});
+
+describe("small things", () => {
+	const ball: Vec2 = [-9, -10];
+	let saves: Item[][];
+	beforeEach(() => {
+		saves = [];
+		ctx = setup({ items: [{ kind: "ball", pos: ball }] }, (items) => saves.push(structuredClone(items)));
+		ctx.room.loadItems(undefined);
+	});
+	const theBall = () => ctx.room.itemList[0] as Item;
+
+	test("pick up close by, throw ahead: it flies, lands, and cannot be picked up meanwhile", () => {
+		const a = conn("a");
+		const b = conn("b");
+		place(a, human("alice"), [-10, -10]);
+		place(b, human("bob"), [-12, -10]);
+		ctx.room.handle(b, { t: "PICK", item: theBall().id });
+		expect(last(b)).toMatchObject({ t: "NOTICE", kind: "rejected" });
+		ctx.room.handle(a, { t: "PICK", item: theBall().id });
+		expect(last(b)).toMatchObject({ t: "ITEM", item: { holder: "h_alice" } });
+		ctx.room.handle(a, { t: "THROW", dir: [0, 1] });
+		const thrown = last(b);
+		expect(thrown).toMatchObject({
+			t: "ITEM",
+			item: { pos: [-10, -4], flight: { from: [-10, -10], dur: 900 } },
+		});
+		expect(thrown).not.toHaveProperty("item.holder");
+		place(b, human("bob"), [-10, -4.5]);
+		ctx.room.handle(b, { t: "PICK", item: theBall().id });
+		expect(last(b)).toMatchObject({ t: "NOTICE", message: "まだ飛んでいます" });
+		ctx.clock.advance(1300);
+		ctx.room.handle(b, { t: "PICK", item: theBall().id });
+		expect(theBall().holder).toBe("h_bob");
+		expect(saves.length).toBeGreaterThanOrEqual(3);
+	});
+
+	test("thrown, picked up again, put down, left behind, seen by newcomers", () => {
+		const a = conn("a");
+		place(a, human("alice"), [-9.5, -10]);
+		ctx.room.handle(a, { t: "PICK", item: theBall().id });
+		ctx.room.handle(a, { t: "THROW", dir: [1, 0] });
+		expect(theBall().pos).toEqual([-3.5, -10]);
+		ctx.clock.advance(2000);
+		const me = ctx.room.members.get(a);
+		if (me) me.move = { kind: "idle", pos: [-4, -10], at: ctx.clock.now() };
+		ctx.room.handle(a, { t: "PICK", item: theBall().id });
+		ctx.room.handle(a, { t: "DROP" });
+		expect(theBall()).toMatchObject({ pos: [-4, -10] });
+		expect(theBall().holder).toBeUndefined();
+		ctx.room.handle(a, { t: "PICK", item: theBall().id });
+		ctx.room.leave(a);
+		expect(theBall().holder).toBeUndefined();
+		const c = conn("c");
+		ctx.room.join(c, human("carol"));
+		const w = c.inbox[0] as Extract<HostToClient, { t: "WELCOME" }>;
+		expect(w.items?.[0]?.id).toBe(theBall().id);
+	});
+
+	test("things held by someone who is gone lie where they were", () => {
+		ctx.room.loadItems([{ id: "i_x", kind: "box", pos: [1, 1], holder: "h_gone" }]);
+		expect(ctx.room.itemList).toEqual([{ id: "i_x", kind: "box", pos: [1, 1] }]);
+	});
 });

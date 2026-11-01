@@ -29,8 +29,6 @@ interface Template {
 	clips: THREE.AnimationClip[];
 	/** Lifts the model so its feet are at y = 0. */
 	footOffset: number;
-	/** Gestures and postures made for this skeleton, when it is one we know (Saki's). */
-	moves: Motions | null;
 }
 
 const BUBBLE_MS = 7000;
@@ -38,6 +36,10 @@ const FADE = 0.3;
 const RAD = Math.PI / 180;
 
 const PLAY = new Map(MOVES.map((m) => [m.name as string, m.play]));
+/** Motions that move the avatar along its heading (metres), see MOVES. */
+export const TRAVEL = new Map(
+	MOVES.filter((m) => m.travel).map((m) => [m.name as string, m.travel as number]),
+);
 let city: { clips: THREE.AnimationClip[]; pace: Record<"walk" | "run", number> } | null = null;
 
 /** The city's motions on the reference rig (made once). */
@@ -50,47 +52,16 @@ function cityMoves() {
 	return city;
 }
 
-/**
- * The city's motions retargeted to a skeleton at rest (humanoid bone name -> node). `turned`: the skeleton
- * faces -Z. `only`: just these motions (the avatar has its own for the rest).
- */
-function motionsFor(bones: Record<string, THREE.Object3D>, turned: boolean, only?: MoveName[]): Motions {
+/** The city's motions retargeted to a VRM's normalized bones at rest (humanoid bone name -> node). */
+function motionsFor(bones: Record<string, THREE.Object3D>): Motions {
 	const { clips, pace } = cityMoves();
-	const rig = referenceRig(turned);
+	const rig = referenceRig();
 	const legs = legLength(bones) / REFERENCE_LEG;
 	return {
-		clips: clips
-			.filter((c) => !only || only.includes(c.name as MoveName))
-			.map((c) => retarget(rig, c, bones)),
-		pace: only ? {} : { walk: pace.walk * legs, run: pace.run * legs },
+		clips: clips.map((c) => retarget(rig, c, bones)),
+		pace: { walk: pace.walk * legs, run: pace.run * legs },
 	};
 }
-
-/** Humanoid bones of glTF avatars rigged like Saki (Blender's "upperarm.L"; three.js drops the dots). */
-const BLENDER_BONES: Record<string, string> = {
-	hips: "hips",
-	spine: "spine",
-	chest: "chest",
-	neck: "neck",
-	head: "head",
-	leftShoulder: "shoulderL",
-	leftUpperArm: "upperarmL",
-	leftLowerArm: "forearmL",
-	leftHand: "handL",
-	rightShoulder: "shoulderR",
-	rightUpperArm: "upperarmR",
-	rightLowerArm: "forearmR",
-	rightHand: "handR",
-	leftUpperLeg: "thighL",
-	leftLowerLeg: "shinL",
-	leftFoot: "footL",
-	rightUpperLeg: "thighR",
-	rightLowerLeg: "shinR",
-	rightFoot: "footR",
-};
-
-/** Saki walks, runs and stands her own way; the gestures and postures come from the city's motions. */
-const GESTURES: MoveName[] = ["wave", "nod", "bow", "jump", "sit", "lie"];
 
 class ModelCache {
 	private readonly loading = new Map<string, Promise<Template | null>>();
@@ -102,29 +73,7 @@ class ModelCache {
 				.loadAsync(url)
 				.then((g) => {
 					const box = new THREE.Box3().setFromObject(g.scene);
-					const bones: Record<string, THREE.Object3D> = {};
-					for (const [human, name] of Object.entries(BLENDER_BONES)) {
-						const node = g.scene.getObjectByName(name);
-						if (node) bones[human] = node;
-					}
-					// glTF models face -Z (a +Y facing Blender model, exported)
-					const known = Object.keys(bones).length === Object.keys(BLENDER_BONES).length;
-					const moves = known ? motionsFor(bones, true, GESTURES) : null;
-					// bones the city's motions leave alone (Saki's wings) keep how they are while standing,
-					// instead of springing back to their rest pose
-					const stand = g.animations.find((c) => c.name === "stand");
-					const humanoid = new Set(Object.values(bones).map((b) => b.name));
-					for (const clip of moves?.clips ?? []) {
-						for (const track of stand?.tracks ?? []) {
-							if (humanoid.has(track.name.slice(0, track.name.lastIndexOf(".")))) continue;
-							const size = track.getValueSize();
-							const held = track.clone();
-							held.times = new Float32Array([0]);
-							held.values = track.values.slice(0, size);
-							clip.tracks.push(held);
-						}
-					}
-					return { scene: g.scene, clips: g.animations, footOffset: -box.min.y, moves };
+					return { scene: g.scene, clips: g.animations, footOffset: -box.min.y };
 				})
 				.catch(() => null);
 			this.loading.set(url, p);
@@ -195,7 +144,7 @@ class VrmCache {
 				const node = vrm.humanoid.getNormalizedBoneNode(name as VRMHumanBoneName);
 				if (node) bones[name] = node;
 			}
-			file.moves = motionsFor(bones, false);
+			file.moves = motionsFor(bones);
 		}
 		return { vrm, moves: file.moves };
 	}
@@ -268,6 +217,8 @@ export class AvatarView {
 	private gesture: { name: string; until: number } | null = null;
 	/** The next play starts over even if it is the motion already playing (the same gesture again). */
 	private replay = false;
+	/** Something done together that starts at a host time, once both have walked to their places. */
+	private pending: { name: string; at: number } | null = null;
 	/** Heading to turn to while standing (towards whom a gesture is for). */
 	private faceTo: number | null = null;
 	private readonly label: HTMLDivElement;
@@ -340,8 +291,8 @@ export class AvatarView {
 		this.root.remove(this.model);
 		this.model = holder;
 		this.root.add(holder);
-		// the city's gestures and postures replace the model's own ones of the same name
-		this.setClips(new THREE.AnimationMixer(m), [...t.clips, ...(t.moves?.clips ?? [])]);
+		// glTF avatars (Saki) play their own clips; the city's motions are for VRMs
+		this.setClips(new THREE.AnimationMixer(m), t.clips);
 	}
 
 	private setClips(mixer: THREE.AnimationMixer, clips: THREE.AnimationClip[]): void {
@@ -376,21 +327,54 @@ export class AvatarView {
 
 	/**
 	 * Shows a motion with the body (docs/prd.md 3.4.5), turned towards `towards` if given. Postures (sit, lie)
-	 * come with the move state and last; gestures play once while standing. Returns false when the avatar
-	 * cannot show it (no such motion, or on the move), so the caller can show it some other way.
+	 * come with the move state and last; gestures play once while standing, and the ones that travel (rolls)
+	 * while the avatar moves along the path sent with them. Returns false when the avatar cannot show it (no
+	 * such motion, or walking), so the caller can show it some other way.
 	 */
 	act(motion: Motion, hostNow: number, towards?: THREE.Vector3): boolean {
 		const action = this.actions[motion];
-		if (!action || poseAt(this.state.move, hostNow).moving) return false;
+		if (!action || (!TRAVEL.has(motion) && poseAt(this.state.move, hostNow).moving)) return false;
 		if (towards) {
 			const p = this.root.position;
 			if (Math.hypot(towards.x - p.x, towards.z - p.z) > 0.3)
 				this.faceTo = Math.atan2(towards.x - p.x, towards.z - p.z);
 		}
 		if (isPosture(motion)) return true;
-		this.gesture = { name: motion, until: hostNow + action.getClip().duration * 1000 };
+		return this.perform(motion, hostNow);
+	}
+
+	/** Plays one of the city's motions once from now (picking up, throwing); false if the model has none. */
+	perform(name: MoveName, hostNow: number, towards?: THREE.Vector3): boolean {
+		const action = this.actions[name];
+		if (!action) return false;
+		if (towards) {
+			const p = this.root.position;
+			if (Math.hypot(towards.x - p.x, towards.z - p.z) > 0.2)
+				this.faceTo = Math.atan2(towards.x - p.x, towards.z - p.z);
+		}
+		this.gesture = { name, until: hostNow + action.getClip().duration * 1000 };
 		this.replay = true;
 		return true;
+	}
+
+	/**
+	 * Something done together (docs/prd.md 3.4.6): faces the other one at `towards` and starts at host time
+	 * `at`, when both have walked to their places. False if the model cannot show it.
+	 */
+	together(name: MoveName, towards: THREE.Vector3, at: number): boolean {
+		if (!this.actions[name]) return false;
+		const p = this.root.position;
+		this.faceTo = Math.atan2(towards.x - p.x, towards.z - p.z);
+		this.pending = { name, at };
+		return true;
+	}
+
+	/** Where the right hand is (world), for what it holds: a VRM's hand bone, or about there on others. */
+	handPosition(): THREE.Vector3 {
+		const hand = this.vrm?.humanoid.getRawBoneNode("rightHand");
+		if (hand) return hand.localToWorld(new THREE.Vector3(-0.07, -0.02, 0.03));
+		const side = new THREE.Vector3(-0.28, 0.95, 0.1).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.facing);
+		return side.add(this.root.position);
 	}
 
 	/** Blinks now and then, and moves the mouth while talking (VRM expressions). */
@@ -425,7 +409,9 @@ export class AvatarView {
 		if (ground !== null)
 			this.y = Math.abs(ground - this.y) > 2 ? ground : this.y + (ground - this.y) * Math.min(1, dt * 12);
 		this.root.position.set(pose.pos[0], this.y, pose.pos[1]);
-		if (pose.moving) {
+		// a roll travels along its path without turning to it (a back roll goes backwards)
+		const rolling = this.gesture !== null && TRAVEL.has(this.gesture.name) && hostNow < this.gesture.until;
+		if (pose.moving && !rolling) {
 			this.gesture = null;
 			this.faceTo = null;
 			this.turnTo(Math.atan2(pose.dir[0], pose.dir[1]), dt * 10);
@@ -434,10 +420,15 @@ export class AvatarView {
 		}
 		this.root.rotation.y = this.facing;
 
+		if (this.pending && hostNow >= this.pending.at && !pose.moving) {
+			this.perform(this.pending.name as MoveName, hostNow);
+			this.pending = null;
+		}
 		const speed = move.kind === "idle" ? 0 : move.speed;
 		const posture = move.kind === "idle" ? move.posture : undefined;
 		let want = "stand";
-		if (pose.moving) want = speed > 2.5 && this.actions.run ? "run" : "walk";
+		if (rolling && this.gesture) want = this.gesture.name;
+		else if (pose.moving) want = speed > 2.5 && this.actions.run ? "run" : "walk";
 		else if (this.gesture && hostNow < this.gesture.until) want = this.gesture.name;
 		else if (posture && this.actions[posture]) want = posture;
 		// a posture that began before this avatar was drawn (someone who came later) shows as it is now
@@ -468,6 +459,16 @@ export class AvatarView {
 			this.bubble.classList.remove("show", "thinking");
 		}
 		if (hostNow > this.bubbleUntil) this.bubble.classList.remove("show");
+	}
+
+	/** Where the avatar faces (radians; 0 is +Z). */
+	get heading(): number {
+		return this.facing;
+	}
+
+	/** How long a motion takes (seconds), once the model has loaded it. */
+	durationOf(motion: string): number | null {
+		return this.actions[motion]?.getClip().duration ?? null;
 	}
 
 	/** For debugging in the browser console. */

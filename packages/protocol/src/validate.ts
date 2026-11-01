@@ -17,13 +17,35 @@ import {
 	MAX_SAY_LENGTH,
 	MAX_SPEED,
 } from "./limits.ts";
-import type { BuildAt, ClientToHost, HostToClient, Motion, Posture, Status, Vec2 } from "./types.ts";
+import type {
+	BuildAt,
+	ClientToHost,
+	HostToClient,
+	Motion,
+	Posture,
+	Status,
+	Together,
+	Vec2,
+} from "./types.ts";
 
 export type Parsed<T> = { ok: true; msg: T } | { ok: false; error: string };
 
-export const MOTIONS: readonly Motion[] = ["wave", "nod", "bow", "jump", "sit", "lie"];
+export const MOTIONS: readonly Motion[] = [
+	"wave",
+	"nod",
+	"bow",
+	"jump",
+	"sit",
+	"lie",
+	"handstand",
+	"roll",
+	"backroll",
+	"backflip",
+];
 /** Motions that last until the avatar moves: the host keeps them in its idle MoveState. */
 export const POSTURES: readonly Posture[] = ["sit", "lie"];
+export const TOGETHERS: readonly Together[] = ["handshake", "hug"];
+const ITEM_RE = /^i_[A-Za-z0-9_-]{1,32}$/;
 export const isPosture = (m: Motion): m is Posture => (POSTURES as readonly Motion[]).includes(m);
 const STATUSES: readonly Status[] = ["active", "busy", "resting"];
 const COORD_LIMIT = 10_000;
@@ -145,6 +167,25 @@ export function parseClientMessage(raw: string | ArrayBuffer): Parsed<ClientToHo
 		case "WATCH_USAGE":
 			if (typeof v.on !== "boolean") return fail("bad on");
 			return { ok: true, msg: { t: "WATCH_USAGE", on: v.on } };
+		case "OFFER":
+			if (!TOGETHERS.includes(v.kind as Together)) return fail("bad kind");
+			if (!isAvatarId(v.to)) return fail("bad to");
+			return { ok: true, msg: { t: "OFFER", kind: v.kind as Together, to: v.to } };
+		case "ANSWER":
+			if (!isAvatarId(v.to)) return fail("bad to");
+			if (typeof v.accept !== "boolean") return fail("bad accept");
+			return { ok: true, msg: { t: "ANSWER", to: v.to, accept: v.accept } };
+		case "PICK":
+			if (typeof v.item !== "string" || !ITEM_RE.test(v.item)) return fail("bad item");
+			return { ok: true, msg: { t: "PICK", item: v.item } };
+		case "THROW": {
+			if (!isVec2(v.dir)) return fail("bad dir");
+			const len = Math.hypot(v.dir[0], v.dir[1]);
+			if (len < 1e-6) return fail("bad dir");
+			return { ok: true, msg: { t: "THROW", dir: [v.dir[0] / len, v.dir[1] / len] } };
+		}
+		case "DROP":
+			return { ok: true, msg: { t: "DROP" } };
 		case "BUILD":
 			return parseBuild(v);
 		case "UNBUILD": {

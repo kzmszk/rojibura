@@ -6,7 +6,34 @@ import type { Usage, UsageEvent } from "./usage.ts";
 export type AvatarId = string;
 /** A point on the walkable plane. Paths are horizontal; renderers decide the height. */
 export type Vec2 = [x: number, z: number];
-export type Motion = "wave" | "nod" | "bow" | "jump" | "sit" | "lie";
+export type Motion =
+	| "wave"
+	| "nod"
+	| "bow"
+	| "jump"
+	| "sit"
+	| "lie"
+	| "handstand"
+	| "roll"
+	| "backroll"
+	| "backflip";
+/** Two avatars doing something together, after one asked and the other said yes (docs/prd.md 3.4.6). */
+export type Together = "handshake" | "hug";
+/** Host-issued: "i_...". */
+export type ItemId = string;
+export type ItemKind = "ball" | "box";
+
+/** A small thing in the area that people pick up and throw (docs/prd.md 3.4.7). */
+export interface Item {
+	id: ItemId;
+	kind: ItemKind;
+	/** Where it lies, or will land when thrown. Stale while someone holds it. */
+	pos: Vec2;
+	holder?: AvatarId;
+	/** Thrown: it leaves the hand at `from` at host time `at` and lands on `pos` `dur` ms later. */
+	flight?: { from: Vec2; at: number; dur: number };
+}
+
 /** A motion that lasts until the avatar moves (docs/prd.md 3.4.5). */
 export type Posture = Extract<Motion, "sit" | "lie">;
 export type Status = "active" | "busy" | "resting";
@@ -186,7 +213,14 @@ export type ClientToHost =
 			label?: string;
 			ref?: string;
 	  }
-	| { t: "UNBUILD"; id: BuildId; ref?: string };
+	| { t: "UNBUILD"; id: BuildId; ref?: string }
+	/** Asks someone close to do something together; they answer with ANSWER (docs/prd.md 3.4.6). */
+	| { t: "OFFER"; kind: Together; to: AvatarId }
+	| { t: "ANSWER"; to: AvatarId; accept: boolean }
+	/** Small things (docs/prd.md 3.4.7): pick one up close by, throw it along `dir`, or put it down. */
+	| { t: "PICK"; item: ItemId }
+	| { t: "THROW"; dir: Vec2 }
+	| { t: "DROP" };
 
 export type LeaveReason = "quit" | "timeout" | "kicked" | "closing";
 export type ConvEndReason = "max_turns" | "timeout" | "left" | "budget";
@@ -202,6 +236,7 @@ export type HostToClient =
 			avatars: AvatarState[];
 			/** Only where building is allowed (free play, docs/prd.md 3.7); may be empty. */
 			builds?: Build[];
+			items?: Item[];
 	  }
 	| { t: "JOINED"; avatar: AvatarState }
 	| { t: "LEFT"; id: AvatarId; reason: LeaveReason }
@@ -227,6 +262,14 @@ export type HostToClient =
 	/** To everyone (builds change where people can walk). `ref` is the builder's. */
 	| { t: "BUILT"; build: Build; ref?: string }
 	| { t: "UNBUILT"; id: BuildId; by: AvatarId; ref?: string }
+	/** To the one asked only. */
+	| { t: "OFFERED"; from: AvatarId; kind: Together }
+	/** To the one who asked: a no (or a yes, followed by TOGETHER). */
+	| { t: "ANSWERED"; by: AvatarId; kind: Together; accept: boolean }
+	/** Both walk to where the host put them (MOVED) and start at host time `at`, facing each other. */
+	| { t: "TOGETHER"; kind: Together; a: AvatarId; b: AvatarId; at: number }
+	/** A small thing changed: picked up, thrown or put down. */
+	| { t: "ITEM"; item: Item }
 	/** To watchers: today's totals (UTC day) and what used them since the last push. */
 	| { t: "USAGE"; day: string; totals: Usage; events: UsageEvent[] };
 

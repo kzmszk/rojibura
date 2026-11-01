@@ -198,6 +198,13 @@ export class Resident {
 					this.push(`${this.who(a.avatar, a.distance)}がみんなに向かって言った: 「${clean(msg.text, 200)}」`);
 				return;
 			}
+			case "OFFERED": {
+				// a handshake or a hug: the city's AIs say yes (docs/prd.md 3.4.6)
+				this.o.send({ t: "ANSWER", to: msg.from, accept: true });
+				const a = this.world.avatars.get(msg.from);
+				if (a) this.push(`${clean(a.name, 24)}（id ${a.id}）と${msg.kind === "hug" ? "ハグ" : "握手"}した。`);
+				return;
+			}
 			case "ACTED": {
 				if (msg.target !== this.world.me) return;
 				const a = this.world.avatars.get(msg.id);

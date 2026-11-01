@@ -31,6 +31,11 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #bfd6e8; }
 .rj-motions { display: flex; gap: 4px; }
 .rj-motions button { font-size: 18px; line-height: 1; padding: 6px 8px; border-radius: 8px; border: 1px solid #aab; background: rgba(255,255,255,.85); cursor: pointer; }
 .rj-motions button:hover { background: #fff; }
+.rj-motions button[hidden] { display: none; }
+.rj-offer { position: absolute; top: 64px; left: 50%; transform: translateX(-50%); display: flex; gap: 8px; align-items: center; padding: 10px 14px; border-radius: 10px; background: #fff; box-shadow: 0 2px 10px rgba(0,0,0,.25); font-size: 14px; }
+.rj-offer[hidden] { display: none; }
+.rj-offer button { font-size: 14px; padding: 6px 12px; border-radius: 8px; border: 1px solid #2f6fae; background: #2f6fae; color: #fff; cursor: pointer; }
+.rj-offer button.rj-secondary { background: #fff; color: #2f6fae; }
 .rj-say input { flex: 1; font-size: 15px; padding: 8px 10px; border-radius: 8px; border: 1px solid #aab; }
 .rj-target { font-size: 13px; padding: 0 10px; border-radius: 8px; border: 1px solid #aab; background: #f3f4f6; cursor: pointer; white-space: nowrap; }
 .rj-target.on { background: #2f6fae; color: #fff; border-color: #2f6fae; }

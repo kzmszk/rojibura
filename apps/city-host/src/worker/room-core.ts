@@ -19,12 +19,18 @@ import {
 	facing,
 	type HostToClient,
 	INTEREST_RADIUS_DEFAULT,
+	ITEM_REACH,
+	type Item,
+	type ItemId,
+	type ItemKind,
 	isPosture,
 	type LeaveReason,
 	MAX_PATH_LENGTH,
 	MAX_PATH_POINTS,
 	type ModelId,
 	type MoveState,
+	OFFER_REACH,
+	OFFER_TTL_MS,
 	POSITION_TOLERANCE,
 	PRESENCE_TIMEOUT_MS,
 	polylineLength,
@@ -32,7 +38,13 @@ import {
 	RATE_VIOLATIONS_BEFORE_CLOSE,
 	type SpatialContext,
 	type Status,
+	THROW_MS,
+	THROW_RANGE,
+	THROW_RELEASE_MS,
+	TOGETHER_GAP,
+	type Together,
 	type Vec2,
+	WALK_SPEED,
 } from "@rojibura/protocol";
 import { PRODUCTION_RULES, type RoomRules } from "./rules.ts";
 
@@ -62,6 +74,11 @@ export interface BuildStore {
 	remove(id: BuildId): void;
 }
 
+/** Saves the area's small things whenever one changes (DO key-value storage). */
+export interface ItemStore {
+	save(items: Item[]): void;
+}
+
 export interface Landmark {
 	id: string;
 	name: string;
@@ -78,6 +95,8 @@ export interface World {
 	build?: BuildWorld;
 	/** Published builds that are part of the city (already in `walk`); only for spatial context. */
 	fixedBuilds?: Build[];
+	/** Small things that are there when the area starts with none saved (docs/prd.md 3.4.7). */
+	items?: { kind: ItemKind; pos: Vec2 }[];
 }
 
 /** Identity of a connection, decided by the gateway (humans) or after AUTH (agents). */
@@ -222,13 +241,18 @@ export class RoomCore<C> {
 	private readonly store: BuildStore | undefined;
 	/** The walkable area: the city's, with the builds on it. */
 	private walk: Walkable;
+	/** Offers to do something together, by "from to" (docs/prd.md 3.4.6); they lapse after OFFER_TTL_MS. */
+	private readonly offers = new Map<string, { kind: Together; at: number }>();
+	/** Small things in the area (docs/prd.md 3.4.7). */
+	private readonly items = new Map<ItemId, Item>();
+	private readonly itemStore: ItemStore | undefined;
 
 	constructor(
 		transport: Transport<C>,
 		world: World,
 		clock: () => number,
 		newId: () => string,
-		options: { rules?: RoomRules; store?: BuildStore } = {},
+		options: { rules?: RoomRules; store?: BuildStore; items?: ItemStore } = {},
 	) {
 		this.transport = transport;
 		this.world = world;
@@ -236,7 +260,30 @@ export class RoomCore<C> {
 		this.newId = newId;
 		this.rules = options.rules ?? PRODUCTION_RULES;
 		this.store = options.store;
+		this.itemStore = options.items;
 		this.walk = world.walk;
+	}
+
+	/**
+	 * Puts the small things where they were saved, or where the area starts them. Things held by someone who
+	 * is not here (they left while the room slept) lie where they were picked up.
+	 */
+	loadItems(saved: Item[] | undefined): void {
+		this.items.clear();
+		const items: Item[] =
+			saved ??
+			(this.world.items ?? [])
+				.filter((i) => this.walk.isWalkable(i.pos))
+				.map((i) => ({ id: `i_${this.newId()}`, kind: i.kind, pos: i.pos }));
+		for (const item of items) {
+			if (item.holder && !this.byId.has(item.holder)) delete item.holder;
+			this.items.set(item.id, item);
+		}
+	}
+
+	/** The small things, for saving or checking. */
+	get itemList(): Item[] {
+		return [...this.items.values()];
 	}
 
 	/** The walkable area now (the guide plans its walks on it). */
@@ -340,6 +387,7 @@ export class RoomCore<C> {
 			avatars: [...this.members.values()].map((m) => this.toState(m)),
 		};
 		if (this.canBuild) welcome.builds = [...this.builds.values()];
+		if (this.items.size > 0) welcome.items = [...this.items.values()];
 		this.transport.send(conn, welcome);
 		this.broadcastAbout(member, { t: "JOINED", avatar: this.toState(member) }, conn);
 		return true;
@@ -509,9 +557,143 @@ export class RoomCore<C> {
 				if (err) this.notice(conn, "rejected", err, msg.ref);
 				return;
 			}
+			case "OFFER":
+			case "PICK":
+			case "THROW":
+			case "DROP": {
+				if (!this.moveToken(v, now)) {
+					this.violation(conn, v, now);
+					return;
+				}
+				const err =
+					msg.t === "OFFER"
+						? this.offer(m, msg.kind, msg.to, now)
+						: msg.t === "PICK"
+							? this.pick(m, msg.item, now)
+							: msg.t === "THROW"
+								? this.throwItem(m, msg.dir, now)
+								: this.drop(m, now);
+				if (err) this.notice(conn, "rejected", err);
+				return;
+			}
+			case "ANSWER":
+				this.answer(m, msg.to, msg.accept, now);
+				return;
 			case "AUTH":
 				return; // handled by the adapter before join
 		}
+	}
+
+	// ---- doing things together (docs/prd.md 3.4.6) ---------------------------
+
+	private offer(m: Member, kind: Together, to: AvatarId, now: number): string | null {
+		const target = this.memberById(to);
+		if (!target || target.id === m.id) return "その人はいません";
+		if (this.blockedBetween(m.id, target.id)) return "その人には申し込めません";
+		if (dist(this.positionOf(m, now), this.positionOf(target, now)) > OFFER_REACH)
+			return "もっと近くに行ってから申し込んでください";
+		this.offers.set(`${m.id} ${target.id}`, { kind, at: now });
+		// the host's own guide says yes at once
+		if (target.system) {
+			this.answer(target, m.id, true, now);
+			return null;
+		}
+		const tc = this.byId.get(target.id);
+		if (tc !== undefined) this.transport.send(tc, { t: "OFFERED", from: m.id, kind });
+		return null;
+	}
+
+	/**
+	 * `m` answers the offer from `to`. Yes: both walk to their places facing each other (centred where they
+	 * are, TOGETHER_GAP apart) and start together once both are there. Too late, or nobody: nothing happens.
+	 */
+	private answer(m: Member, to: AvatarId, accept: boolean, now: number): void {
+		const key = `${to} ${m.id}`;
+		const offer = this.offers.get(key);
+		this.offers.delete(key);
+		const from = this.memberById(to);
+		const fc = this.byId.get(to);
+		const mc = this.byId.get(m.id);
+		if (!offer || now - offer.at > OFFER_TTL_MS || !from || fc === undefined || mc === undefined) return;
+		const a = this.positionOf(from, now);
+		const b = this.positionOf(m, now);
+		const d = dist(a, b);
+		const u: Vec2 = d > 1e-3 ? [(b[0] - a[0]) / d, (b[1] - a[1]) / d] : [0, 1];
+		const mid: Vec2 = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+		const half = TOGETHER_GAP[offer.kind] / 2;
+		const pa: Vec2 = [mid[0] - u[0] * half, mid[1] - u[1] * half];
+		const pb: Vec2 = [mid[0] + u[0] * half, mid[1] + u[1] * half];
+		const fits = d <= OFFER_REACH + 1 && this.walk.isWalkable(pa) && this.walk.isWalkable(pb);
+		this.transport.send(fc, { t: "ANSWERED", by: m.id, kind: offer.kind, accept: accept && fits });
+		if (!accept || !fits) return;
+		const ms = Math.max(this.stepTo(fc, from, a, pa, now), this.stepTo(mc, m, b, pb, now));
+		this.broadcastAbout(
+			from,
+			{ t: "TOGETHER", kind: offer.kind, a: from.id, b: m.id, at: now + ms + 200 },
+			undefined,
+			m.id,
+			true,
+		);
+	}
+
+	/** Walks a member a short way to `to` (or puts them there); returns how long it takes (ms). */
+	private stepTo(conn: C, m: Member, here: Vec2, to: Vec2, now: number): number {
+		const d = dist(here, to);
+		const walk = d > 0.05 && this.walk.validatePath([here, to]);
+		m.move = walk
+			? { kind: "path", path: [here, to], speed: WALK_SPEED, at: now }
+			: { kind: "idle", pos: to, at: now };
+		this.transport.persist(conn, m);
+		this.broadcastAbout(m, { t: "MOVED", id: m.id, move: m.move });
+		return walk ? (d / WALK_SPEED) * 1000 : 0;
+	}
+
+	// ---- small things (docs/prd.md 3.4.7) -----------------------------------
+
+	private holding(id: AvatarId): Item | undefined {
+		for (const item of this.items.values()) if (item.holder === id) return item;
+		return undefined;
+	}
+
+	private itemChanged(item: Item): void {
+		this.itemStore?.save([...this.items.values()]);
+		this.broadcastAll({ t: "ITEM", item });
+	}
+
+	private pick(m: Member, id: ItemId, now: number): string | null {
+		const item = this.items.get(id);
+		if (!item) return "それはありません";
+		if (item.holder) return "ほかの人が持っています";
+		if (this.holding(m.id)) return "もう何か持っています";
+		if (item.flight && now < item.flight.at + item.flight.dur) return "まだ飛んでいます";
+		if (dist(this.positionOf(m, now), item.pos) > ITEM_REACH) return "もっと近くに行ってください";
+		item.holder = m.id;
+		delete item.flight;
+		this.itemChanged(item);
+		return null;
+	}
+
+	/** Lands THROW_RANGE ahead, or on the nearest ground short of it (no bouncing, no catching). */
+	private throwItem(m: Member, dir: Vec2, now: number): string | null {
+		const item = this.holding(m.id);
+		if (!item) return "何も持っていません";
+		const from = this.positionOf(m, now);
+		const ahead: Vec2 = [from[0] + dir[0] * THROW_RANGE, from[1] + dir[1] * THROW_RANGE];
+		delete item.holder;
+		item.pos = this.walk.isWalkable(ahead) ? ahead : this.walk.closestPoint(ahead);
+		item.flight = { from, at: now + THROW_RELEASE_MS, dur: THROW_MS };
+		this.itemChanged(item);
+		return null;
+	}
+
+	private drop(m: Member, now: number): string | null {
+		const item = this.holding(m.id);
+		if (!item) return "何も持っていません";
+		delete item.holder;
+		delete item.flight;
+		item.pos = this.positionOf(m, now);
+		this.itemChanged(item);
+		return null;
 	}
 
 	private moveToken(v: Volatile, now: number): boolean {
@@ -1051,6 +1233,13 @@ export class RoomCore<C> {
 			this.relations.delete(m.id);
 		}
 		for (const c of [...this.convs.values()]) if (c.a === m.id || c.b === m.id) this.endConv(c, "left");
+		// what they held stays where they were
+		const held = this.holding(m.id);
+		if (held) {
+			delete held.holder;
+			held.pos = this.positionOf(m);
+			this.itemChanged(held);
+		}
 		this.broadcastAbout(m, { t: "LEFT", id: m.id, reason });
 	}
 

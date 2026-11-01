@@ -78,3 +78,15 @@ export const BUILD_SCALE_MAX = 4;
 export const BUILD_LABEL_MAX = 24;
 /** An offset from the anchor may be at most this far (m). */
 export const BUILD_OFFSET_MAX = 50;
+
+// doing things together (docs/prd.md 3.4.6)
+export const OFFER_REACH = 3; // m: how close someone must be to be asked
+export const OFFER_TTL_MS = 15_000;
+/** How far apart two avatars stand (centre to centre) for each thing done together, in metres. */
+export const TOGETHER_GAP = { handshake: 0.65, hug: 0.4 } as const;
+
+// small things (docs/prd.md 3.4.7)
+export const ITEM_REACH = 1.6; // m: how close a thing must be to pick it up
+export const THROW_RANGE = 6; // m
+export const THROW_MS = 900; // time in the air
+export const THROW_RELEASE_MS = 350; // from the throw to the hand letting go (the throwing motion)

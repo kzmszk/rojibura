@@ -9,7 +9,24 @@
 
 import * as THREE from "three";
 
-export type MoveName = "stand" | "walk" | "run" | "wave" | "nod" | "bow" | "jump" | "sit" | "lie";
+export type MoveName =
+	| "stand"
+	| "walk"
+	| "run"
+	| "wave"
+	| "nod"
+	| "bow"
+	| "jump"
+	| "sit"
+	| "lie"
+	| "handstand"
+	| "roll"
+	| "backroll"
+	| "backflip"
+	| "handshake"
+	| "hug"
+	| "pick"
+	| "throw";
 
 type Angles = [x: number, y: number, z: number];
 type Bones = Record<string, Angles>;
@@ -44,10 +61,9 @@ const RIG: [string, string | null, [number, number, number]][] = [
 const HIPS_Y = 0.9;
 const FOOT_Y = 0.08;
 
-/** Builds the reference skeleton. `turned` faces it -Z instead (for a target that faces -Z, like Saki). */
-export function referenceRig(turned = false): THREE.Object3D {
+/** Builds the reference skeleton. */
+export function referenceRig(): THREE.Object3D {
 	const root = new THREE.Group();
-	if (turned) root.rotation.y = Math.PI;
 	const nodes = new Map<string, THREE.Object3D>();
 	for (const [name, parent, [x, y, z]] of RIG) {
 		const bone = new THREE.Object3D();
@@ -364,8 +380,128 @@ const LYING: Frame = {
 	hips: [0, 0, -0.25],
 };
 
-/** Every motion, and how it plays: loops, once, or once and then held (a posture). */
-export const MOVES: { name: MoveName; play: "loop" | "once" | "hold"; clip: () => THREE.AnimationClip }[] = [
+/** Knees to the chest, chin tucked, arms round the shins: rolling. */
+const TUCK: Bones = {
+	spine: [32, 0, 0],
+	chest: [24, 0, 0],
+	// chin on the chest, so the back rolls on the ground and not the head
+	neck: [50, 0, 0],
+	head: [35, 0, 0],
+	leftUpperArm: [-70, 0, -72],
+	rightUpperArm: [-70, 0, 72],
+	leftLowerArm: [0, -70, 0],
+	rightLowerArm: [0, 70, 0],
+	leftUpperLeg: [-135, 0, -8],
+	rightUpperLeg: [-135, 0, 8],
+	leftLowerLeg: [140, 0, 0],
+	rightLowerLeg: [140, 0, 0],
+	leftFoot: [30, 0, 0],
+	rightFoot: [30, 0, 0],
+};
+
+/** Crouching with the hands reaching to the ground ahead: before a roll and after landing. */
+const CROUCH: Bones = {
+	spine: [28, 0, 0],
+	chest: [14, 0, 0],
+	head: [-12, 0, 0],
+	leftUpperArm: [-75, 0, -74],
+	rightUpperArm: [-75, 0, 74],
+	leftUpperLeg: [-105, 0, -8],
+	rightUpperLeg: [-105, 0, 8],
+	leftLowerLeg: [125, 0, 0],
+	rightLowerLeg: [125, 0, 0],
+	leftFoot: [-25, 0, 0],
+	rightFoot: [-25, 0, 0],
+};
+
+/** Hands by the ears, ready to push the ground over the head: rolling backwards. */
+const PUSH: Bones = {
+	leftUpperArm: [-150, 0, -50],
+	rightUpperArm: [-150, 0, 50],
+	leftLowerArm: [0, -140, 0],
+	rightLowerArm: [0, 140, 0],
+};
+
+/** Arms straight up along the body, the hands bent back so the palms are flat (on the ground, upside down). */
+const OVERHEAD: Bones = {
+	leftShoulder: [0, 0, 12],
+	rightShoulder: [0, 0, -12],
+	leftUpperArm: [0, 0, 80],
+	rightUpperArm: [0, 0, -80],
+	leftLowerArm: [0, 0, 0],
+	rightLowerArm: [0, 0, 0],
+	leftHand: [90, 0, 90],
+	rightHand: [90, 0, -90],
+};
+
+/** The back arched and the head back, looking for the ground behind. */
+const ARCH: Bones = { spine: [-18, 0, 0], chest: [-14, 0, 0], neck: [-30, 0, 0], head: [-20, 0, 0] };
+
+/** Upside down on the hands, legs together, toes pointed. */
+const HANDSTAND: Bones = {
+	...OVERHEAD,
+	neck: [-25, 0, 0],
+	head: [-20, 0, 0],
+	leftUpperLeg: [0, 0, -3],
+	rightUpperLeg: [0, 0, 3],
+	leftFoot: [40, 0, 0],
+	rightFoot: [40, 0, 0],
+};
+
+/** One foot forward, bending down with the hands to the ground; the other leg behind, ready to kick up. */
+const LUNGE: Bones = {
+	...OVERHEAD,
+	spine: [10, 0, 0],
+	leftUpperLeg: [-70, 0, -4],
+	leftLowerLeg: [60, 0, 0],
+	rightUpperLeg: [-10, 0, 4],
+	rightFoot: [20, 0, 0],
+};
+
+/** Half way up (or down): the body leaning over the hands, one leg up, the other bent. */
+const KICK: Bones = {
+	...OVERHEAD,
+	neck: [-15, 0, 0],
+	leftUpperLeg: [-60, 0, -4],
+	leftLowerLeg: [50, 0, 0],
+	rightUpperLeg: [10, 0, 4],
+	rightFoot: [40, 0, 0],
+};
+
+/**
+ * The right hand held out to someone standing TOGETHER_GAP.handshake (0.65 m) away: it reaches to the middle
+ * line, 0.33 m ahead at waist height, where the other's right hand comes too.
+ */
+const SHAKE: Bones = { spine: [4, 0, 0], rightUpperArm: [0, 110, 46], rightLowerArm: [0, 12, 0] };
+
+/** Arms round someone 0.4 m away: the left over the shoulder, the right lower round the back; head aside. */
+const HUG: Bones = {
+	spine: [6, 0, 0],
+	chest: [4, 0, 0],
+	head: [0, 25, 0],
+	leftUpperArm: [0, -70, -5],
+	leftLowerArm: [0, -85, 0],
+	rightUpperArm: [0, 70, 30],
+	rightLowerArm: [0, 85, 0],
+};
+
+/** A whole-body turn (forward, about the hips) of `x` degrees with `bones`, the hips moved by `at`. */
+const turn = (x: number, bones: Bones, at: [number, number, number] = [0, 0, 0]): Frame => ({
+	bones: { ...bones, hips: [x, 0, 0] },
+	hips: at,
+});
+
+/**
+ * Every motion, and how it plays: loops, once, or once and then held (a posture). `travel`: metres the
+ * avatar moves along its heading meanwhile (backwards if negative); the clip itself stays in place and the
+ * client walks the avatar there (a path at the speed that takes as long as the clip).
+ */
+export const MOVES: {
+	name: MoveName;
+	play: "loop" | "once" | "hold";
+	travel?: number;
+	clip: () => THREE.AnimationClip;
+}[] = [
 	{ name: "stand", play: "loop", clip: () => sampled("stand", 4, breathe) },
 	{ name: "walk", play: "loop", clip: () => sampled("walk", 1.05, (t) => gait(false)(t, 1.05), "touch") },
 	{ name: "run", play: "loop", clip: () => sampled("run", 0.7, (t) => gait(true)(t, 0.7), "above") },
@@ -532,6 +668,279 @@ export const MOVES: { name: MoveName; play: "loop" | "once" | "hold"; clip: () =
 					[2.4, LYING],
 				]),
 				"touch",
+			),
+	},
+	{
+		name: "handstand",
+		play: "once",
+		clip: () =>
+			sampled(
+				"handstand",
+				5,
+				keyed([
+					[0, { bones: {} }],
+					[0.6, turn(75, LUNGE, [0, 0, 0.25])],
+					[1.1, turn(150, KICK, [0, 0, 0.4])],
+					[1.5, turn(180, HANDSTAND, [0, 0, 0.45])],
+					// keeping the balance
+					[
+						2.2,
+						turn(184, { ...HANDSTAND, leftUpperLeg: [4, 0, -6], rightUpperLeg: [-4, 0, 6] }, [0, 0, 0.45]),
+					],
+					[
+						2.9,
+						turn(177, { ...HANDSTAND, leftUpperLeg: [-5, 0, -3], rightUpperLeg: [5, 0, 3] }, [0, 0, 0.45]),
+					],
+					[3.5, turn(181, HANDSTAND, [0, 0, 0.45])],
+					[3.9, turn(150, KICK, [0, 0, 0.4])],
+					[4.4, turn(75, LUNGE, [0, 0, 0.25])],
+					[5, { bones: {} }],
+				]),
+				"touch",
+			),
+	},
+	{
+		name: "roll",
+		play: "once",
+		travel: 1,
+		clip: () =>
+			sampled(
+				"roll",
+				1.7,
+				keyed([
+					[0, { bones: {} }],
+					[0.35, turn(10, CROUCH)],
+					[0.6, turn(80, TUCK)],
+					[0.85, turn(170, TUCK)],
+					[1.1, turn(260, TUCK)],
+					[1.35, turn(345, CROUCH)],
+					[1.7, turn(360, {})],
+				]),
+				"touch",
+			),
+	},
+	{
+		name: "backroll",
+		play: "once",
+		travel: -0.9,
+		clip: () =>
+			sampled(
+				"backroll",
+				1.7,
+				keyed([
+					[0, { bones: {} }],
+					[0.35, turn(8, CROUCH)],
+					[0.6, turn(-40, { ...TUCK, ...PUSH })],
+					[0.85, turn(-130, { ...TUCK, ...PUSH })],
+					[1.1, turn(-225, { ...TUCK, ...PUSH })],
+					[1.35, turn(-320, CROUCH)],
+					[1.7, turn(-360, {})],
+				]),
+				"touch",
+			),
+	},
+	{
+		// a back handspring: jump back, hands on the ground behind, legs over, land on the feet
+		name: "backflip",
+		play: "once",
+		travel: -1.4,
+		clip: () =>
+			sampled(
+				"backflip",
+				1.45,
+				keyed([
+					[0, { bones: {} }],
+					[
+						0.28,
+						{
+							bones: {
+								spine: [18, 0, 0],
+								leftUpperArm: [45, 0, -72],
+								rightUpperArm: [45, 0, 72],
+								leftUpperLeg: [-60, 0, -4],
+								rightUpperLeg: [-60, 0, 4],
+								leftLowerLeg: [95, 0, 0],
+								rightLowerLeg: [95, 0, 0],
+								leftFoot: [-20, 0, 0],
+								rightFoot: [-20, 0, 0],
+							},
+							hips: [0, -0.22, 0],
+						},
+					],
+					[
+						0.48,
+						turn(
+							-55,
+							{
+								...ARCH,
+								...OVERHEAD,
+								leftUpperLeg: [-10, 0, -4],
+								rightUpperLeg: [-10, 0, 4],
+								leftLowerLeg: [20, 0, 0],
+								rightLowerLeg: [20, 0, 0],
+								leftFoot: [30, 0, 0],
+								rightFoot: [30, 0, 0],
+							},
+							[0, 0.14, 0],
+						),
+					],
+					[
+						0.66,
+						turn(
+							-165,
+							{
+								...ARCH,
+								...OVERHEAD,
+								leftUpperLeg: [15, 0, -4],
+								rightUpperLeg: [15, 0, 4],
+								leftFoot: [40, 0, 0],
+								rightFoot: [40, 0, 0],
+							},
+							[0, 0.05, 0],
+						),
+					],
+					[
+						0.84,
+						turn(
+							-250,
+							{
+								// the legs snap down over the head while the hands push off, the body passing high
+								...OVERHEAD,
+								leftUpperLeg: [-80, 0, -4],
+								rightUpperLeg: [-80, 0, 4],
+								leftLowerLeg: [30, 0, 0],
+								rightLowerLeg: [30, 0, 0],
+								leftFoot: [20, 0, 0],
+								rightFoot: [20, 0, 0],
+							},
+							[0, 0.12, 0],
+						),
+					],
+					[
+						1.02,
+						turn(
+							-330,
+							{
+								spine: [15, 0, 0],
+								leftUpperArm: [-60, 0, -70],
+								rightUpperArm: [-60, 0, 70],
+								leftUpperLeg: [-55, 0, -6],
+								rightUpperLeg: [-55, 0, 6],
+								leftLowerLeg: [80, 0, 0],
+								rightLowerLeg: [80, 0, 0],
+								leftFoot: [-20, 0, 0],
+								rightFoot: [-20, 0, 0],
+							},
+							[0, -0.25, 0],
+						),
+					],
+					[1.45, turn(-360, {})],
+				]),
+				"above",
+			),
+	},
+	// done together (docs/prd.md 3.4.6): both play the same clip, facing each other
+	{
+		name: "handshake",
+		play: "once",
+		clip: () =>
+			sampled("handshake", 2.2, (t) => {
+				const f = keyed([
+					[0, { bones: {} }],
+					[0.5, { bones: SHAKE }],
+					[1.7, { bones: SHAKE }],
+					[2.2, { bones: {} }],
+				])(t);
+				// three shakes
+				if (t > 0.5 && t < 1.7) {
+					const arm = f.bones.rightUpperArm as Angles;
+					f.bones.rightUpperArm = [arm[0], arm[1], arm[2] + 7 * Math.sin((t - 0.5) * TAU * 2.5)];
+				}
+				return f;
+			}),
+	},
+	{
+		name: "hug",
+		play: "once",
+		clip: () =>
+			sampled("hug", 3, (t) => {
+				const f = keyed([
+					[0, { bones: {} }],
+					[0.6, { bones: HUG }],
+					[2.4, { bones: HUG }],
+					[3, { bones: {} }],
+				])(t);
+				if (t > 0.6 && t < 2.4) f.bones.spine = [6, 3 * Math.sin((t - 0.6) * TAU * 0.6), 0];
+				return f;
+			}),
+	},
+	// small things (docs/prd.md 3.4.7): the thing follows the right hand
+	{
+		name: "pick",
+		play: "once",
+		clip: () =>
+			sampled(
+				"pick",
+				1.1,
+				keyed([
+					[0, { bones: {} }],
+					[
+						0.45,
+						{
+							// down to the ground: bend over in the squat, the right arm straight down
+							bones: {
+								...SQUAT.bones,
+								spine: [45, 0, 0],
+								chest: [20, 0, 0],
+								head: [-25, 0, 0],
+								rightUpperArm: [-65, 0, 78],
+								rightLowerArm: [0, 5, 0],
+							},
+							hips: SQUAT.hips,
+						},
+					],
+					[1.1, { bones: {} }],
+				]),
+				"touch",
+			),
+	},
+	{
+		name: "throw",
+		play: "once",
+		clip: () =>
+			sampled(
+				"throw",
+				0.9,
+				keyed([
+					[0, { bones: {} }],
+					// wind up: the hand back over the shoulder, the body turned away
+					[
+						0.25,
+						{
+							bones: {
+								spine: [-4, -14, 0],
+								chest: [0, -10, 0],
+								rightUpperArm: [35, 0, -40],
+								rightLowerArm: [0, 95, 0],
+							},
+						},
+					],
+					// the hand lets go here (THROW_RELEASE_MS)
+					[
+						0.35,
+						{
+							bones: {
+								spine: [6, 10, 0],
+								chest: [4, 8, 0],
+								rightUpperArm: [-110, 0, 20],
+								rightLowerArm: [0, 20, 0],
+							},
+						},
+					],
+					[0.6, { bones: { spine: [14, 12, 0], rightUpperArm: [-60, 0, 60], rightLowerArm: [0, 15, 0] } }],
+					[0.9, { bones: {} }],
+				]),
+				"above",
 			),
 	},
 ];

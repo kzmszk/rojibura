@@ -13,6 +13,7 @@ import {
 	HEARTBEAT_PING,
 	HEARTBEAT_PONG,
 	type HostToClient,
+	type Item,
 	type ModelId,
 	type ModelInfo,
 	parseClientMessage,
@@ -75,6 +76,11 @@ const MESSAGE_LABELS: Record<ClientToHost["t"], string> = {
 	WATCH_USAGE: "利用状況の表示",
 	BUILD: "建築",
 	UNBUILD: "建物を消す",
+	OFFER: "握手・ハグの申し込み",
+	ANSWER: "握手・ハグの返事",
+	PICK: "物を拾う",
+	THROW: "物を投げる",
+	DROP: "物を置く",
 };
 /** Registered models are stored in pieces: a DO SQLite value may be at most 2 MB. */
 const MODEL_CHUNK = 1024 * 1024;
@@ -146,16 +152,20 @@ export class CityRoomDO extends DurableObject<Env> {
 			world,
 			Date.now,
 			() => randomToken(9),
-			freePlay
-				? {
-						rules: FREE_PLAY_RULES,
-						store: {
-							save: (b) =>
-								this.sql("INSERT OR REPLACE INTO builds (id, data) VALUES (?, ?)", b.id, JSON.stringify(b)),
-							remove: (id) => this.sql("DELETE FROM builds WHERE id = ?", id),
-						},
-					}
-				: { rules: PRODUCTION_RULES },
+			{
+				// the small things are saved whenever one changes, so they stay put while the room sleeps
+				items: { save: (items) => kv.put("items", items) },
+				...(freePlay
+					? {
+							rules: FREE_PLAY_RULES,
+							store: {
+								save: (b) =>
+									this.sql("INSERT OR REPLACE INTO builds (id, data) VALUES (?, ?)", b.id, JSON.stringify(b)),
+								remove: (id) => this.sql("DELETE FROM builds WHERE id = ?", id),
+							},
+						}
+					: { rules: PRODUCTION_RULES }),
+			},
 		);
 		this.guideMemory = new GuideMemory(kv, GUIDE_NAME);
 		this.guide = new Guide<Conn>({
@@ -186,6 +196,7 @@ export class CityRoomDO extends DurableObject<Env> {
 				restored.push(att.member.id);
 			}
 		}
+		this.core.loadItems(kv.get<Item[]>("items"));
 		// woke from hibernation with people present: put the guide back where it was
 		if (this.core.size > 0) this.guide.ensurePresent();
 		ctx.blockConcurrencyWhile(async () => {

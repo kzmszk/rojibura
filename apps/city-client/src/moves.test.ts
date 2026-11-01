@@ -57,17 +57,38 @@ describe("moves", () => {
 		expect(legLength(Object.fromEntries(MOVES.length ? collect() : []))).toBeCloseTo(REFERENCE_LEG, 5);
 	});
 
+	// motions are kept at 30 frames a second: between two frames of a fast roll the body can sink or float
+	// a centimetre or so
+	const SLACK = 0.015;
+
 	test("nothing goes into the ground, at any moment of any motion", () => {
 		for (const m of MOVES) {
 			for (const t of moments(m.name))
-				expect(clearance(posed(m.name, t)), `${m.name} at ${t}`).toBeGreaterThan(-0.005);
+				expect(clearance(posed(m.name, t)), `${m.name} at ${t}`).toBeGreaterThan(-SLACK);
 		}
 	});
 
-	test("walking, sitting and lying rest on the ground (nothing floats)", () => {
-		for (const t of moments("walk")) expect(clearance(posed("walk", t)), `walk at ${t}`).toBeLessThan(0.005);
-		for (const t of moments("sit")) expect(clearance(posed("sit", t)), `sit at ${t}`).toBeLessThan(0.005);
-		for (const t of moments("lie")) expect(clearance(posed("lie", t)), `lie at ${t}`).toBeLessThan(0.005);
+	test("walking, sitting, lying, rolling and the handstand rest on the ground (nothing floats)", () => {
+		for (const name of ["walk", "sit", "lie", "roll", "backroll", "handstand"]) {
+			for (const t of moments(name)) expect(clearance(posed(name, t)), `${name} at ${t}`).toBeLessThan(SLACK);
+		}
+	});
+
+	test("the handstand stands on the hands, feet up; the rolls and the back handspring end standing", () => {
+		const up = heights("handstand", 2.5);
+		expect(up.leftHand).toBeLessThan(0.06);
+		expect(up.head).toBeLessThan(up.hips as number);
+		expect(up.leftFoot).toBeGreaterThan(1.5);
+		for (const name of ["roll", "backroll", "backflip"]) {
+			const d = clip(name).duration;
+			// upside down at some moment, standing at the end
+			expect(
+				Math.min(
+					...moments(name).map((t) => (heights(name, t).head as number) - (heights(name, t).hips as number)),
+				),
+			).toBeLessThan(0);
+			expect(heights(name, d).head).toBeGreaterThan(1.4);
+		}
 	});
 
 	test("sitting and lying end low, sitting upright and lying flat", () => {

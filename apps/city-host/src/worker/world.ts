@@ -106,13 +106,21 @@ function areaOf(id: AreaId): AreaInfo {
 	return area;
 }
 
+const [sx, sz] = city.spawn.pos;
+
 /** The main area as everyone sees it: published builds are part of it (fixed). */
 export const world: World = {
 	walk,
 	landmarks: landmarksOf(city, areaOf(MAIN_AREA)),
-	spawn: [city.spawn.pos[0], city.spawn.pos[1]],
+	spawn: [sx, sz],
 	areaName: areaOf(MAIN_AREA).name,
 	fixedBuilds: PUBLISHED.builds,
+	// two balls and a box near where people arrive (docs/prd.md 3.4.7)
+	items: [
+		{ kind: "ball", pos: [sx + 2, sz + 1.5] },
+		{ kind: "ball", pos: [sx - 2.5, sz + 1] },
+		{ kind: "box", pos: [sx + 1, sz - 2.5] },
+	],
 };
 
 const worlds = new Map<AreaId, World>([[MAIN_AREA, world]]);
