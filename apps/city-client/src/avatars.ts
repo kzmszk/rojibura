@@ -509,7 +509,8 @@ export class AvatarView {
 			return;
 		}
 		if (hostNow < this.nextFidget) return;
-		const can = FIDGETS.filter((f) => this.actions[f]);
+		// an AI by its owner does not stretch, arms over its head, in their face
+		const can = FIDGETS.filter((f) => this.actions[f] && !(f === "stretch" && this.attention));
 		const pick = can[Math.floor(Math.random() * can.length)];
 		if (pick) this.perform(pick, hostNow);
 		this.nextFidget = hostNow + (this.durationOf(pick ?? "") ?? 0) * 1000 + 3000 + Math.random() * 8000;

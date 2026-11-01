@@ -491,14 +491,17 @@ const HUG: Bones = {
 };
 
 /**
- * The hands meeting in front of the belly: the upper arms turn in (y) so the bent forearms point to the
- * middle rather than straight ahead.
+ * The hands one over the other in front of the belly, palms to the body: the forearms point ahead and in,
+ * the wrists bend so the fingers point across, and the right hand lies 4 cm in front of the left (crossed
+ * at the same depth they would go through each other).
  */
 const HANDS_TOGETHER: Bones = {
-	leftUpperArm: [-15, -45, -72],
-	rightUpperArm: [-15, 45, 72],
-	leftLowerArm: [0, -85, 0],
-	rightLowerArm: [0, 85, 0],
+	leftUpperArm: [-8, -28, -67],
+	leftLowerArm: [1, -87, 0],
+	leftHand: [-8, -7, -50],
+	rightUpperArm: [-14, 37, 69],
+	rightLowerArm: [-8, 75, 0],
+	rightHand: [-10, 11, 53],
 	head: [6, 0, 0],
 };
 
@@ -514,6 +517,104 @@ const STRETCH: Bones = {
 	chest: [-6, 0, 0],
 	head: [-10, 0, 0],
 };
+
+const THIGH = 0.38;
+const SHIN = 0.4;
+const DOWN = new THREE.Vector3(0, -1, 0);
+const AHEAD = new THREE.Vector3(0, 0, 1);
+
+const degrees = (q: THREE.Quaternion): Angles => {
+	euler.setFromQuaternion(q, "XYZ");
+	return [euler.x / RAD, euler.y / RAD, euler.z / RAD];
+};
+
+/**
+ * One leg from its hip joint at `hip` (the hips turned by `hips`) to the ankle at `ankle`, the knee bending
+ * forward, the foot level and facing ahead but for `pitch` degrees toes down: [upper leg, lower leg, foot].
+ */
+function legTo(hips: THREE.Quaternion, hip: THREE.Vector3, ankle: THREE.Vector3, pitch: number): Angles[] {
+	const d = ankle.clone().sub(hip);
+	const len = Math.min(d.length(), (THIGH + SHIN) * 0.999);
+	d.normalize();
+	const bend = Math.acos((THIGH * THIGH + len * len - SHIN * SHIN) / (2 * THIGH * len));
+	const forward = AHEAD.clone().addScaledVector(d, -d.dot(AHEAD)).normalize();
+	const thigh = d.clone().multiplyScalar(Math.cos(bend)).addScaledVector(forward, Math.sin(bend));
+	const knee = hip.clone().addScaledVector(thigh, THIGH);
+	const shin = hip.clone().addScaledVector(d, len).sub(knee).normalize();
+	const upper = new THREE.Quaternion().setFromUnitVectors(DOWN, thigh);
+	const lower = new THREE.Quaternion().setFromUnitVectors(DOWN, shin);
+	const foot = new THREE.Quaternion().setFromEuler(euler.set(pitch * RAD, 0, 0));
+	return [
+		degrees(hips.clone().invert().multiply(upper)),
+		degrees(upper.clone().invert().multiply(lower)),
+		degrees(lower.invert().multiply(foot)),
+	];
+}
+
+/**
+ * The weight on one leg (`w` 1: all on the left, -1: all on the right, 0: on both): the hips go over the
+ * standing foot and rise on its side, the other knee eases with its heel up, and the shoulders tilt the other
+ * way. The feet stay where they stand.
+ */
+function weightOn(w: number): Frame {
+	const hipsTurn: Angles = [0, 4 * w, 8 * w];
+	const hq = new THREE.Quaternion().setFromEuler(euler.set(0, hipsTurn[1] * RAD, hipsTurn[2] * RAD));
+	const at = new THREE.Vector3(0.085 * w, HIPS_Y, 0);
+	const legs = [1, -1].map((side) => {
+		const free = Math.max(0, -side * w);
+		const pitch = 15 * free;
+		// the heel up, the toes resting on the ground
+		const lift = 0.06 * Math.cos(pitch * RAD) + 0.15 * Math.sin(pitch * RAD) - 0.06;
+		const ankle = new THREE.Vector3(side * (0.09 + 0.02 * free), FOOT_Y + lift, 0.07 * free);
+		return { side, pitch, ankle, hip: new THREE.Vector3(side * 0.09, -0.04, 0).applyQuaternion(hq).add(at) };
+	});
+	// the hips drop as far as the standing leg needs to reach its foot
+	const reach = (THIGH + SHIN) * 0.999;
+	const drop = Math.max(
+		0,
+		...legs.map(({ hip, ankle }) => {
+			const flat = (hip.x - ankle.x) ** 2 + (hip.z - ankle.z) ** 2;
+			return hip.y - ankle.y - Math.sqrt(Math.max(0, reach * reach - flat));
+		}),
+	);
+	const bones: Bones = {
+		...STAND,
+		hips: hipsTurn,
+		spine: [0, -2 * w, -5 * w],
+		chest: [0, -2 * w, -5 * w],
+		neck: [0, 0, 1.5 * w],
+		head: [0, 0, 1.5 * w],
+	};
+	for (const { side, pitch, ankle, hip } of legs) {
+		hip.y -= drop;
+		const [upper, lower, foot] = legTo(hq, hip, ankle, pitch);
+		const name = side > 0 ? "left" : "right";
+		bones[`${name}UpperLeg`] = upper as Angles;
+		bones[`${name}LowerLeg`] = lower as Angles;
+		bones[`${name}Foot`] = foot as Angles;
+	}
+	return { bones, hips: [at.x, -drop, 0] };
+}
+
+/** Where the weight is (see weightOn) `t` seconds into "shift": on the left, then the right, swaying on each. */
+const SHIFT_KEYS: [t: number, w: number][] = [
+	[0, 0],
+	[1, 1],
+	[3.6, 1],
+	[4.8, -1],
+	[7.2, -1],
+	[8.2, 0],
+];
+function weightAt(t: number): number {
+	let i = 0;
+	while (i < SHIFT_KEYS.length - 2 && t > (SHIFT_KEYS[i + 1] as [number, number])[0]) i++;
+	const [t0, a] = SHIFT_KEYS[i] as [number, number];
+	const [t1, b] = SHIFT_KEYS[i + 1] as [number, number];
+	const u = Math.min(1, Math.max(0, (t - t0) / (t1 - t0)));
+	if (a !== b) return a + (b - a) * ease(u);
+	// standing on one leg: easing off it and back, twice
+	return a - Math.sign(a) * 0.3 * Math.sin(Math.PI * 2 * u) ** 2;
+}
 
 /** A whole-body turn (forward, about the hips) of `x` degrees with `bones`, the hips moved by `at`. */
 const turn = (x: number, bones: Bones, at: [number, number, number] = [0, 0, 0]): Frame => ({
@@ -1010,47 +1111,10 @@ export const MOVES: {
 			),
 	},
 	{
-		// the weight onto the left leg, the right knee easing
+		// the weight onto the left leg, then the right, swaying on each
 		name: "shift",
 		play: "once",
-		clip: () =>
-			sampled(
-				"shift",
-				3.4,
-				keyed([
-					[0, { bones: {} }],
-					[
-						0.8,
-						{
-							bones: {
-								hips: [0, 4, -4],
-								spine: [0, -2, 3],
-								head: [0, 0, 2],
-								rightUpperLeg: [-8, 0, 3],
-								rightLowerLeg: [16, 0, 0],
-								rightFoot: [6, 0, 0],
-							},
-							hips: [0.04, 0, 0],
-						},
-					],
-					[
-						2.6,
-						{
-							bones: {
-								hips: [0, 4, -4],
-								spine: [0, -2, 3],
-								head: [0, 0, 2],
-								rightUpperLeg: [-8, 0, 3],
-								rightLowerLeg: [16, 0, 0],
-								rightFoot: [6, 0, 0],
-							},
-							hips: [0.04, 0, 0],
-						},
-					],
-					[3.4, { bones: {} }],
-				]),
-				"touch",
-			),
+		clip: () => sampled("shift", 8.2, (t) => weightOn(weightAt(t)), "touch"),
 	},
 	{
 		// the hands together in front, then down again

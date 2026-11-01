@@ -105,6 +105,34 @@ describe("moves", () => {
 		for (const b of ["leftHand", "rightHand", "leftLowerArm", "rightLowerArm"])
 			expect(lie[b], b).toBeLessThan(0.09);
 	});
+
+	test("shifting the weight takes the hips over one foot, then the other, the feet staying put", () => {
+		const at = (t: number, bone: string) =>
+			(posed("shift", t).getObjectByName(bone) as THREE.Object3D).getWorldPosition(new THREE.Vector3());
+		// the standing foot does not slide; the free one only eases a little forward and out
+		for (const t of moments("shift")) {
+			for (const foot of ["leftFoot", "rightFoot"]) {
+				const p = at(t, foot);
+				expect(Math.abs(Math.abs(p.x) - 0.09), `${foot} at ${t}`).toBeLessThan(0.025);
+				expect(Math.abs(p.z), `${foot} at ${t}`).toBeLessThan(0.08);
+			}
+		}
+		// most of the way over the left foot (x 0.09), then the right
+		expect(at(1, "hips").x).toBeGreaterThan(0.07);
+		expect(at(4.8, "hips").x).toBeLessThan(-0.07);
+		// the free knee bends
+		expect(at(1, "rightLowerLeg").z).toBeGreaterThan(0.05);
+	});
+
+	test("the hands come together one in front of the other, not through each other", () => {
+		const rig = posed("hands", 1.8);
+		const at = (bone: string) =>
+			(rig.getObjectByName(bone) as THREE.Object3D).getWorldPosition(new THREE.Vector3());
+		// the wrists stay on their own sides; the right hand lies ahead of the left
+		expect(at("leftHand").x).toBeGreaterThan(0.04);
+		expect(at("rightHand").x).toBeLessThan(-0.04);
+		expect(at("rightHand").z - at("leftHand").z).toBeGreaterThan(0.03);
+	});
 });
 
 /** The reference rig's bones by name. */
