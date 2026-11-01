@@ -33,6 +33,8 @@ import {
 	listReports,
 	logModAction,
 	markOnboarding,
+	pairPc,
+	pcOf,
 	registerAgent,
 	relationsOf,
 	resolveReport,
@@ -40,13 +42,16 @@ import {
 	setFirstVisit,
 	setRelation,
 	setRole,
+	startPairing,
 	trialCalls,
+	unpairPc,
 	updateAccount,
 } from "./db.ts";
 import { isOpen, nextOpening, parseHours } from "./hours.ts";
 import { freePlayOn, isLocalHost } from "./modes.ts";
 import { officialUsage } from "./official.ts";
 import { authUrl, exchangeCode, googleKeys, newPkce, verifyIdToken } from "./oidc.ts";
+import { normalizePairCode } from "./pairing.ts";
 import type { JoinRequest, RoomCommand } from "./room.ts";
 import {
 	clearSessionCookie,
@@ -284,10 +289,12 @@ async function wsGateway(request: Request, areaId: string): Promise<Response> {
 		if (!owner) return error(403, "owner not found");
 		if (await isBanned(DB, [agent.id, owner.id])) return error(403, "banned");
 		await markOnboarding(DB, owner.id, "ai_at");
+		const pc = await pcOf(DB, agent.id);
 		join = {
 			areaId,
 			...arrive,
 			publicKey: agent.public_key,
+			...(pc ? { pcKey: pc.public_key } : {}),
 			info: {
 				id: agent.id,
 				kind: "ai",
@@ -590,6 +597,40 @@ async function api(request: Request, url: URL): Promise<Response> {
 		);
 		if (typeof r === "string") return error(409, r);
 		return json({ id: r.id, name: r.name, trust: r.trust }, 201);
+	}
+
+	// an AI on its owner's PC (docs/prd.md 3.5.1): /agent shows a one-time code, the PC sends it with its key
+	const pcPath = path.match(/^\/api\/agents\/(a_[A-Za-z0-9_-]+)\/(pair|pc)$/);
+	if (pcPath?.[1]) {
+		const account = await currentAccount(request);
+		if (!account) return error(401, "login required");
+		const agent = await getAgent(DB, pcPath[1]);
+		if (!agent || agent.owner_id !== account.id) return error(404, "no such agent");
+		if (pcPath[2] === "pair" && request.method === "POST") return json(await startPairing(DB, agent.id));
+		if (pcPath[2] === "pc" && request.method === "GET") {
+			const pc = await pcOf(DB, agent.id);
+			return json({ paired: pc !== null, pairedAt: pc?.paired_at ?? null });
+		}
+		if (pcPath[2] === "pc" && request.method === "DELETE") {
+			await unpairPc(DB, agent.id);
+			return json({ ok: true });
+		}
+		return error(405, "method not allowed");
+	}
+	if (path === "/api/pair" && request.method === "POST") {
+		// no login: the code, shown to the owner and spent once, is the credential
+		const body = (await request.json().catch(() => null)) as { code?: unknown; publicKey?: unknown } | null;
+		const code = normalizePairCode(body?.code);
+		const publicKey = typeof body?.publicKey === "string" ? body.publicKey : "";
+		if (!code) return error(400, "bad code");
+		try {
+			await importPublicKey(publicKey);
+		} catch {
+			return error(400, "bad public key");
+		}
+		const agent = await pairPc(DB, code, publicKey);
+		if (!agent) return error(404, "そのコードは使えません（10分で切れます。/agent で出し直してください）");
+		return json({ id: agent.id, name: agent.name }, 201);
 	}
 
 	const builds = path.match(/^\/api\/dev\/rooms\/([a-z0-9-]{1,32})\/builds$/);

@@ -1,5 +1,6 @@
 // /agent: put your own AI in the city from the browser (T3, #24). No Cloudflare account or API key: it
-// starts on the host's trial LLM. The AI runs in agent.worker.ts while this tab is open.
+// starts on the host's trial LLM. The AI runs in agent.worker.ts while this tab is open, or on your own PC
+// once it is paired with a code from here (docs/prd.md 3.5.1).
 
 import type { FromPage, FromWorker } from "./agent.worker.ts";
 
@@ -117,7 +118,69 @@ export function showAgentPage(root: HTMLElement): void {
 		log,
 	);
 
-	page.append(form, run);
+	// ---- on your PC (docs/prd.md 3.5.1) ----
+	const pcBox = el("div", "rj-report");
+	const pcState = el("span", "rj-note", "");
+	const pcActions = el("div", "rj-report-actions");
+	const pair = el("button", "", "PCで動かす（コードを出す）");
+	pair.type = "button";
+	const unpair = el("button", "rj-secondary", "PCとのつながりを解く");
+	unpair.type = "button";
+	pcActions.append(pair, unpair);
+	const pcCode = el("div", "rj-excerpt");
+	pcCode.hidden = true;
+	pcBox.append(
+		el("b", "", "自分のPCで動かす"),
+		el(
+			"p",
+			"rj-note",
+			"rojibura のリポジトリがあるPCで、下のコマンドを実行すると、このAIがPCから街に入ります（pi で動かすなら --mind pi を足します）。PCから入ると、このタブのAIは退きます。記憶はPCとブラウザで別々です。",
+		),
+		pcState,
+		pcActions,
+		pcCode,
+	);
+	pcBox.hidden = true;
+	let agentId: string | null = null;
+	const showPc = async () => {
+		if (!agentId) return;
+		const r = await fetch(`/api/agents/${agentId}/pc`);
+		const s = r.ok ? ((await r.json()) as { paired: boolean; pairedAt: number | null }) : null;
+		pcState.textContent = s?.paired
+			? `PCと結びついています（${new Date(s.pairedAt ?? 0).toLocaleString()}から）。このタブで入れると、PCのAIは退きます。`
+			: "まだPCと結びついていません。";
+		unpair.hidden = !s?.paired;
+	};
+	/** The personality, quoted for a POSIX shell. */
+	const quoted = (text: string) => `'${text.replace(/'/g, "'\\''")}'`;
+	pair.onclick = async () => {
+		if (!agentId) return;
+		const r = await fetch(`/api/agents/${agentId}/pair`, { method: "POST" });
+		if (!r.ok) {
+			pcState.textContent = "コードを出せませんでした。";
+			return;
+		}
+		const { code, expiresAt } = (await r.json()) as { code: string; expiresAt: number };
+		const command = `node apps/avatar-sdk/src/cli.ts --base ${location.origin} --pair ${code} --persona ${quoted(personality.value.trim())}`;
+		const copy = el("button", "rj-secondary", "コマンドをコピー");
+		copy.type = "button";
+		copy.onclick = () =>
+			void navigator.clipboard?.writeText(command).then(() => (copy.textContent = "コピーしました"));
+		pcCode.replaceChildren(
+			el("div", "", `コード：${code}（${new Date(expiresAt).toLocaleTimeString()} まで、1回だけ使えます）`),
+			el("code", "rj-command", command),
+			copy,
+		);
+		pcCode.hidden = false;
+	};
+	unpair.onclick = async () => {
+		if (!agentId || !confirm("PCの鍵を消します。PCからは入れなくなります。よろしいですか？")) return;
+		await fetch(`/api/agents/${agentId}/pc`, { method: "DELETE" });
+		pcCode.hidden = true;
+		await showPc();
+	};
+
+	page.append(form, run, pcBox);
 	run.hidden = true;
 
 	form.onsubmit = (e) => {
@@ -134,6 +197,11 @@ export function showAgentPage(root: HTMLElement): void {
 		const m = e.data;
 		switch (m.t) {
 			case "identity":
+				// a registered AI can also run on your PC
+				agentId = m.agentId;
+				pcBox.hidden = agentId === null;
+				pcCode.hidden = true;
+				void showPc();
 				// a returning AI keeps its name (it is registered); the personality can be changed
 				name.value = m.name ?? "";
 				name.disabled = m.name !== null;
@@ -149,17 +217,30 @@ export function showAgentPage(root: HTMLElement): void {
 					starting: "準備しています…",
 					running: "街にいます",
 					stopped: "街から帰りました",
+					replaced: "PCから入りました（このタブのAIは退きました）",
 					error: "うまくいきませんでした",
 				};
 				state.textContent = `${name.value || "AI"}：${labels[m.state]}${m.message ? `（${m.message}）` : ""}`;
 				const active = m.state === "starting" || m.state === "running";
 				form.hidden = active;
-				run.hidden = !active && m.state !== "stopped";
+				run.hidden = !active && m.state !== "stopped" && m.state !== "replaced";
 				stop.hidden = !active;
 				restart.hidden = active;
+				restart.textContent = m.state === "replaced" ? "このタブで動かす" : "もう一度入れる";
+				// the PC came in with the code: it is spent
+				if (m.state === "replaced") {
+					pcCode.hidden = true;
+					void showPc();
+				}
 				if (m.state === "error") form.hidden = false;
 				break;
 			}
+			case "agent":
+				if (agentId === m.agentId) break;
+				agentId = m.agentId;
+				pcBox.hidden = false;
+				void showPc();
+				break;
 			case "remaining":
 				remaining.textContent = `今日のお試し枠：残り ${m.remaining} 回${m.limit ? `（1日 ${m.limit} 回）` : ""}`;
 				break;

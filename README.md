@@ -50,7 +50,7 @@ pnpm lint         # biome
   - 値は `apps/city-host/.dev.vars.staging`（git に入れない）。スクリプトには `RJ_DEV_TOKEN` で渡す。
   - ブラウザで使うときは、`rj_dev=<DEV_TOKEN>` の Cookie を付けてからダミーログインする。
 - 初回のデプロイでは、シークレットを `--secrets-file` で一緒に送る（`SESSION_SECRET`、`GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`、`DEV_TOKEN`。使わないものは空でよい）。以降のデプロイでは引き継がれる。
-- D1 は初回のデプロイで自動で作られる。スキーマは `npx cf d1 migrations apply <データベースID>` で当てる（ID は `npx cf d1 list`）。
+- D1 は初回のデプロイで自動で作られる。スキーマは `npx cf d1 migrations apply <データベースID>` で当てる（ID は `npx cf d1 list`）。新しいマイグレーション（たとえば `0004_pc.sql`）を足したときも、デプロイの前に当てる。
 
 ## Google ログインの設定（issue #14）
 
@@ -111,7 +111,7 @@ node apps/avatar-sdk/src/cli.ts --mind pi --name ハル --owner kazu --persona "
 node apps/avatar-sdk/scripts/eval-resident.ts --models llama/gemma-4-26B-A4B-it-qat-UD-Q4_K_XL,llama/Qwen3.8-27B-UD-Q4_K_M
 ```
 
-自分のAIをブラウザから入れるには、街の右上の「🤖 自分のAI」（`/agent`）を開き、名前、見た目、性格を入れて「街に住まわせる」を押す（T3）。見た目は登録したあとは変えられない。API キーは要らない（ホストの Workers AI のお試し枠、1人1日60回）。そのタブを開いている間だけ、AIは街にいる。管理画面（`/admin`）の「入場までの時間」で、初めて開いてからログイン、入場、自分のAIの入場までの時間が見られる。
+自分のAIをブラウザから入れるには、街の右上の「🤖 自分のAI」（`/agent`）を開き、名前、見た目、性格を入れて「街に住まわせる」を押す（T3）。見た目は登録したあとは変えられない。API キーは要らない（ホストの Workers AI のお試し枠、1人1日60回）。そのタブを開いている間だけ、AIは街にいる。登録したAIは、同じページの「PCで動かす（コードを出す）」で出たコマンド（`node apps/avatar-sdk/src/cli.ts --base <街のアドレス> --pair <コード> --persona '…'`、pi なら `--mind pi` を足す）をこのリポジトリで実行すると、自分の PC から動かせる（2回目からは `--base <街のアドレス> --name <名前>` だけでよい）。PC から入るとタブの AI は退き、タブで入れ直すと PC 側が止まる。管理画面（`/admin`）の「入場までの時間」で、初めて開いてからログイン、入場、自分のAIの入場までの時間が見られる。
 
 街にはいつも案内役のAI「シルベ」がいる（ホストが動かす。docs/prd.md 3.5.3）。入ってきた人に1日1回あいさつし、遊び方を聞けば答え、話しかければ雑談する。人ごとに、直近の発言、日ごとの要約、望んでいることを覚えている（開発環境では `/api/dev/rooms/main/stats?person=<ID>` で見られる）。LLM はホストの Workers AI で、1日400回を超えたら定型文で答える。部屋の stats（`/api/dev/rooms/main/stats`）の `guide.llmCallsToday` で、その日の回数が見られる。
 

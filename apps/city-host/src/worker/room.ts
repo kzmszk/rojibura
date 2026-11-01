@@ -52,11 +52,21 @@ export interface JoinRequest {
 	arrive?: string;
 	/** Agents only: registered public key to verify the challenge with. */
 	publicKey?: string;
+	/** Agents paired with their owner's PC: its key, which lets them in too (docs/prd.md 3.5.1). */
+	pcKey?: string;
 }
 
 interface Attachment {
 	member?: Member;
-	pending?: { info: JoinInfo; publicKey: string; nonce: string; areaId: string; at: number; arrive?: string };
+	pending?: {
+		info: JoinInfo;
+		publicKey: string;
+		pcKey?: string;
+		nonce: string;
+		areaId: string;
+		at: number;
+		arrive?: string;
+	};
 }
 
 const SWEEP_INTERVAL_MS = 60_000;
@@ -262,6 +272,7 @@ export class CityRoomDO extends DurableObject<Env> {
 				pending: {
 					info: join.info,
 					publicKey: join.publicKey,
+					...(join.pcKey ? { pcKey: join.pcKey } : {}),
 					nonce,
 					areaId: join.areaId,
 					at: Date.now(),
@@ -295,11 +306,14 @@ export class CityRoomDO extends DurableObject<Env> {
 	): Promise<void> {
 		if (att?.pending) {
 			const p = att.pending;
+			const payload = authPayload(p.areaId, p.info.id, p.nonce);
+			// the key it was registered with (the browser's), or its owner's PC's
 			const ok =
 				parsed.ok &&
 				parsed.msg.t === "AUTH" &&
 				Date.now() - p.at <= AUTH_TIMEOUT_MS &&
-				(await verifyAuth(p.publicKey, authPayload(p.areaId, p.info.id, p.nonce), parsed.msg.sig));
+				((await verifyAuth(p.publicKey, payload, parsed.msg.sig)) ||
+					(p.pcKey !== undefined && (await verifyAuth(p.pcKey, payload, parsed.msg.sig))));
 			if (!ok) {
 				safeClose(ws, CLOSE_POLICY, "authentication failed");
 				return;

@@ -23,10 +23,17 @@ export interface ConnectionOptions {
 	onMessage: (msg: HostToClient) => void;
 	/** Called after every successful (re)join. */
 	onWelcome?: () => void;
+	/** Called when the host closes the connection for good (no reconnecting), with its code. */
+	onClosed?: (code: number, reason: string) => void;
 }
 
-/** Close codes after which reconnecting makes no sense right away. */
-const NO_RETRY = new Set([1008, 4001, 4003, 4010]);
+/** The same AI came in from somewhere else (its owner's PC, or the browser again): that one stays. */
+export const CLOSE_REPLACED = 4000;
+/**
+ * Close codes after which reconnecting makes no sense right away. Replaced: coming back in would push the
+ * other one out, and the two would take turns.
+ */
+const NO_RETRY = new Set([1008, CLOSE_REPLACED, 4001, 4003, 4010]);
 
 export class AgentConnection {
 	private ws: WebSocket | null = null;
@@ -86,6 +93,7 @@ export class AgentConnection {
 			if (this.stopped) return;
 			if (NO_RETRY.has(e.code)) {
 				logger.warn(`closed by host (${e.code} ${e.reason}); not reconnecting`);
+				this.opts.onClosed?.(e.code, e.reason);
 				return;
 			}
 			logger.warn(`disconnected (${e.code}); reconnecting in ${this.retryMs / 1000}s`);

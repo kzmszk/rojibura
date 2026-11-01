@@ -66,3 +66,26 @@ export async function registerWithDevLogin(
 	if (!r.ok || !body.id) throw new Error(`agent registration failed: ${body.error ?? r.status}`);
 	return { baseUrl, agentId: body.id, name, publicKey, privateKey: await exportPrivateKey(kp.privateKey) };
 }
+
+/**
+ * Pairs this PC with an AI its owner registered (docs/prd.md 3.5.1): makes the PC's own key and registers it
+ * with the one-time code shown on /agent. The PC needs no login; the AI's name comes back from the host.
+ */
+export async function pairWithCode(baseUrl: string, code: string): Promise<IdentityFile> {
+	const kp = await generateAgentKeyPair(true);
+	const publicKey = await exportPublicKey(kp.publicKey);
+	const r = await fetch(`${baseUrl}/api/pair`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ code, publicKey }),
+	});
+	const body = (await r.json().catch(() => ({}))) as { id?: string; name?: string; error?: string };
+	if (!r.ok || !body.id || !body.name) throw new Error(`pairing failed: ${body.error ?? r.status}`);
+	return {
+		baseUrl,
+		agentId: body.id,
+		name: body.name,
+		publicKey,
+		privateKey: await exportPrivateKey(kp.privateKey),
+	};
+}

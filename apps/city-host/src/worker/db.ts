@@ -4,8 +4,10 @@ import { MAX_NAME_LENGTH, randomToken, sanitizeText, textLength } from "@rojibur
 import init from "../../migrations/0001_init.sql?raw";
 import moderation from "../../migrations/0002_moderation.sql?raw";
 import onboarding from "../../migrations/0003_onboarding.sql?raw";
+import pc from "../../migrations/0004_pc.sql?raw";
+import { newPairCode, PAIR_CODE_TTL_MS } from "./pairing.ts";
 
-const MIGRATIONS = [init, moderation, onboarding];
+const MIGRATIONS = [init, moderation, onboarding, pc];
 
 export const AGENTS_PER_OWNER = 5;
 
@@ -137,6 +139,56 @@ export async function registerAgent(
 
 export function getAgent(db: D1Database, id: string): Promise<Agent | null> {
 	return db.prepare("SELECT * FROM agents WHERE id = ?").bind(id).first<Agent>();
+}
+
+// ---- an AI on its owner's PC (docs/prd.md 3.5.1) ----
+
+/** A fresh one-time code to pair a PC with the agent (it replaces any earlier one; the paired key stays). */
+export async function startPairing(
+	db: D1Database,
+	agentId: string,
+): Promise<{ code: string; expiresAt: number }> {
+	const code = newPairCode();
+	const expiresAt = Date.now() + PAIR_CODE_TTL_MS;
+	await db
+		.prepare(
+			"INSERT INTO agent_pc (agent_id, code, code_expires_at) VALUES (?, ?, ?) ON CONFLICT (agent_id) DO UPDATE SET code = excluded.code, code_expires_at = excluded.code_expires_at",
+		)
+		.bind(agentId, code, expiresAt)
+		.run();
+	return { code, expiresAt };
+}
+
+/** Registers the PC's key for the agent whose code this is; the code is spent. Null if it is unknown or late. */
+export async function pairPc(db: D1Database, code: string, publicKey: string): Promise<Agent | null> {
+	const row = await db
+		.prepare("SELECT agent_id FROM agent_pc WHERE code = ? AND code_expires_at >= ?")
+		.bind(code, Date.now())
+		.first<{ agent_id: string }>();
+	if (!row) return null;
+	await db
+		.prepare(
+			"UPDATE agent_pc SET public_key = ?, paired_at = ?, code = NULL, code_expires_at = NULL WHERE agent_id = ?",
+		)
+		.bind(publicKey, Date.now(), row.agent_id)
+		.run();
+	return getAgent(db, row.agent_id);
+}
+
+/** The PC's key and when it was paired, or null if no PC is. */
+export function pcOf(
+	db: D1Database,
+	agentId: string,
+): Promise<{ public_key: string; paired_at: number } | null> {
+	return db
+		.prepare("SELECT public_key, paired_at FROM agent_pc WHERE agent_id = ? AND public_key IS NOT NULL")
+		.bind(agentId)
+		.first<{ public_key: string; paired_at: number }>();
+}
+
+/** Forgets the PC (and any code not yet used): only the browser's key lets the agent in again. */
+export async function unpairPc(db: D1Database, agentId: string): Promise<void> {
+	await db.prepare("DELETE FROM agent_pc WHERE agent_id = ?").bind(agentId).run();
 }
 
 export async function setAgentTrust(db: D1Database, id: string, trust: Agent["trust"]): Promise<void> {

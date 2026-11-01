@@ -1,7 +1,14 @@
 // Runs a browser AI (T3, #24) in a dedicated worker, so its timers keep running while the tab is in the
 // background. The page (agent-page.ts) only shows what happens here.
 
-import { Agent, AgentConnection, type LLM, type Logger, loadCity } from "@rojibura/avatar-sdk";
+import {
+	Agent,
+	AgentConnection,
+	CLOSE_REPLACED,
+	type LLM,
+	type Logger,
+	loadCity,
+} from "@rojibura/avatar-sdk";
 import {
 	type BrowserIdentity,
 	forgetBrowserIdentity,
@@ -21,8 +28,11 @@ export type FromPage =
 	| { cmd: "forget" };
 
 export type FromWorker =
-	| { t: "identity"; name: string | null; personality: string }
-	| { t: "state"; state: "starting" | "running" | "stopped" | "error"; message?: string }
+	| { t: "identity"; agentId: string | null; name: string | null; personality: string }
+	/** The AI is registered (also right after the first start): it can be paired with a PC. */
+	| { t: "agent"; agentId: string }
+	/** replaced: the same AI came in from its owner's PC (docs/prd.md 3.5.1), and this tab's stepped out. */
+	| { t: "state"; state: "starting" | "running" | "stopped" | "replaced" | "error"; message?: string }
 	| { t: "log"; at: number; line: string }
 	| { t: "remaining"; remaining: number; limit?: number };
 
@@ -59,6 +69,7 @@ async function start(name: string, personality: string, preset?: string): Promis
 		id = { ...id, personality };
 		await saveBrowserIdentity(id);
 	}
+	post({ t: "agent", agentId: id.agentId });
 	const city = await loadCity(base);
 	const quota = await trialRemaining(base);
 	if (quota) post({ t: "remaining", remaining: quota.remaining, limit: quota.limit });
@@ -82,6 +93,11 @@ async function start(name: string, personality: string, preset?: string): Promis
 		logger: log,
 		onMessage: (m) => agent?.handle(m),
 		onWelcome: () => post({ t: "state", state: "running" }),
+		onClosed: (code) => {
+			if (code !== CLOSE_REPLACED) return;
+			stop();
+			post({ t: "state", state: "replaced" });
+		},
 	});
 	agent = new Agent({
 		persona: { name: identity.name, personality },
@@ -101,7 +117,12 @@ scope.onmessage = async (e) => {
 	try {
 		if (m.cmd === "load") {
 			const id = await loadBrowserIdentity();
-			post({ t: "identity", name: id?.name ?? null, personality: id?.personality ?? "" });
+			post({
+				t: "identity",
+				agentId: id?.agentId ?? null,
+				name: id?.name ?? null,
+				personality: id?.personality ?? "",
+			});
 		} else if (m.cmd === "start") {
 			await start(m.name, m.personality, m.preset);
 		} else if (m.cmd === "stop") {
@@ -110,7 +131,7 @@ scope.onmessage = async (e) => {
 		} else if (m.cmd === "forget") {
 			stop();
 			await forgetBrowserIdentity();
-			post({ t: "identity", name: null, personality: "" });
+			post({ t: "identity", agentId: null, name: null, personality: "" });
 			post({ t: "state", state: "stopped" });
 		}
 	} catch (err) {
