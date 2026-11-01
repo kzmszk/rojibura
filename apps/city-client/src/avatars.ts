@@ -206,6 +206,14 @@ function capsule(color: number): THREE.Object3D {
 	return g;
 }
 
+/**
+ * Where a click or a tap finds someone: a capsule a little wider than the body, never drawn (a raycast does
+ * not care), so a tap need not land on an arm, and a VRM's meshes moving to the first-person layers
+ * (camera.ts) cannot make anyone unclickable.
+ */
+const REACH_GEOMETRY = new THREE.CapsuleGeometry(0.35, 1.0, 4, 8);
+const REACH_MATERIAL = new THREE.MeshBasicMaterial();
+
 export class AvatarView {
 	readonly root = new THREE.Group();
 	state: AvatarState;
@@ -238,6 +246,12 @@ export class AvatarView {
 	private readonly label: HTMLDivElement;
 	private readonly bubble: HTMLDivElement;
 	private readonly tag: CSS2DObject;
+	/** Someone to look at (world, their eyes): an AI's owner close by (docs/prd.md 3.4.9). */
+	private attention: THREE.Vector3 | null = null;
+	/** How far the head is turned towards them (radians, eased). */
+	private headTurn = 0;
+	/** What the eyes look at (three-vrm's lookAt follows an object). */
+	private readonly gaze = new THREE.Object3D();
 	/** Seen from its own eyes (the first-person view): the head is not drawn, nor the name over it. */
 	private inside = false;
 	private firstPersonReady = false;
@@ -253,6 +267,10 @@ export class AvatarView {
 		this.model = capsule(state.kind === "ai" ? 0x6aa7d8 : isMe ? 0xe3a14f : 0xd9d2c5);
 		this.root.add(this.model);
 		this.root.userData.avatarId = state.id;
+		const reach = new THREE.Mesh(REACH_GEOMETRY, REACH_MATERIAL);
+		reach.visible = false;
+		reach.position.y = 0.85;
+		this.root.add(reach);
 
 		const tag = document.createElement("div");
 		tag.className = "rj-tag";
@@ -291,7 +309,9 @@ export class AvatarView {
 		this.model = vrm.scene;
 		this.root.add(vrm.scene);
 		this.vrm = vrm;
-		this.seenFromInside(this.inside);
+		// only your own avatar, and only once seen from inside: the first-person layers hide a head from the
+		// eyes view, which on anyone else would leave them faceless
+		if (this.inside) this.seenFromInside(true);
 		this.setClips(new THREE.AnimationMixer(vrm.scene), moves.clips);
 		this.pace = moves.pace;
 	}
@@ -398,10 +418,43 @@ export class AvatarView {
 		return side.add(this.root.position);
 	}
 
-	/** Blinks now and then, and moves the mouth while talking (VRM expressions). */
+	/** Smiles at least `how` much until host time `until`. */
 	private smileFor(until: number, how: number): void {
 		this.smileUntil = Math.max(this.smileUntil, until);
 		this.smileWant = Math.max(this.smileWant, how);
+	}
+
+	/**
+	 * Turns the head (up to 70°, the neck taking part) and the eyes towards whoever it attends to, on top of
+	 * the motion playing; back to straight ahead when there is nobody.
+	 */
+	private look(attended: number | null, lying: boolean, dt: number): void {
+		const vrm = this.vrm;
+		if (!vrm) return;
+		const limit = (70 * Math.PI) / 180;
+		const turn =
+			attended === null || lying
+				? 0
+				: Math.atan2(Math.sin(attended - this.facing), Math.cos(attended - this.facing));
+		this.headTurn += (Math.max(-limit, Math.min(limit, turn)) - this.headTurn) * Math.min(1, dt * 4);
+		if (Math.abs(this.headTurn) > 1e-3) {
+			const up = new THREE.Vector3(0, 1, 0);
+			const twist = (bone: VRMHumanBoneName, part: number) =>
+				vrm.humanoid
+					.getNormalizedBoneNode(bone)
+					?.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(up, this.headTurn * part));
+			twist("neck", 0.4);
+			twist("head", 0.6);
+		}
+		const lookAt = vrm.lookAt;
+		if (!lookAt) return;
+		if (this.attention && !lying) {
+			this.gaze.position.copy(this.attention);
+			lookAt.target = this.gaze;
+		} else if (lookAt.target) {
+			lookAt.target = null;
+			lookAt.reset();
+		}
 	}
 
 	/**
@@ -469,16 +522,26 @@ export class AvatarView {
 		this.root.position.set(pose.pos[0], this.y, pose.pos[1]);
 		// a roll travels along its path without turning to it (a back roll goes backwards)
 		const rolling = this.gesture !== null && TRAVEL.has(this.gesture.name) && hostNow < this.gesture.until;
+		const posture0 = move.kind === "idle" ? move.posture : undefined;
+		const gesturing =
+			this.gesture !== null &&
+			hostNow < this.gesture.until &&
+			!FIDGETS.includes(this.gesture.name as MoveName);
+		// where whoever it attends to is, as a heading
+		const attended = this.attention
+			? Math.atan2(this.attention.x - this.root.position.x, this.attention.z - this.root.position.z)
+			: null;
 		if (pose.moving && !rolling) {
 			this.gesture = null;
 			this.faceTo = null;
 			this.turnTo(Math.atan2(pose.dir[0], pose.dir[1]), dt * 10);
 		} else if (this.faceTo !== null) {
 			this.turnTo(this.faceTo, dt * 6);
+		} else if (attended !== null && !posture0 && !gesturing) {
+			this.turnTo(attended, dt * 3);
 		}
 		this.root.rotation.y = this.facing;
 
-		const posture0 = move.kind === "idle" ? move.posture : undefined;
 		this.fidget(
 			hostNow,
 			pose.moving ||
@@ -508,6 +571,7 @@ export class AvatarView {
 
 		this.mixer?.update(dt);
 		if (this.vrm) {
+			this.look(attended, posture === "lie", dt);
 			this.express(hostNow, dt);
 			if (!this.settled) {
 				this.root.updateMatrixWorld(true);
@@ -535,7 +599,7 @@ export class AvatarView {
 		this.inside = on;
 		this.tag.visible = !on;
 		if (this.vrm) {
-			if (!this.firstPersonReady) {
+			if (on && !this.firstPersonReady) {
 				this.vrm.firstPerson?.setup();
 				this.firstPersonReady = true;
 			}
@@ -558,6 +622,14 @@ export class AvatarView {
 			.clone()
 			.add(new THREE.Vector3(0, 1.55, 0))
 			.addScaledVector(ahead, 0.12);
+	}
+
+	/**
+	 * Someone to look at, or null: an AI looks at its owner close by, turning its head and eyes as it walks
+	 * and its whole body when it stands, so the owner sees its face (docs/prd.md 3.4.9).
+	 */
+	attend(eyes: THREE.Vector3 | null): void {
+		this.attention = eyes;
 	}
 
 	/** Where the avatar faces (radians; 0 is +Z). */

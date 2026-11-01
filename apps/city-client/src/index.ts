@@ -55,6 +55,8 @@ const MOTION_EMOJI: Record<Motion, string> = {
 	backflip: "🔄",
 };
 const TOGETHER_LABEL: Record<Together, string> = { handshake: "握手", hug: "ハグ" };
+/** An AI this close to its owner looks at them (docs/prd.md 3.4.9). */
+const ATTEND_M = 5;
 /** The action bar (docs/prd.md 3.4.5): motion, label, key. Space also jumps. */
 const ACTIONS: [Motion, string, string][] = [
 	["wave", "手を振る", "1"],
@@ -870,7 +872,9 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 		down = { x: e.clientX, y: e.clientY };
 	});
 	canvas.addEventListener("pointerup", (e) => {
-		if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) return;
+		// a finger wobbles a little more than a mouse
+		if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > (e.pointerType === "touch" ? 12 : 5))
+			return;
 		down = null;
 		const ndc = ndcOf(e);
 		if (panel.open) {
@@ -885,8 +889,12 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 			pickUp(thing.id);
 			return;
 		}
-		// avatars first: clicking someone selects them as the one to talk to
-		const hit = ray.intersectObjects(
+		// avatars first: clicking someone selects them as the one to talk to. Their reach (avatars.ts) is on
+		// layer 0, their VRM meshes may be on the first-person layers (camera.ts): look on every layer
+		const reach = new THREE.Raycaster();
+		reach.setFromCamera(ndc, scene.camera);
+		reach.layers.enableAll();
+		const hit = reach.intersectObjects(
 			[...avatars.values()].filter((v) => v.state.id !== myId).map((v) => v.root),
 			true,
 		)[0];
@@ -1176,7 +1184,13 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 		const dt = Math.min(0.1, (t - last) / 1000);
 		last = t;
 		const now = conn.hostNow();
-		for (const v of avatars.values()) v.update(now, dt, scene);
+		for (const v of avatars.values()) {
+			// an AI looks at its owner close by, so the owner sees its face (docs/prd.md 3.4.9)
+			const owner = v.state.kind === "ai" && v.state.ownerId ? avatars.get(v.state.ownerId) : undefined;
+			const near = owner && owner.root.position.distanceTo(v.root.position) < ATTEND_M;
+			v.attend(near ? owner.eyePosition() : null);
+			v.update(now, dt, scene);
+		}
 		items.update(now);
 		pickButton.hidden = nearestThing() === null;
 		companionButton.hidden = ![...avatars.values()].some(
