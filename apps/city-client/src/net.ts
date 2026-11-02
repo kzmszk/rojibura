@@ -58,9 +58,10 @@ export class CityConnection {
 		void this.enter();
 	}
 
-	stop(): void {
+	/** Leaves for good; `reason` goes with the close (going through a portal: travelReason). */
+	stop(reason?: string): void {
 		this.stopped = true;
-		this.ws?.close(1000);
+		this.ws?.close(1000, reason);
 	}
 
 	send(msg: ClientToHost): void {

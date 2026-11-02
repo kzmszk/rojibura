@@ -122,13 +122,22 @@ for (let i = 0; i < 15 && city.landmarks.length === 0 && !city.hasNavmesh; i++) 
 	city = await loadCity(base, args.area);
 }
 let handle: ((m: HostToClient) => void) | null = null;
+/** Takes on another area's places and walkable ground (following the owner, docs/prd.md 3.8.2). */
+let enter: (next: Awaited<ReturnType<typeof loadCity>>) => void = () => {};
+/** Its owner went through a portal while it walked with them: it comes along, arriving where they did. */
+const follow = async (m: Extract<HostToClient, { t: "FOLLOW" }>) => {
+	log.info(`following the owner to ${m.to} (${m.at})`);
+	const next = await loadCity(base, m.to);
+	enter(next);
+	conn.moveTo(m.to, m.at);
+};
 const conn = new AgentConnection({
 	baseUrl: base.replace(/^http/, "ws"),
 	areaId: args.area ?? "main",
 	agentId: identity.agentId,
 	privateKey: await privateKeyOf(identity),
 	logger: log,
-	onMessage: (m) => handle?.(m),
+	onMessage: (m) => (m.t === "FOLLOW" ? void follow(m) : handle?.(m)),
 	onClosed: (code) => {
 		// the same AI came in from its owner's browser (or another PC): that one stays, this one stops
 		if (code === CLOSE_REPLACED) {
@@ -193,6 +202,7 @@ if (args.mind === "pi" || args.mind === "claude") {
 		...(moves ? { moves, mirror: new ChromeMirror({ base, logger: log }), sees: claude || args.vision } : {}),
 	});
 	handle = (m) => resident?.handle(m);
+	enter = (next) => resident?.setCity(next.nav, next.landmarks, next.name);
 	stopMind = () => resident?.stop();
 	log.info(
 		`mind ${mind.name}; ${city.landmarks.length} landmarks; navmesh ${city.hasNavmesh ? "yes" : "no"}`,
@@ -212,6 +222,7 @@ if (args.mind === "pi" || args.mind === "claude") {
 		dailyLlmLimit: dailyLimit,
 	});
 	handle = (m) => agent.handle(m);
+	enter = (next) => agent.setCity(next.nav, next.landmarks);
 	stopMind = () => agent.stop();
 	log.info(
 		`LLM ${llm.name}; ${city.landmarks.length} landmarks; navmesh ${city.hasNavmesh ? "yes" : "no (straight lines)"}`,

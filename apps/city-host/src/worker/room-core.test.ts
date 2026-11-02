@@ -928,3 +928,25 @@ describe("an AI moving its own body", () => {
 		expect(types(bot)).toEqual(["CORRECT"]);
 	});
 });
+
+describe("going through a portal", () => {
+	test("your AIs walking with you are told to come along; not when they are on their own, nor others' AIs", () => {
+		// (the room calls this when a page's connection closes with travelReason)
+		const a = conn("a");
+		const c = conn("c");
+		const bot = conn("bot");
+		const other = conn("other");
+		place(a, human("alice"), [-10, -10]);
+		place(c, human("carol"), [-8, -10]);
+		place(bot, ai("bot", "alice"), [-12, -10]);
+		place(other, ai("other", "carol"), [-9, -10]);
+		ctx.room.travel(ctx.room.members.get(a) as never, "venezia", "gate_main");
+		expect(bot.inbox.filter((m) => m.t === "FOLLOW")).toEqual([]);
+		ctx.room.handle(a, { t: "COMPANION", on: true });
+		ctx.room.travel(ctx.room.members.get(a) as never, "venezia", "gate_main");
+		expect(bot.inbox.filter((m) => m.t === "FOLLOW")).toEqual([
+			{ t: "FOLLOW", owner: "h_alice", to: "venezia", at: "gate_main" },
+		]);
+		expect(other.inbox.filter((m) => m.t === "FOLLOW")).toEqual([]);
+	});
+});

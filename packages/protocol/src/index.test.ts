@@ -14,12 +14,14 @@ import {
 	modelUrl,
 	parseBodyKeys,
 	parseClientMessage,
+	parseTravelReason,
 	pathLeg,
 	polylineLength,
 	poseAt,
 	positionAt,
 	sanitizeText,
 	signAuth,
+	travelReason,
 	type Vec2,
 	verifyAuth,
 } from "./index.ts";
@@ -297,4 +299,12 @@ describe("body scripts", () => {
 		expect(bad([{ at: 1, height: -1 }])).toMatch(/height/);
 		expect(bodyDuration([{ at: 2 }])).toBeCloseTo(2.8);
 	});
+});
+
+test("going through a portal, the close says where to: an area ID and a landmark ID", () => {
+	expect(parseTravelReason(travelReason("venezia", "gate_main"))).toEqual({ to: "venezia", at: "gate_main" });
+	expect(parseTravelReason("travel ../admin gate_main")).toBeNull();
+	expect(parseTravelReason("travel venezia")).toBeNull();
+	expect(parseTravelReason("bye")).toBeNull();
+	expect(parseTravelReason("")).toBeNull();
 });

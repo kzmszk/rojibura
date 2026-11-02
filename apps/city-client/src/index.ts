@@ -19,6 +19,7 @@ import {
 	poseAt,
 	RUN_SPEED,
 	type Together,
+	travelReason,
 	type Vec2,
 	WALK_SPEED,
 } from "@rojibura/protocol";
@@ -353,7 +354,7 @@ async function startCity(
 	// your own AI (T3): it runs in this tab while it is open, unless it is on your PC (docs/prd.md 3.5.1)
 	const myAi = el("button", "rj-logout", "🤖 自分のAI");
 	myAi.type = "button";
-	const agentPanel = new AgentPanel((running) => {
+	const agentPanel = new AgentPanel({ area: area.id, at: params.get("at") ?? undefined }, (running) => {
 		myAi.classList.toggle("on", running);
 		myAi.title = running ? "自分のAIがこのタブで街にいます" : "";
 	});
@@ -1401,7 +1402,8 @@ async function startCity(
 			if (gateHere) {
 				travel.textContent = `🚪 ${areas.areas[gateHere.to]?.name ?? gateHere.name}へ行く`;
 				travel.onclick = () => {
-					conn.stop();
+					// your AIs walking with you come along (docs/prd.md 3.8.2): the close says where to
+					conn.stop(travelReason(gateHere.to, gateHere.at));
 					location.href = travelUrl(gateHere, avatarParam);
 				};
 			}

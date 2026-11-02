@@ -56,6 +56,23 @@ const ID_RE = /^[ha]_[A-Za-z0-9_-]{1,64}$/;
 const CONV_RE = /^c_[A-Za-z0-9_-]{1,64}$/;
 const REF_RE = /^[A-Za-z0-9_-]{1,32}$/;
 const LANDMARK_RE = /^[A-Za-z0-9_-]{1,32}$/;
+const AREA_RE = /^[A-Za-z0-9_-]{1,32}$/;
+
+/**
+ * Going through a portal, a page closes its connection with this reason (docs/prd.md 3.8.2): the area it goes
+ * to and where it arrives there. The room always gets a close, with who it was, so it can tell the AIs walking
+ * with them to come along (FOLLOW) even when a last message would be lost to the close.
+ */
+export function travelReason(to: string, at: string): string {
+	return `travel ${to} ${at}`;
+}
+
+export function parseTravelReason(reason: string): { to: string; at: string } | null {
+	const [word, to, at, ...rest] = reason.split(" ");
+	if (word !== "travel" || rest.length > 0 || !to || !at || !AREA_RE.test(to) || !LANDMARK_RE.test(at))
+		return null;
+	return { to, at };
+}
 
 type Obj = Record<string, unknown>;
 
