@@ -1,5 +1,5 @@
 // Runs a browser AI (T3, #24) in a dedicated worker, so its timers keep running while the tab is in the
-// background. The page (agent-page.ts) only shows what happens here.
+// background. The city tab's panel (agent-panel.ts) only shows and steers what happens here.
 
 import {
 	Agent,

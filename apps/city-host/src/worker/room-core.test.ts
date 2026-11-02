@@ -101,6 +101,9 @@ describe("membership", () => {
 		ctx.room.join(second, human("alice"));
 		expect(first.closed).toBe(4000);
 		expect(ctx.room.size).toBe(1);
+		expect(ctx.room.has("h_alice")).toBe(true);
+		ctx.room.leave(second);
+		expect(ctx.room.has("h_alice")).toBe(false);
 	});
 
 	test("sweep removes members without heartbeat", () => {

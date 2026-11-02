@@ -21,7 +21,7 @@ import {
 	WALK_SPEED,
 } from "@rojibura/protocol";
 import * as THREE from "three";
-import { showAgentPage } from "./agent-page.ts";
+import { AgentPanel } from "./agent-panel.ts";
 import { api, onApiUsage } from "./api.ts";
 import { currentArea, travelUrl } from "./areas.ts";
 import { AvatarView, TRAVEL } from "./avatars.ts";
@@ -128,16 +128,15 @@ export async function mountApp(root: HTMLElement): Promise<void> {
 		await showAdmin(root);
 		return;
 	}
-	if (location.pathname === "/agent") {
-		showAgentPage(root);
-		return;
-	}
 	const params = new URLSearchParams(location.search);
 	if (params.get("welcome") === "1") {
 		showWelcome(root, me, params.get("redirect") ?? "/");
 		return;
 	}
-	await startCity(root, me, health.dev, health.freePlay === true);
+	// /agent (the old page for your AI, and where logins come back to): the city with its panel open
+	const openAi = location.pathname === "/agent";
+	if (openAi) history.replaceState(null, "", `/${location.search}`);
+	await startCity(root, me, health.dev, health.freePlay === true, openAi);
 }
 
 interface Me {
@@ -223,7 +222,7 @@ function showLogin(root: HTMLElement, health: { dev: boolean; google: boolean })
 	box.append(el("h1", "", "rojibura"), el("p", "", "人間とAIが暮らす街"));
 	if (health.google) {
 		const google = el("a", "rj-google", "Google でログイン");
-		// come back to the page they opened (the city, or /agent)
+		// come back to the page they opened (the city, or /agent: the city with your AI's panel open)
 		google.href = `/auth/google/login?redirect=${encodeURIComponent(location.pathname)}`;
 		box.append(google);
 	}
@@ -267,7 +266,13 @@ function showLogin(root: HTMLElement, health: { dev: boolean; google: boolean })
 	name.focus();
 }
 
-async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay: boolean): Promise<void> {
+async function startCity(
+	root: HTMLElement,
+	me: Me,
+	devBuild: boolean,
+	freePlay: boolean,
+	openAi: boolean,
+): Promise<void> {
 	const params = new URLSearchParams(location.search);
 	const avatarParam = params.get("avatar") ?? savedAvatar() ?? "saki";
 	saveAvatar(avatarParam);
@@ -330,10 +335,15 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 		admin.href = "/admin";
 		right.append(admin);
 	}
-	// put your own AI in the city (T3): opens in its own tab, which keeps the AI running
-	const myAi = el("a", "rj-logout", "🤖 自分のAI");
-	myAi.href = "/agent";
-	myAi.target = "_blank";
+	// your own AI (T3): it runs in this tab while it is open, unless it is on your PC (docs/prd.md 3.5.1)
+	const myAi = el("button", "rj-logout", "🤖 自分のAI");
+	myAi.type = "button";
+	const agentPanel = new AgentPanel((running) => {
+		myAi.classList.toggle("on", running);
+		myAi.title = running ? "自分のAIがこのタブで街にいます" : "";
+	});
+	myAi.onclick = () => agentPanel.toggle();
+	if (openAi) agentPanel.show();
 	// where the camera looks from (docs/prd.md 3.4.8): the button or V goes round the three
 	const viewButton = el("button", "rj-logout", "");
 	viewButton.type = "button";
@@ -460,7 +470,7 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 	const travel = el("button", "rj-travel");
 	travel.type = "button";
 	travel.hidden = true;
-	root.append(hud, chat, toast, travel, offerBox);
+	root.append(hud, chat, toast, travel, offerBox, agentPanel.el);
 	if (area.credit) root.append(el("div", "rj-credit", area.credit));
 
 	const avatars = new Map<AvatarId, AvatarView>();
@@ -565,7 +575,10 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 					if (usage?.isShown) conn.send({ t: "WATCH_USAGE", on: true });
 					for (const v of avatars.values()) v.dispose();
 					avatars.clear();
-					for (const a of m.avatars) add(a);
+					for (const a of m.avatars) {
+						add(a);
+						agentPanel.present(a.id);
+					}
 					if (m.builds) builds.set(m.builds);
 					items.reset(m.items ?? []);
 					showHeld();
@@ -619,8 +632,10 @@ async function startCity(root: HTMLElement, me: Me, devBuild: boolean, freePlay:
 				case "JOINED":
 					add(m.avatar);
 					addLog("", `${m.avatar.name} が来ました`, "sys");
+					agentPanel.present(m.avatar.id);
 					break;
 				case "LEFT": {
+					agentPanel.gone(m.id);
 					const v = avatars.get(m.id);
 					if (v) addLog("", `${v.state.name} が帰りました`, "sys");
 					v?.dispose();

@@ -599,7 +599,7 @@ async function api(request: Request, url: URL): Promise<Response> {
 		return json({ id: r.id, name: r.name, trust: r.trust }, 201);
 	}
 
-	// an AI on its owner's PC (docs/prd.md 3.5.1): /agent shows a one-time code, the PC sends it with its key
+	// an AI on its owner's PC (docs/prd.md 3.5.1): 🤖 自分のAI shows a one-time code, the PC sends it with its key
 	const pcPath = path.match(/^\/api\/agents\/(a_[A-Za-z0-9_-]+)\/(pair|pc)$/);
 	if (pcPath?.[1]) {
 		const account = await currentAccount(request);
@@ -608,8 +608,18 @@ async function api(request: Request, url: URL): Promise<Response> {
 		if (!agent || agent.owner_id !== account.id) return error(404, "no such agent");
 		if (pcPath[2] === "pair" && request.method === "POST") return json(await startPairing(DB, agent.id));
 		if (pcPath[2] === "pc" && request.method === "GET") {
-			const pc = await pcOf(DB, agent.id);
-			return json({ paired: pc !== null, pairedAt: pc?.paired_at ?? null });
+			// inCity: the AI is in some area now (from the PC, or another tab), so the tab does not start it
+			const [pc, here] = await Promise.all([
+				pcOf(DB, agent.id),
+				Promise.all(
+					AREA_IDS.map((a) =>
+						env.ROOM.getByName(a)
+							.fetch(new Request(`https://room/present?id=${encodeURIComponent(agent.id)}`))
+							.then((r) => r.json() as Promise<{ here: boolean }>),
+					),
+				),
+			]);
+			return json({ paired: pc !== null, pairedAt: pc?.paired_at ?? null, inCity: here.some((h) => h.here) });
 		}
 		if (pcPath[2] === "pc" && request.method === "DELETE") {
 			await unpairPc(DB, agent.id);
@@ -629,7 +639,8 @@ async function api(request: Request, url: URL): Promise<Response> {
 			return error(400, "bad public key");
 		}
 		const agent = await pairPc(DB, code, publicKey);
-		if (!agent) return error(404, "そのコードは使えません（10分で切れます。/agent で出し直してください）");
+		if (!agent)
+			return error(404, "そのコードは使えません（10分で切れます。街の「🤖 自分のAI」で出し直してください）");
 		return json({ id: agent.id, name: agent.name }, 201);
 	}
 

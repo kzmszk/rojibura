@@ -2,8 +2,9 @@
 //   node apps/avatar-sdk/src/cli.ts --name ミナ --persona "好奇心旺盛でカフェ好き" [--owner kazu] [--llm claude-code|pi|echo]
 //     [--avatar shino]   (the look, when it is registered: one of the host's /api/presets)
 //   node apps/avatar-sdk/src/cli.ts --name ハル --mind pi [--model llama/<id>] [--llama-url URL] [--fresh]
-//   node apps/avatar-sdk/src/cli.ts --base https://… --pair ABCD2345 [--mind pi]
-//     (runs on this PC an AI registered on the city's /agent, with the code shown there; docs/prd.md 3.5.1)
+//   node apps/avatar-sdk/src/cli.ts --base https://… --pair ABCD2345 --persona '…' [--mind pi]
+//     (runs on this PC an AI registered in the city's 🤖 自分のAI, with the code shown there; docs/prd.md 3.5.1;
+//     next time --base https://… --name <name>: the personality is kept with the identity)
 // See README "AIを動かす".
 
 import { appendFile, mkdir } from "node:fs/promises";
@@ -37,7 +38,8 @@ const { values: args } = parseArgs({
 		owner: { type: "string", default: "kazu" },
 		name: { type: "string", default: "ミナ" },
 		avatar: { type: "string" },
-		persona: { type: "string", default: "好奇心旺盛で人懐っこい。街を散歩するのとカフェが好き。" },
+		// kept with the identity, so later runs can leave it out
+		persona: { type: "string" },
 		// rules: the rule-based Agent asking an LLM per reply; pi: a resident living in one long pi session
 		mind: { type: "string", default: "rules" },
 		llm: { type: "string", default: "claude-code" },
@@ -82,6 +84,10 @@ if (paired) {
 	log.info(`registered as ${identity.agentId} (identity saved to ${identityPath})`);
 }
 if (!identity) throw new Error("no identity");
+if (args.persona !== undefined && args.persona !== identity.persona) {
+	identity = { ...identity, persona: args.persona };
+	await saveIdentity(identityPath, identity);
+}
 if (args.approve) {
 	const r = await fetch(`${base}/api/dev/agents/${identity.agentId}/approve`, {
 		method: "POST",
@@ -90,7 +96,10 @@ if (args.approve) {
 	log.info(r.ok ? "approved (dev)" : `approve failed: ${r.status}`);
 }
 
-const persona = { name, personality: args.persona ?? "" };
+const persona = {
+	name,
+	personality: identity.persona ?? "好奇心旺盛で人懐っこい。街を散歩するのとカフェが好き。",
+};
 const city = await loadCity(base, args.area);
 let handle: ((m: HostToClient) => void) | null = null;
 const conn = new AgentConnection({

@@ -74,7 +74,24 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #bfd6e8; }
 .rj-admin-page button { font: inherit; padding: 6px 12px; border-radius: 8px; border: 1px solid #bbc; background: #fff; color: #222; cursor: pointer; }
 .rj-admin-page button[type="submit"] { background: #2f6fae; border-color: #2f6fae; color: #fff; }
 .rj-admin-page input:disabled { background: #f0f1f3; color: #555; }
-.rj-agent-log { max-height: 360px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.rj-agent { position: fixed; top: 52px; right: 12px; width: 340px; max-width: calc(100vw - 24px); max-height: calc(100vh - 220px); overflow-y: auto; box-sizing: border-box;
+  display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: 10px; background: rgba(255,255,255,.96); color: #222; font-size: 13px;
+  box-shadow: 0 2px 10px rgba(0,0,0,.15); pointer-events: auto; z-index: 6; }
+.rj-agent-head { display: flex; justify-content: space-between; align-items: center; font-size: 14px; }
+.rj-agent-sec { display: flex; flex-direction: column; gap: 6px; }
+.rj-agent-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.rj-agent input, .rj-agent select, .rj-agent textarea { font: inherit; padding: 6px 8px; border-radius: 6px; border: 1px solid #bbc; }
+.rj-agent textarea { resize: vertical; }
+.rj-agent button { font: inherit; padding: 5px 12px; border-radius: 8px; border: 1px solid #2f6fae; background: #2f6fae; color: #fff; cursor: pointer; }
+.rj-agent button.rj-secondary { background: #fff; color: #222; border-color: #bbc; }
+.rj-agent .rj-agent-row .rj-secondary { font-size: 12px; padding: 3px 9px; }
+.rj-agent button.rj-agent-close { border: none; background: none; color: #555; font-size: 18px; line-height: 1; padding: 0 4px; }
+.rj-agent details { display: flex; flex-direction: column; gap: 6px; }
+.rj-agent details[open] { padding-bottom: 2px; }
+.rj-agent details > * + * { margin-top: 6px; }
+.rj-agent details textarea { width: 100%; box-sizing: border-box; }
+.rj-agent summary { cursor: pointer; color: #333; }
+.rj-agent-log { max-height: 180px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
 .rj-command { display: block; margin: 4px 0 6px; padding: 6px 8px; background: #fff; border: 1px solid #dde; border-radius: 6px; font-size: 12px; white-space: pre-wrap; word-break: break-all; user-select: all; }
 .rj-report textarea, .rj-report input, .rj-report select { font: inherit; padding: 8px; border-radius: 6px; border: 1px solid #ccd; }
 .rj-onboarding { border-collapse: collapse; font-size: 13px; width: 100%; }

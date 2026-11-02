@@ -15,6 +15,8 @@ export interface IdentityFile {
 	name: string;
 	publicKey: string;
 	privateKey: string;
+	/** The personality last given with --persona, used when it is left out (docs/prd.md 3.5.1). */
+	persona?: string;
 }
 
 export async function loadIdentity(path: string): Promise<IdentityFile | null> {

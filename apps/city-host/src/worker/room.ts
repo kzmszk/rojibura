@@ -240,11 +240,13 @@ export class CityRoomDO extends DurableObject<Env> {
 				? "統計の参照"
 				: url.pathname === "/command"
 					? "モデレーション・関係の変更"
-					: url.pathname.startsWith("/models")
-						? request.method === "POST"
-							? "モデルの登録"
-							: "モデルの取得"
-						: `${join?.info.name ?? "?"}：入場`;
+					: url.pathname === "/present"
+						? "AIがいるかの確認"
+						: url.pathname.startsWith("/models")
+							? request.method === "POST"
+								? "モデルの登録"
+								: "モデルの取得"
+							: `${join?.info.name ?? "?"}：入場`;
 		return this.meter.track(label, () => this.handleFetch(request, url, join), { doRequests: 1 });
 	}
 
@@ -256,6 +258,9 @@ export class CityRoomDO extends DurableObject<Env> {
 		}
 		if (url.pathname === "/command" && request.method === "POST")
 			return Response.json(await this.command((await request.json()) as RoomCommand));
+		// whether an AI is in this area now, from wherever it runs (its owner's tab or PC, docs/prd.md 3.5.1)
+		if (url.pathname === "/present")
+			return Response.json({ here: this.core.has(url.searchParams.get("id") ?? "") });
 		if (url.pathname === "/models" || url.pathname.startsWith("/models/"))
 			return this.modelRequest(request, url);
 		if (request.headers.get("Upgrade") !== "websocket")

@@ -459,6 +459,11 @@ export class RoomCore<C> {
 		return this.members.size;
 	}
 
+	/** Whether `id` is here now. */
+	has(id: AvatarId): boolean {
+		return this.byId.has(id);
+	}
+
 	// ---- moderation -----------------------------------------------------------
 
 	setRelations(id: AvatarId, r: { mutes: string[]; blocks: string[]; blockedBy: string[] }): void {
