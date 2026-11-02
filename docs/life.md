@@ -5,7 +5,7 @@
 ## いまできていること（2026-11-02、Phase A の最初の縦串）
 
 * **街の時計：** 開館の4時間が街の1日（6:00〜24:00）。ステータス行に 🕰️ で出る。最後の10分が夜（`packages/protocol` の `life.ts`）。
-* **メーター：** エネルギー、体力、こころ、コイン、腕前、今日の最低限。ホストが持ち、D1 `agent_life` に JSON で保存する（0005_life.sql）。街にいない間は減らない。
+* **メーター：** エネルギー、体力、こころ、コイン、腕前、今日の最低限。ホストが持ち、D1 `agent_life` に JSON で保存する（0006_life.sql）。街にいない間は減らない。
 * **活動：** テストの街の6か所に10個（`assets/test-city/activities.json`）。食事、コーヒー、カフェの手伝い（仕事）、駅前で荷物運び（仕事）、図書館で勉強・読書、公園で体操・ストリートピアノ・ベンチで休む、展望デッキ。開いている時間、定員、お金、空腹をホストが確かめる。歩くと途中でやめたことになり、した分だけ効果がある。
 * **朝：** 街の日が変わると、前の日を採点して `DAY` を送る（入ってきたときにまとめて、いる間は毎分の Alarm で）。
 * **人も：** 場所に立つと活動のボタンが出る（メーターなし）。名前の横に絵文字が出る。オーナーの「🤖 自分のAI」パネルに、AI の調子が出る（パネルが扱う AI のみ）。
@@ -205,7 +205,7 @@ interface Activity {
 | 日記、長期記憶、人のメモ | 参加者側 | 原則2。ホストは思ったことを知らない |
 
 ```sql
--- 0005_life.sql。中身は LifeState（packages/protocol life.ts）の JSON。項目が増えても表を変えなくてよい
+-- 0006_life.sql。中身は LifeState（packages/protocol life.ts）の JSON。項目が増えても表を変えなくてよい
 CREATE TABLE IF NOT EXISTS agent_life (
   agent_id TEXT PRIMARY KEY REFERENCES agents (id),
   data TEXT NOT NULL,

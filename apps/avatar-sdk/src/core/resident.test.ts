@@ -2,7 +2,7 @@ import type { AvatarState, ClientToHost, HostToClient } from "@rojibura/protocol
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { Mirror, Move, MoveBook, RehearseRequest } from "./body.ts";
 import { FALLBACK_REPLIES } from "./prompt.ts";
-import { type Mind, parseKeysText, Resident, touchedParts } from "./resident.ts";
+import { type Mind, parseKeysText, Resident, type ResidentOptions, touchedParts } from "./resident.ts";
 import type { Memory } from "./types.ts";
 
 type Call = [tool: string, args: Record<string, unknown>];
@@ -72,6 +72,7 @@ function setup(
 		dailyTurnLimit?: number;
 		memory?: Memory;
 		body?: { mirror: Mirror; moves: MoveBook; sees?: boolean };
+		town?: Pick<ResidentOptions, "shops" | "jobZones">;
 	} = {},
 ) {
 	const { mind, prompts, results, ref } = scripted(turns);
@@ -88,6 +89,7 @@ function setup(
 		tickMs: [1e9, 1e9],
 		quietTickMs: [1e9, 1e9],
 		...opts.body,
+		...opts.town,
 	});
 	ref.resident = resident;
 	resident.handle({
@@ -132,6 +134,71 @@ let current: Resident | undefined;
 afterEach(() => current?.stop());
 
 describe("Resident", () => {
+	test("knows its coins; works only where one can, and buys at the counter", async () => {
+		const town: Pick<ResidentOptions, "shops" | "jobZones"> = {
+			shops: [
+				{
+					id: "bakery",
+					name: "パン屋",
+					currency: "銅貨",
+					counter: [1, 0],
+					goods: [
+						{ id: "anpan", name: "あんぱん", price: 2, color: "#b5733a", food: true },
+						{ id: "cake", name: "ケーキ", price: 50, color: "#ffffff", food: true },
+					],
+				},
+			],
+			jobZones: [
+				{
+					id: "w",
+					kind: "work",
+					name: "パン屋",
+					poly: [
+						[-2, -2],
+						[2, -2],
+						[2, 2],
+						[-2, 2],
+					],
+				},
+				{
+					id: "s",
+					kind: "study",
+					name: "図書館",
+					poly: [
+						[20, 20],
+						[24, 20],
+						[24, 24],
+						[20, 24],
+					],
+				},
+			],
+		};
+		const s = setup(
+			[
+				{
+					calls: [
+						["work", { kind: "study" }],
+						["work", { kind: "work" }],
+						["buy", { shop: "bakery", goods: "cake" }],
+						["buy", { shop: "bakery", goods: "anpan" }],
+					],
+				},
+			],
+			{ town },
+		);
+		current = s.resident;
+		s.resident.handle({ t: "WALLET", coins: 5 });
+		s.resident.handle(addressed("h_saki", "おなかすいた？"));
+		await until(() => s.results.length === 4);
+		expect(s.prompts[0]).toContain("財布: 5銅貨。ここでは働ける（work）");
+		expect(s.results[0]).toContain("ここでは勉強できない。図書館で勉強できる");
+		expect(s.results[1]).toBe("働きはじめた。1分で1銅貨。歩いて出ると終わる。");
+		expect(s.results[2]).toContain("お金が足りない");
+		expect(s.results[3]).toBe("あんぱんを買った（2銅貨）。");
+		expect(s.sent).toContainEqual({ t: "JOB", kind: "work" });
+		expect(s.sent).toContainEqual({ t: "BUY", shop: "bakery", goods: "anpan" });
+	});
+
 	test("answers the one who spoke, in their conversation, and is busy meanwhile", async () => {
 		const s = setup([{ calls: [["say", { text: "こんばんは。", to: "h_saki" }]] }]);
 		current = s.resident;

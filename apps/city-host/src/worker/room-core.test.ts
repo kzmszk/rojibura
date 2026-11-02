@@ -1,7 +1,14 @@
 import type { ClientToHost, HostToClient, Item, Vec2 } from "@rojibura/protocol";
 import { AI_CONV_MAX_TURNS, PRESENCE_TIMEOUT_MS } from "@rojibura/protocol";
 import { beforeEach, describe, expect, test } from "vitest";
-import { AWAY_GRACE_MS, type JoinInfo, RoomCore, type Walkable, type World } from "./room-core.ts";
+import {
+	AWAY_GRACE_MS,
+	type JoinInfo,
+	RoomCore,
+	type Walkable,
+	type WalletStore,
+	type World,
+} from "./room-core.ts";
 
 // 40 x 40 m square with a 10 x 10 m building in the middle (x, z in [-5, 5]).
 const inBuilding = (p: Vec2) => Math.abs(p[0]) < 5 && Math.abs(p[1]) < 5;
@@ -19,7 +26,7 @@ const walk: Walkable = {
 
 type Conn = { name: string; inbox: HostToClient[]; closed?: number };
 
-function setup(extra: Partial<World> = {}, saved?: (items: Item[]) => void) {
+function setup(extra: Partial<World> = {}, saved?: (items: Item[]) => void, wallets?: WalletStore) {
 	let now = 1_000_000;
 	let n = 0;
 	const clock = { now: () => now, advance: (ms: number) => (now += ms) };
@@ -40,7 +47,7 @@ function setup(extra: Partial<World> = {}, saved?: (items: Item[]) => void) {
 		},
 		clock.now,
 		() => String(++n),
-		saved ? { items: { save: saved } } : {},
+		{ ...(saved ? { items: { save: saved } } : {}), ...(wallets ? { wallets } : {}) },
 	);
 	return { room, clock };
 }
@@ -636,6 +643,172 @@ describe("small things", () => {
 	test("things held by someone who is gone lie where they were", () => {
 		ctx.room.loadItems([{ id: "i_x", kind: "box", pos: [1, 1], holder: "h_gone" }]);
 		expect(ctx.room.itemList).toEqual([{ id: "i_x", kind: "box", pos: [1, 1] }]);
+	});
+});
+
+describe("shops", () => {
+	const shop = {
+		id: "seven",
+		name: "セブンイレブン",
+		currency: "銅貨",
+		counter: [10, 10] as Vec2,
+		goods: [
+			{ id: "onigiri", name: "おにぎり", price: 3, color: "#ffffff", food: true },
+			{ id: "novel", name: "小説", price: 8, color: "#2a6f97" },
+		],
+	};
+	let saved: [string, number][];
+	beforeEach(() => {
+		saved = [];
+		ctx = setup({ shops: [shop] }, undefined, { add: (id, d) => saved.push([id, d]) });
+		ctx.room.loadItems(undefined);
+	});
+	const rich = (id: string) => human(id, { coins: 1000 });
+
+	test("bought at the counter it is in your hand for everyone to see; food is eaten and gone", () => {
+		const a = conn("a");
+		const b = conn("b");
+		place(a, rich("alice"), [9, 10]);
+		place(b, rich("bob"), [12, 12]);
+		ctx.room.handle(a, { t: "BUY", shop: "seven", goods: "onigiri" });
+		expect(last(b)).toMatchObject({
+			t: "ITEM",
+			item: { kind: "goods", holder: "h_alice", goods: { id: "onigiri", name: "おにぎり", food: true } },
+		});
+		// one thing in hand at a time
+		ctx.room.handle(a, { t: "BUY", shop: "seven", goods: "novel" });
+		expect(last(a)).toMatchObject({ t: "NOTICE", kind: "rejected" });
+		const id = (ctx.room.itemList[0] as Item).id;
+		ctx.room.handle(a, { t: "USE" });
+		expect(last(b)).toEqual({ t: "ITEM_GONE", id, by: "h_alice" });
+		expect(ctx.room.itemList).toEqual([]);
+		// a book is not eaten; it can be put down like anything else
+		ctx.room.handle(a, { t: "BUY", shop: "seven", goods: "novel" });
+		ctx.room.handle(a, { t: "USE" });
+		expect(last(a)).toMatchObject({ t: "NOTICE", message: "それは食べられません" });
+		ctx.room.handle(a, { t: "DROP" });
+		expect(ctx.room.itemList[0]).toMatchObject({ kind: "goods", pos: [9, 10] });
+	});
+
+	test("far from the counter, or what the shop does not sell: nothing is bought", () => {
+		const a = conn("a");
+		place(a, rich("alice"), [-10, -10]);
+		ctx.room.handle(a, { t: "BUY", shop: "seven", goods: "onigiri" });
+		expect(last(a)).toMatchObject({ t: "NOTICE", message: "お店のカウンターまで行ってください" });
+		place(a, rich("alice"), [10, 11]);
+		ctx.room.handle(a, { t: "BUY", shop: "seven", goods: "umbrella" });
+		ctx.room.handle(a, { t: "BUY", shop: "books", goods: "onigiri" });
+		expect(ctx.room.itemList).toEqual([]);
+	});
+
+	test("bought things lying about are tidied away beyond MAX_GOODS, oldest first", () => {
+		const a = conn("a");
+		const b = conn("b");
+		place(a, rich("alice"), [10, 11]);
+		place(b, rich("bob"), [12, 12]);
+		for (let i = 0; i < 31; i++) {
+			ctx.clock.advance(2000);
+			ctx.room.handle(a, { t: "BUY", shop: "seven", goods: "novel" });
+			ctx.room.handle(a, { t: "DROP" });
+		}
+		const gone = b.inbox.filter((m) => m.t === "ITEM_GONE");
+		expect(gone).toHaveLength(1);
+		expect(ctx.room.itemList).toHaveLength(30);
+	});
+});
+
+describe("wallets, work and study", () => {
+	const shop = {
+		id: "bakery",
+		name: "パン屋",
+		currency: "銅貨",
+		counter: [10, 10] as Vec2,
+		goods: [{ id: "baguette", name: "バゲット", price: 3, color: "#d4a056", food: true }],
+	};
+	const sq = (x0: number, z0: number, x1: number, z1: number): Vec2[] => [
+		[x0, z0],
+		[x1, z0],
+		[x1, z1],
+		[x0, z1],
+	];
+	const jobZones = [
+		{ id: "work_bakery", kind: "work" as const, name: "パン屋", poly: sq(8, 8, 14, 14) },
+		{ id: "study_library", kind: "study" as const, name: "図書館", poly: sq(-14, 8, -8, 14) },
+	];
+	let saved: [string, number][];
+	beforeEach(() => {
+		saved = [];
+		ctx = setup({ shops: [shop], jobZones }, undefined, { add: (id, d) => saved.push([id, d]) });
+		ctx.room.loadItems(undefined);
+	});
+	const wallet = (c: Conn) => c.inbox.filter((m) => m.t === "WALLET").at(-1);
+
+	test("the wallet is told on joining; buying takes the price, and too little buys nothing", () => {
+		const a = conn("a");
+		ctx.room.join(a, human("alice", { coins: 5 }));
+		expect(wallet(a)).toEqual({ t: "WALLET", coins: 5 });
+		const me = ctx.room.members.get(a);
+		if (me) me.move = { kind: "idle", pos: [10, 11], at: ctx.clock.now() };
+		ctx.room.handle(a, { t: "BUY", shop: "bakery", goods: "baguette" });
+		expect(wallet(a)).toEqual({ t: "WALLET", coins: 2, change: -3, why: "buy" });
+		expect(saved).toEqual([["h_alice", -3]]);
+		ctx.room.handle(a, { t: "USE" });
+		ctx.room.handle(a, { t: "BUY", shop: "bakery", goods: "baguette" });
+		expect(last(a)).toMatchObject({ t: "NOTICE", kind: "rejected" });
+		expect((last(a) as { message: string }).message).toContain("1枚足りません");
+		expect(ctx.room.itemList).toEqual([]);
+		// someone with no wallet (D1 could not be read) cannot buy
+		const b = conn("b");
+		place(b, human("bob"), [10, 11]);
+		ctx.room.handle(b, { t: "BUY", shop: "bakery", goods: "baguette" });
+		expect(last(b)).toMatchObject({ t: "NOTICE", message: "お財布が見つかりません（入り直してください）" });
+	});
+
+	test("working earns a coin a minute while there; walking out ends it and pays what was earned", () => {
+		const a = conn("a");
+		const b = conn("b");
+		place(a, human("alice", { coins: 100 }), [11, 11]);
+		place(b, human("bob", { coins: 100 }), [-10, -10]);
+		ctx.room.handle(a, { t: "JOB", kind: "study" });
+		expect(last(a)).toMatchObject({ t: "NOTICE", kind: "rejected" });
+		ctx.room.handle(a, { t: "JOB", kind: "work" });
+		expect(last(b)).toEqual({ t: "JOBBED", id: "h_alice", job: "work" });
+		const c = conn("c");
+		ctx.room.join(c, human("carol"));
+		const w = c.inbox[0] as Extract<HostToClient, { t: "WELCOME" }>;
+		expect(w.avatars.find((s) => s.id === "h_alice")?.job).toBe("work");
+		// paid as the room sweeps (every minute), one coin per full minute
+		ctx.clock.advance(150_000);
+		ctx.room.sweep(() => ctx.clock.now());
+		expect(wallet(a)).toEqual({ t: "WALLET", coins: 102, change: 2, why: "work" });
+		ctx.clock.advance(40_000);
+		// walking out of the shop: what was earned since is paid, and the work ends
+		ctx.room.handle(a, {
+			t: "MOVE_PATH",
+			path: [
+				[11, 11],
+				[11, 6],
+			],
+			speed: 1.4,
+			seq: 1,
+		});
+		expect(wallet(a)).toEqual({ t: "WALLET", coins: 103, change: 1, why: "work" });
+		expect(last(b)).toEqual({ t: "JOBBED", id: "h_alice", job: null });
+		expect(saved).toEqual([
+			["h_alice", 2],
+			["h_alice", 1],
+		]);
+	});
+
+	test("studying at the library earns the same; leaving the area pays up", () => {
+		const a = conn("a");
+		place(a, ai("hal", "kazu", { coins: 100 }), [-11, 11]);
+		ctx.room.handle(a, { t: "JOB", kind: "study" });
+		const m = ctx.room.members.get(a);
+		expect(m && ctx.room.contextFor(m)).toMatchObject({ coins: 100, job: "study", canJob: ["study"] });
+		ctx.clock.advance(61_000);
+		ctx.room.leave(a);
+		expect(saved).toEqual([["a_hal", 1]]);
 	});
 });
 

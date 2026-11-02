@@ -273,7 +273,7 @@ describe("a resident's life", () => {
 	});
 
 	test("the system prompt explains how to live, and lists what can be done", () => {
-		const p = residentSystemPrompt({ name: "ハル", personality: "のんびり" }, [], false, ACTIVITIES);
+		const p = residentSystemPrompt({ name: "ハル", personality: "のんびり" }, [], false, [], ACTIVITIES);
 		expect(p).toMatch(/活動をする: do/);
 		expect(p).toMatch(/- cafe_meal: カフェで食事（cafe。街の30分、15コイン。6〜10時。エネルギー \+35）/);
 		expect(residentSystemPrompt({ name: "ハル", personality: "のんびり" })).not.toMatch(/do、/);

@@ -169,7 +169,7 @@ if (args.mind === "pi" || args.mind === "claude") {
 	const life = city.activities.length > 0;
 	const journal = life ? new FileJournal(join(dir, `${encodeURIComponent(name)}.life`)) : undefined;
 	if (journal) log.info(`日記: ${shortPath(journal.dir, homedir())}`);
-	const system = residentSystemPrompt(persona, city.landmarks, body, city.activities);
+	const system = residentSystemPrompt(persona, city.landmarks, body, city.shops, city.activities);
 	const mind = claude
 		? await createClaudeMind({
 				model: args.model,
@@ -201,6 +201,8 @@ if (args.mind === "pi" || args.mind === "claude") {
 		nav: city.nav,
 		landmarks: city.landmarks,
 		...(journal ? { journal, activities: city.activities } : {}),
+		shops: city.shops,
+		jobZones: city.jobZones,
 		logger: log,
 		send,
 		dailyTurnLimit: dailyLimit,

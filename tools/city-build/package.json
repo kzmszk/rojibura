@@ -10,5 +10,11 @@
 		"@recast-navigation/generators": "0.43.1",
 		"@rojibura/nav": "workspace:*",
 		"sharp": "0.35.5"
+	},
+	"devDependencies": {
+		"@gltf-transform/core": "4.5.1",
+		"@gltf-transform/extensions": "4.5.1",
+		"@gltf-transform/functions": "4.5.1",
+		"meshoptimizer": "1.3.0"
 	}
 }

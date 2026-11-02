@@ -39,6 +39,7 @@ import {
 import * as THREE from "three";
 import { AgentPanel } from "./agent-panel.ts";
 import { api, onApiUsage } from "./api.ts";
+import { AreaNature, SEASON_LABEL } from "./area-nature.ts";
 import { currentArea, travelUrl } from "./areas.ts";
 import { AvatarView, TRAVEL } from "./avatars.ts";
 import { BuildPanel } from "./build-ui.ts";
@@ -46,13 +47,16 @@ import { BuildsView, makeObject, modelsFromHost } from "./builds.ts";
 import { VIEW_LABEL, VIEWS, type View, ViewController } from "./camera.ts";
 import { ItemsView } from "./items.ts";
 import { actionBar, Relations, showAdmin } from "./moderation.ts";
+import { SEASONS, type Season } from "./nature/season.ts";
 import { CityConnection, type ConnState } from "./net.ts";
 import { rememberFirstVisit, reportFirstVisit } from "./onboarding.ts";
 import { PORTAL_REACH, PortalsView } from "./portals.ts";
 import { CityScene } from "./scene.ts";
 import { SettingsPanel } from "./settings.ts";
+import { ShopsUi } from "./shops.ts";
 import { STYLES } from "./styles.ts";
 import { UsagePanel } from "./usage-panel.ts";
+import { Zones } from "./zones.ts";
 
 export { mountMirror } from "./mirror.ts";
 
@@ -321,9 +325,14 @@ async function startCity(
 	let nav = navigatorFor(mesh);
 	scene.heightHint = (x, z) => mesh.heightAt([x, z]);
 	const sceneUrls = area.scene.map((f) => new URL(f, new URL(area.assetBase, location.href)).href);
-	await scene.loadCity(sceneUrls, (n) => {
+	const cityRoots = await scene.loadCity(sceneUrls, (n) => {
 		loading.textContent = `${area.name}を読み込んでいます…（${n}/${sceneUrls.length}）`;
 	});
+	// trees and seasons, where the area has them (docs/prd.md 3.8.6)
+	const nature = await AreaNature.create(scene, area, cityRoots, params);
+	// places with rules of their own: indoors, the onsen
+	const zones = new Zones();
+	await zones.load(area.dir);
 	loading.remove();
 	const portals = new PortalsView(
 		scene.scene,
@@ -422,6 +431,19 @@ async function startCity(
 	myAi.onclick = fromSettings(() => agentPanel.show());
 	if (openAi) agentPanel.show();
 	settings.row("🤖 自分のAI", myAi);
+	// the season you see (the date's, or one you choose): only you see it change (docs/prd.md 3.8.6)
+	if (nature) {
+		const seasonSelect = el("select", "");
+		for (const season of SEASONS) {
+			const o = el("option", "", SEASON_LABEL[season]);
+			o.value = season;
+			seasonSelect.append(o);
+		}
+		seasonSelect.value = nature.season;
+		seasonSelect.title = "自分の画面だけ変わります";
+		seasonSelect.onchange = () => void nature.setSeason(seasonSelect.value as Season);
+		settings.row("🍁 季節", seasonSelect);
+	}
 	// your own AIs walk with you (docs/prd.md 3.4.9); shown while one of them is here
 	const companionBox = el("input", "");
 	companionBox.type = "checkbox";
@@ -498,7 +520,11 @@ async function startCity(
 	gateButton.hidden = gates.length === 0;
 	gateButton.onclick = () => goToGate();
 	const left = el("div", "rj-left");
-	left.append(status, gateButton);
+	// your wallet (docs/prd.md 3.8.6): shown once the host tells it
+	const purse = el("div", "rj-status rj-purse", "");
+	purse.hidden = true;
+	purse.title = "お店や宿で働くか、学校で勉強すると増える（1分で1銅貨）";
+	left.append(status, purse, gateButton);
 	hud.append(left, right);
 	const chat = el("div", "rj-chat");
 	// what was said fades after a while; it all comes back while talking or pointing at it (docs/prd.md 3.4.12)
@@ -565,7 +591,25 @@ async function startCity(
 	dropButton.type = "button";
 	dropButton.title = "置く（G）";
 	dropButton.onclick = () => conn.send({ t: "DROP" });
-	motionBar.append(pickButton, throwButton, dropButton);
+	// something bought to eat or drink (docs/prd.md 3.8.6)
+	const eatButton = el("button", "rj-held", "😋");
+	eatButton.type = "button";
+	eatButton.title = "食べる・飲む";
+	eatButton.onclick = () => conn.send({ t: "USE" });
+	// working or studying where you stand earns coins (docs/prd.md 3.8.6)
+	const jobButtons = (["work", "study"] as const).map((kind) => {
+		const b = el("button", "", kind === "work" ? "💼" : "📖");
+		b.type = "button";
+		b.title = kind === "work" ? "ここで働く（1分で1銅貨）" : "ここで勉強する（1分で1銅貨）";
+		b.hidden = true;
+		b.onclick = () => conn.send({ t: "JOB", kind });
+		return b;
+	});
+	const stopJobButton = el("button", "rj-held", "⏹");
+	stopJobButton.type = "button";
+	stopJobButton.hidden = true;
+	stopJobButton.onclick = () => conn.send({ t: "JOB", kind: null });
+	motionBar.append(pickButton, throwButton, dropButton, eatButton, ...jobButtons, stopJobButton);
 	// your own AI close by: pat its head (docs/prd.md 3.4.11)
 	const patButton = el("button", "", "🤚");
 	patButton.type = "button";
@@ -586,7 +630,10 @@ async function startCity(
 	// at a place: what you can do there, and stopping what you are doing (docs/life.md 6)
 	const actsBar = el("div", "rj-acts");
 	actsBar.hidden = true;
-	root.append(hud, chat, toast, travel, actsBar, offerBox, agentPanel.el, settings.el);
+	// at a shop's counter: what it sells (docs/prd.md 3.8.6)
+	const shops = new ShopsUi((shop, goods) => conn.send({ t: "BUY", shop: shop.id, goods }));
+	void shops.load(area.dir);
+	root.append(hud, chat, toast, travel, actsBar, offerBox, agentPanel.el, settings.el, shops.el);
 	if (area.credit) root.append(el("div", "rj-credit", area.credit));
 
 	const avatars = new Map<AvatarId, AvatarView>();
@@ -690,7 +737,10 @@ async function startCity(
 		for (const v of avatars.values()) v.setDoing(badgeOf(v.state.doing));
 	});
 	const view = new ViewController(scene);
+	/** The view chosen outside, while indoors switched it to the eyes. */
+	let viewOutside: View | null = null;
 	const setView = (v: View) => {
+		viewOutside = null;
 		view.set(v, myId ? (avatars.get(myId) ?? null) : null);
 		viewSelect.value = v;
 		try {
@@ -711,9 +761,11 @@ async function startCity(
 	scene.scene.add(items.group);
 	/** The throw and put-down buttons show while holding something. */
 	const showHeld = () => {
-		const holding = !!(myId && items.heldBy(myId));
-		throwButton.hidden = !holding;
-		dropButton.hidden = !holding;
+		const held = myId ? items.heldBy(myId) : undefined;
+		throwButton.hidden = !held;
+		dropButton.hidden = !held;
+		eatButton.hidden = !held?.goods?.food;
+		if (held?.goods) eatButton.title = `${held.goods.name}を食べる・飲む`;
 	};
 	showHeld();
 
@@ -775,6 +827,18 @@ async function startCity(
 					const towards =
 						change?.did === "pick" ? new THREE.Vector3(m.item.pos[0], 0, m.item.pos[1]) : undefined;
 					if (change) avatars.get(change.who)?.perform(change.did, conn.hostNow(), towards);
+					// just bought: it appears in the buyer's hand
+					if (m.item.goods && m.item.holder === myId && !change)
+						showToast(`${m.item.goods.name}を買いました`);
+					showHeld();
+					break;
+				}
+				case "ITEM_GONE": {
+					const was = m.by ? items.heldBy(m.by) : undefined;
+					items.remove(m.id);
+					if (m.by && was?.goods) {
+						avatars.get(m.by)?.say(`（${was.goods.name}をいただきます）`, conn.hostNow());
+					}
 					showHeld();
 					break;
 				}
@@ -858,6 +922,27 @@ async function startCity(
 					addLog(`${v?.state.name ?? "?"}${to ? ` → ${to}` : ""}`, m.text, m.id === myId ? "mine" : "");
 					break;
 				}
+				case "WALLET": {
+					purse.hidden = false;
+					purse.textContent = `👛 ${m.coins} 銅貨`;
+					if (m.change && m.change > 0) {
+						purse.classList.remove("earned");
+						void purse.offsetWidth;
+						purse.classList.add("earned");
+					}
+					break;
+				}
+				case "JOBBED":
+					avatars.get(m.id)?.setJob(m.job);
+					if (m.id === myId)
+						showToast(
+							m.job === "work"
+								? "働きはじめました（1分で1銅貨）。歩いて出ると終わります"
+								: m.job === "study"
+									? "勉強をはじめました（1分で1銅貨）。歩いて出ると終わります"
+									: "おつかれさまでした",
+						);
+					break;
 				case "STATUS_CHANGED":
 					avatars.get(m.id)?.setStatus(m.status);
 					break;
@@ -915,6 +1000,7 @@ async function startCity(
 				offer: (kind: Together) => offer(kind),
 				throwHeld: () => throwHeld(),
 				area,
+				nature,
 				mesh: () => mesh,
 				me: () => (myId ? avatars.get(myId) : undefined),
 				/** Stops following your avatar and looks at (x, z) from `dist` away. */
@@ -1563,6 +1649,9 @@ async function startCity(
 		}
 		actsBar.hidden = actsBar.childElementCount === 0;
 	};
+	/** Avatars in their bath towel now, and those whose towel is ready (docs/prd.md 3.8.6). */
+	const bathers = new WeakSet<AvatarView>();
+	const readied = new WeakSet<AvatarView>();
 	const frame = (t: number) => {
 		const dt = Math.min(0.1, (t - last) / 1000);
 		last = t;
@@ -1573,6 +1662,18 @@ async function startCity(
 			const near = owner && owner.root.position.distanceTo(v.root.position) < ATTEND_M;
 			v.attend(near ? owner.eyePosition() : null);
 			v.update(now, dt, scene);
+			// at the onsen everyone has taken their clothes off and wears a bath towel; the towel is made
+			// before they get there (the first one of a model takes a moment)
+			const at = poseAt(v.state.move, now).pos;
+			const bathing = zones.at(at, "bath") !== null;
+			if (bathing !== bathers.has(v)) {
+				v.setBathing(bathing);
+				if (bathing) bathers.add(v);
+				else bathers.delete(v);
+			} else if (!bathing && !readied.has(v) && zones.near(at, "bath", 25)) {
+				readied.add(v);
+				v.prepareBath();
+			}
 		}
 		items.update(now);
 		pickButton.hidden = nearestThing() === null;
@@ -1580,6 +1681,24 @@ async function startCity(
 		const withAi = [...avatars.values()].some((a) => a.state.kind === "ai" && a.state.ownerId === myId);
 		companionRow.hidden = !withAi;
 		const mine = myId ? avatars.get(myId) : undefined;
+		// indoors the camera looks from your eyes (from behind it would be above the ceiling)
+		const indoors = mine ? zones.at(poseAt(mine.state.move, now).pos, "indoor") !== null : false;
+		if (indoors && !viewOutside && view.view !== "eyes") {
+			viewOutside = view.view;
+			view.set("eyes", mine ?? null);
+		} else if (!indoors && viewOutside) {
+			view.set(viewOutside, mine ?? null);
+			viewOutside = null;
+		}
+		// working or studying: where you stand offers it, and while at it, the way to stop
+		const job = mine?.state.job;
+		stopJobButton.hidden = !job;
+		stopJobButton.title = job === "work" ? "働くのをやめる" : "勉強をやめる";
+		for (const [i, kind] of (["work", "study"] as const).entries()) {
+			const b = jobButtons[i] as HTMLButtonElement;
+			b.hidden = !!job || !mine || zones.at(poseAt(mine.state.move, now).pos, kind) === null;
+		}
+		nature?.update(dt, now);
 		if (keys.size > 0) steer(t);
 		followStep(t);
 		if (companion && withAi) stopStep();
@@ -1601,6 +1720,7 @@ async function startCity(
 			shownClock = clock;
 			updateStatus(shownStatus.state, shownStatus.detail);
 		}
+		shops.update(mine ? poseAt(mine.state.move, now).pos : null);
 		// at a portal: offer the way through
 		const gateHere = mine ? portals.near(poseAt(mine.state.move, now).pos) : null;
 		if (gateHere !== shownGate) {

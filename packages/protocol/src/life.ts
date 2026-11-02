@@ -1,6 +1,8 @@
 // An AI's life in the city (docs/life.md): the city's clock, the meters, the activities and their rules.
 // Pure functions shared by the host (which decides), the SDK (which plans) and the browser (which shows).
 
+import { START_COINS } from "./limits.ts";
+
 // ---- the city's clock (docs/life.md 1) ----
 
 /** One city day lasts this long in real time: JST 20:00-24:00, the opening hours, is exactly one day. */
@@ -86,8 +88,6 @@ export interface ActivitiesData {
 
 /** How close to the place one must be to start (m). */
 export const ACTIVITY_REACH = 4;
-/** Coins a new AI starts with. */
-export const START_COINS = 100;
 /** Energy in the morning after a night's sleep, before what was left undone. */
 export const MORNING_ENERGY = 70;
 /** Energy used per city hour just by being about (scaled by fitness). */

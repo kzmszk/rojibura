@@ -29,6 +29,7 @@ export class CityScene {
 	private readonly down = new THREE.Raycaster();
 	private readonly root: HTMLElement;
 	private readonly sun: THREE.DirectionalLight;
+	private readonly hemi: THREE.HemisphereLight;
 	private water: THREE.Mesh | null = null;
 
 	constructor(root: HTMLElement) {
@@ -54,7 +55,8 @@ export class CityScene {
 		this.controls.maxDistance = 45;
 		this.controls.enablePan = false;
 
-		this.scene.add(new THREE.HemisphereLight(0xeaf2ff, 0x6b6250, 1.6));
+		this.hemi = new THREE.HemisphereLight(0xeaf2ff, 0x6b6250, 1.6);
+		this.scene.add(this.hemi);
 		const sun = new THREE.DirectionalLight(0xfff1dc, 2.4);
 		sun.position.copy(SUN_OFFSET);
 		sun.castShadow = true;
@@ -97,6 +99,7 @@ export class CityScene {
 			this.water = water;
 		}
 		if (view.shadow) this.setShadow(view.shadow);
+		if (view.camera) this.controls.maxDistance = view.camera;
 	}
 
 	private setShadow(half: number): void {
@@ -107,25 +110,52 @@ export class CityScene {
 		s.updateProjectionMatrix();
 	}
 
-	/** Loads the area's glb files (meshopt-compressed ones too); `onFile` after each. */
-	async loadCity(urls: string[], onFile?: (done: number) => void): Promise<void> {
+	/** Loads the area's glb files (meshopt-compressed ones too); `onFile` after each. Resolves to their roots. */
+	async loadCity(urls: string[], onFile?: (done: number) => void): Promise<THREE.Object3D[]> {
 		const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
 		let done = 0;
-		await Promise.all(
+		return await Promise.all(
 			urls.map(async (url) => {
 				const gltf = await loader.loadAsync(url);
 				gltf.scene.traverse((o) => {
 					if ((o as THREE.Mesh).isMesh) {
-						o.castShadow = true;
+						// snow lies in shadow, it casts none worth drawing
+						o.castShadow = !o.name.startsWith("snow_");
 						o.receiveShadow = true;
-						// trees' crowns are not ground
-						if (!o.name.startsWith("tree_crown") && !o.name.includes("fountain_water")) this.ground.push(o);
+						// trees' crowns, water and the winter's snow (feet sink into it) are not ground
+						if (!/^(tree_crown|snow_|water_)/.test(o.name) && !o.name.includes("fountain_water"))
+							this.ground.push(o);
 					}
 				});
 				this.scene.add(gltf.scene);
 				onFile?.(++done);
+				return gltf.scene;
 			}),
 		);
+	}
+
+	/** The sky, fog and light of a season (nature/season.ts); the fog keeps to the area's view distance. */
+	applySeason(v: {
+		sky: string;
+		fog: [number, number];
+		sunColor: number;
+		sunIntensity: number;
+		hemiSky: number;
+		hemiGround: number;
+		hemiIntensity: number;
+	}): void {
+		const sky = new THREE.Color(v.sky);
+		this.scene.background = sky;
+		if (this.scene.fog instanceof THREE.Fog) {
+			this.scene.fog.color = sky;
+			this.scene.fog.near = v.fog[0];
+			this.scene.fog.far = Math.min(v.fog[1], this.camera.far);
+		}
+		this.sun.color.setHex(v.sunColor);
+		this.sun.intensity = v.sunIntensity;
+		this.hemi.color.setHex(v.hemiSky);
+		this.hemi.groundColor.setHex(v.hemiGround);
+		this.hemi.intensity = v.hemiIntensity;
 	}
 
 	/** Things people can walk on that were built (decks, bridges) count as ground too. */

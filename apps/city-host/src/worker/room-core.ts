@@ -36,6 +36,7 @@ import {
 	type Doing,
 	decay,
 	dist,
+	EARN_MS,
 	facing,
 	finishActivity,
 	type HostToClient,
@@ -46,11 +47,14 @@ import {
 	type ItemId,
 	type ItemKind,
 	isPosture,
+	type JobKind,
+	type JobZone,
 	LEAD_INTERVAL_MS,
 	LEAD_MIN_DISTANCE,
 	LEAD_REACH,
 	type LeaveReason,
 	type LifeState,
+	MAX_GOODS,
 	MAX_PATH_LENGTH,
 	MAX_PATH_POINTS,
 	MAX_SPEED,
@@ -66,6 +70,8 @@ import {
 	poseAt,
 	RATE_VIOLATIONS_BEFORE_CLOSE,
 	realMs,
+	SHOP_REACH,
+	type Shop,
 	type SpatialContext,
 	type Status,
 	startActivity,
@@ -142,6 +148,11 @@ export interface ItemStore {
 	save(items: Item[]): void;
 }
 
+/** Keeps the wallets (D1): each change as it happens, added to what is saved (docs/prd.md 3.8.6). */
+export interface WalletStore {
+	add(id: AvatarId, delta: number): void;
+}
+
 export interface Landmark {
 	id: string;
 	name: string;
@@ -160,6 +171,10 @@ export interface World {
 	fixedBuilds?: Build[];
 	/** Small things that are there when the area starts with none saved (docs/prd.md 3.4.7). */
 	items?: { kind: ItemKind; pos: Vec2 }[];
+	/** Shops to buy things at (docs/prd.md 3.8.6). */
+	shops?: Shop[];
+	/** Where one can work or study to earn coins. */
+	jobZones?: JobZone[];
 	/** What can be done where (assets/<area>/activities.json, docs/life.md 3). */
 	activities?: Activity[];
 }
@@ -189,6 +204,8 @@ export interface JoinInfo {
 	canWatchUsage?: boolean;
 	/** AIs: their life as last saved (D1 agent_life); a new one on their first day (docs/life.md 2). */
 	life?: LifeState;
+	/** Coins in the wallet when they came in (D1). Only the host's guide has none (it buys for nothing). */
+	coins?: number;
 }
 
 /** Member state that survives hibernation (kept in the WebSocket attachment, < 2 KB). */
@@ -213,6 +230,8 @@ export interface Member extends JoinInfo {
 	leadAskedAt?: number;
 	/** What it is doing now (docs/life.md 3). */
 	doing?: Doing;
+	/** Working or studying in a zone since host time `since`; `paid` coins of it are in the wallet already. */
+	job?: { kind: JobKind; zone: string; since: number; paid: number };
 }
 
 /** Personal mutes and blocks that concern one avatar (docs/prd.md 4.2). */
@@ -333,6 +352,7 @@ export class RoomCore<C> {
 	private readonly items = new Map<ItemId, Item>();
 	private readonly itemStore: ItemStore | undefined;
 	private readonly lifeStore: LifeStore | undefined;
+	private readonly wallets: WalletStore | undefined;
 	/** Members whose connection dropped, by that dead connection: until when they wait, and what they missed. */
 	private readonly away = new Map<C, { until: number; missed: HostToClient[] }>();
 
@@ -341,7 +361,13 @@ export class RoomCore<C> {
 		world: World,
 		clock: () => number,
 		newId: () => string,
-		options: { rules?: RoomRules; store?: BuildStore; items?: ItemStore; life?: LifeStore } = {},
+		options: {
+			rules?: RoomRules;
+			store?: BuildStore;
+			items?: ItemStore;
+			life?: LifeStore;
+			wallets?: WalletStore;
+		} = {},
 	) {
 		// nothing reaches a dropped connection: what matters is kept for when they are back, and their state
 		// is saved on the new connection
@@ -362,6 +388,7 @@ export class RoomCore<C> {
 		this.store = options.store;
 		this.itemStore = options.items;
 		this.lifeStore = options.life;
+		this.wallets = options.wallets;
 		this.walk = world.walk;
 	}
 
@@ -489,6 +516,7 @@ export class RoomCore<C> {
 		// the owner's page shows how their AI is doing (docs/life.md 8), whichever of them came first
 		if (member.kind === "ai") this.sendLife(member, false);
 		else for (const ai of this.members.values()) if (ai.ownerId === member.id) this.sendLife(ai, false);
+		if (member.coins !== undefined) this.transport.send(conn, { t: "WALLET", coins: member.coins });
 		this.broadcastAbout(member, { t: "JOINED", avatar: this.toState(member) }, conn);
 		// an AI whose owner is walking with company joins them at once
 		if (member.kind === "ai") {
@@ -516,13 +544,19 @@ export class RoomCore<C> {
 		v.lastSeen = now;
 		this.members.delete(old);
 		this.volatile.delete(old);
-		// the life kept here is newer than what the gateway read from D1
-		const member: Member = { ...was, ...info, ...(was.life ? { life: was.life } : {}) };
+		// the life and wallet kept here are newer than what was read from D1 for the new connection
+		const member: Member = {
+			...was,
+			...info,
+			...(was.life ? { life: was.life } : {}),
+			...(was.coins !== undefined ? { coins: was.coins } : {}),
+		};
 		this.members.set(conn, member);
 		this.byId.set(member.id, conn);
 		this.volatile.set(conn, v);
 		this.transport.persist(conn, member);
 		this.welcome(conn, member, now, true);
+		if (member.coins !== undefined) this.transport.send(conn, { t: "WALLET", coins: member.coins });
 		for (const msg of away?.missed ?? []) this.transport.send(conn, msg);
 		const before = this.toState(was);
 		const after = this.toState(member);
@@ -592,6 +626,7 @@ export class RoomCore<C> {
 	sweep(lastPing: (conn: C) => number | null): void {
 		const now = this.clock();
 		this.expireAway();
+		this.payJobs(now);
 		for (const [conn, m] of [...this.members]) {
 			if (this.away.has(conn)) continue;
 			const v = this.volatile.get(conn);
@@ -715,7 +750,14 @@ export class RoomCore<C> {
 				}
 				msg.t === "MOVE_PATH" ? this.movePath(conn, m, msg, now) : this.moveVel(conn, m, msg, now);
 				if (m.companion) this.accompany(m, now);
+				// walking out of where one works or studies ends it
+				if (m.job && !this.inJobZone(m, m.job.zone, now)) this.stopJob(m, now);
 				return;
+			case "JOB": {
+				const err = msg.kind ? this.startJob(m, msg.kind, now) : this.stopJob(m, now);
+				if (err) this.notice(conn, "rejected", err);
+				return;
+			}
 			case "COMPANION":
 				if (m.kind !== "human") return;
 				// also how the owner's page says a walk to a place is over (arrived, or they went their own way)
@@ -799,7 +841,9 @@ export class RoomCore<C> {
 			case "OFFER":
 			case "PICK":
 			case "THROW":
-			case "DROP": {
+			case "DROP":
+			case "BUY":
+			case "USE": {
 				if (!this.moveToken(v, now)) {
 					this.violation(conn, v, now);
 					return;
@@ -811,7 +855,11 @@ export class RoomCore<C> {
 							? this.pick(m, msg.item, now)
 							: msg.t === "THROW"
 								? this.throwItem(m, msg.dir, now)
-								: this.drop(m, now);
+								: msg.t === "BUY"
+									? this.buy(m, msg.shop, msg.goods, now)
+									: msg.t === "USE"
+										? this.use(m)
+										: this.drop(m, now);
 				if (err) this.notice(conn, "rejected", err);
 				return;
 			}
@@ -1345,6 +1393,126 @@ export class RoomCore<C> {
 		return null;
 	}
 
+	// ---- shops (docs/prd.md 3.8.6) -------------------------------------------
+
+	/** Buys at a shop's counter: the thing is in the buyer's hand. Coins are not counted (yet). */
+	private buy(m: Member, shopId: string, goodsId: string, now: number): string | null {
+		const shop = this.world.shops?.find((s) => s.id === shopId);
+		const goods = shop?.goods.find((g) => g.id === goodsId);
+		if (!shop || !goods) return "そのお店では売っていません";
+		if (this.holding(m.id)) return "手に持っているものを置いてから買ってください";
+		if (dist(this.positionOf(m, now), shop.counter) > SHOP_REACH) return "お店のカウンターまで行ってください";
+		// the host's own guide has no wallet and pays nothing; anyone else without one cannot buy
+		if (m.coins === undefined && !m.system) return "お財布が見つかりません（入り直してください）";
+		if (m.coins !== undefined) {
+			if (m.coins < goods.price)
+				return `${shop.currency}が${goods.price - m.coins}枚足りません（お店や宿で働くか、学校で勉強すると増えます）`;
+			this.spend(m, -goods.price, "buy");
+		}
+		const item: Item = {
+			id: `i_${this.newId()}`,
+			kind: "goods",
+			goods: { id: goods.id, name: goods.name, color: goods.color, ...(goods.food ? { food: true } : {}) },
+			pos: this.positionOf(m, now),
+			holder: m.id,
+		};
+		this.items.set(item.id, item);
+		this.itemChanged(item);
+		// bought things pile up: the oldest one lying about goes
+		const bought = [...this.items.values()].filter((i) => i.kind === "goods");
+		const spare = bought.filter((i) => !i.holder);
+		for (let k = 0; k < bought.length - MAX_GOODS && k < spare.length; k++) this.itemGone(spare[k] as Item);
+		return null;
+	}
+
+	/** Eats or drinks what the member holds. */
+	private use(m: Member): string | null {
+		const item = this.holding(m.id);
+		if (!item) return "何も持っていません";
+		if (!item.goods?.food) return "それは食べられません";
+		this.itemGone(item, m.id);
+		return null;
+	}
+
+	/** Adds to (or takes from) a wallet, saves it and tells its owner. */
+	private spend(m: Member, delta: number, why: "buy" | JobKind): void {
+		if (m.coins === undefined || delta === 0) return;
+		m.coins += delta;
+		this.wallets?.add(m.id, delta);
+		const conn = this.byId.get(m.id);
+		if (conn !== undefined) {
+			this.transport.persist(conn, m);
+			this.transport.send(conn, { t: "WALLET", coins: m.coins, change: delta, why });
+		}
+	}
+
+	// ---- working and studying (docs/prd.md 3.8.6) -----------------------------
+
+	/** The zone of this kind where `m` stands, if any. */
+	private jobZoneAt(m: Member, kind: JobKind, now: number): JobZone | undefined {
+		const pos = this.positionOf(m, now);
+		return this.world.jobZones?.find((z) => z.kind === kind && insidePolygon(pos, z.poly));
+	}
+
+	/** Still in that zone, and not walking out of it. */
+	private inJobZone(m: Member, zoneId: string, now: number): boolean {
+		const zone = this.world.jobZones?.find((z) => z.id === zoneId);
+		if (!zone) return false;
+		const end = m.move.kind === "path" ? m.move.path[m.move.path.length - 1] : undefined;
+		return insidePolygon(this.positionOf(m, now), zone.poly) && (!end || insidePolygon(end, zone.poly));
+	}
+
+	private startJob(m: Member, kind: JobKind, now: number): string | null {
+		const zone = this.jobZoneAt(m, kind, now);
+		if (!zone)
+			return kind === "work"
+				? "ここでは働けません（お店、温泉宿の帳場、広場の屋台で働けます）"
+				: "ここでは勉強できません（学校と本屋で勉強できます）";
+		if (m.job?.kind === kind && m.job.zone === zone.id) return null;
+		if (m.job) this.payJob(m, now);
+		m.job = { kind, zone: zone.id, since: now, paid: 0 };
+		this.jobChanged(m);
+		return null;
+	}
+
+	private stopJob(m: Member, now: number): string | null {
+		if (!m.job) return null;
+		this.payJob(m, now);
+		delete m.job;
+		this.jobChanged(m);
+		return null;
+	}
+
+	/** What working or studying has earned since it was last paid: one coin per EARN_MS. */
+	private payJob(m: Member, now: number): void {
+		if (!m.job) return;
+		const earned = Math.floor((now - m.job.since) / EARN_MS) - m.job.paid;
+		if (earned <= 0) return;
+		m.job.paid += earned;
+		this.spend(m, earned, m.job.kind);
+	}
+
+	private jobChanged(m: Member): void {
+		const conn = this.byId.get(m.id);
+		if (conn !== undefined) this.transport.persist(conn, m);
+		this.broadcastAll({ t: "JOBBED", id: m.id, job: m.job?.kind ?? null });
+	}
+
+	/** Pays everyone at work, and ends the work of those no longer where they work. */
+	payJobs(now = this.clock()): void {
+		for (const m of this.members.values()) {
+			if (!m.job) continue;
+			if (!this.inJobZone(m, m.job.zone, now)) this.stopJob(m, now);
+			else this.payJob(m, now);
+		}
+	}
+
+	private itemGone(item: Item, by?: AvatarId): void {
+		this.items.delete(item.id);
+		this.itemStore?.save([...this.items.values()]);
+		this.broadcastAll({ t: "ITEM_GONE", id: item.id, ...(by ? { by } : {}) });
+	}
+
 	private moveToken(v: Volatile, now: number): boolean {
 		const rate = this.rules.rateMove;
 		return !rate || takeToken(v.moveBucket, rate.rate, rate.burst, now);
@@ -1823,6 +1991,10 @@ export class RoomCore<C> {
 			nearbyAvatars,
 			nearbyLandmarks,
 		};
+		if (m.coins !== undefined) context.coins = m.coins;
+		if (m.job) context.job = m.job.kind;
+		const canJob = (["work", "study"] as const).filter((k) => this.jobZoneAt(m, k, now));
+		if (canJob.length > 0) context.canJob = canJob;
 		// free play: the area's own builds; elsewhere: what was published, part of the city
 		const builds = this.canBuild ? [...this.builds.values()] : (this.world.fixedBuilds ?? []);
 		if (builds.length > 0)
@@ -1884,6 +2056,11 @@ export class RoomCore<C> {
 		this.volatile.delete(conn);
 		this.away.delete(conn);
 		if (!m) return;
+		// what working or studying earned until now goes into the wallet (D1); it is not carried on elsewhere
+		if (m.job) {
+			this.payJob(m, this.clock());
+			delete m.job;
+		}
 		this.members.delete(conn);
 		if (this.byId.get(m.id) === conn) {
 			this.byId.delete(m.id);
@@ -1926,6 +2103,7 @@ export class RoomCore<C> {
 		if (m.trust) s.trust = m.trust;
 		if (m.kind === "human") s.acceptsAi = m.allowAiApproach !== false;
 		if (m.doing) s.doing = m.doing;
+		if (m.job) s.job = m.job.kind;
 		return s;
 	}
 
@@ -1949,6 +2127,17 @@ function pairKey(a: AvatarId, b: AvatarId): string {
 
 function round1(n: number): number {
 	return Math.round(n * 10) / 10;
+}
+
+/** Whether `p` is inside the polygon (even-odd rule). */
+function insidePolygon(p: Vec2, poly: Vec2[]): boolean {
+	let inside = false;
+	for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+		const [xi, zi] = poly[i] as Vec2;
+		const [xj, zj] = poly[j] as Vec2;
+		if (zi > p[1] !== zj > p[1] && p[0] < ((xj - xi) * (p[1] - zi)) / (zj - zi) + xi) inside = !inside;
+	}
+	return inside;
 }
 
 function round2(n: number): number {

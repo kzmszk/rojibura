@@ -98,6 +98,12 @@ export const THROW_RANGE = 6; // m
 export const THROW_MS = 900; // time in the air
 export const THROW_RELEASE_MS = 350; // from the throw to the hand letting go (the throwing motion)
 
+// shops (docs/prd.md 3.8.6)
+export const SHOP_REACH = 3; // m from the counter
+export const MAX_GOODS = 30; // bought things lying about in an area; the oldest one not in a hand goes first
+export const START_COINS = 100; // in a new wallet
+export const EARN_MS = 60_000; // working or studying earns one coin this often
+
 // an AI moving its own body (docs/prd.md 3.4.11)
 export const BODY_KEYS_MAX = 16;
 export const BODY_SECONDS_MAX = 8; // the last key
