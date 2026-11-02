@@ -34,12 +34,22 @@ export const CLOSE_REPLACED = 4000;
  * other one out, and the two would take turns.
  */
 const NO_RETRY = new Set([1008, CLOSE_REPLACED, 4001, 4003, 4010]);
+/**
+ * What it says while the connection is down is held and sent when it is back as it was (WELCOME `resumed`,
+ * docs/prd.md 3.3), so a reply thought up meanwhile still reaches the one it talks with. Moves are not: the
+ * host has it where it was.
+ */
+const HELD_WHILE_DOWN = new Set<ClientToHost["t"]>(["SAY", "ANSWER"]);
+const HELD_MAX = 10;
 
 export class AgentConnection {
 	private ws: WebSocket | null = null;
 	private heartbeat: ReturnType<typeof setInterval> | null = null;
 	private stopped = false;
 	private retryMs = 2000;
+	/** Welcomed on the current socket (before that, only AUTH may be sent). */
+	private ready = false;
+	private held: ClientToHost[] = [];
 	private readonly opts: ConnectionOptions;
 
 	constructor(opts: ConnectionOptions) {
@@ -59,7 +69,8 @@ export class AgentConnection {
 	}
 
 	send(msg: ClientToHost): void {
-		if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(encode(msg));
+		if (this.ready && this.ws?.readyState === WebSocket.OPEN) this.ws.send(encode(msg));
+		else if (!this.stopped && HELD_WHILE_DOWN.has(msg.t) && this.held.length < HELD_MAX) this.held.push(msg);
 	}
 
 	private open(): void {
@@ -67,6 +78,7 @@ export class AgentConnection {
 		const url = `${baseUrl}/ws/area/${areaId}?agent=${encodeURIComponent(agentId)}`;
 		const ws = new WebSocket(url);
 		this.ws = ws;
+		this.ready = false;
 		// addEventListener rather than on* handlers: the Workers runtime only has the former
 		ws.addEventListener("open", () => logger.info(`connected to ${areaId}`));
 		ws.addEventListener("message", (e) => {
@@ -74,21 +86,29 @@ export class AgentConnection {
 			const msg = parseHostMessage(String(e.data));
 			if (!msg) return;
 			if (msg.t === "CHALLENGE") {
-				void signAuth(this.opts.privateKey, authPayload(areaId, agentId, msg.nonce)).then((sig) =>
-					this.send({ t: "AUTH", sig }),
+				void signAuth(this.opts.privateKey, authPayload(areaId, agentId, msg.nonce)).then(
+					(sig) => ws.readyState === WebSocket.OPEN && ws.send(encode({ t: "AUTH", sig })),
 				);
 				return;
 			}
 			if (msg.t === "WELCOME") {
 				this.retryMs = 2000;
+				this.ready = true;
 				this.startHeartbeat();
 				this.opts.onWelcome?.();
 			}
 			this.opts.onMessage(msg);
+			if (msg.t === "WELCOME") {
+				// back where it was: what it said meanwhile goes now; a fresh start leaves it unsaid
+				const held = this.held;
+				this.held = [];
+				if (msg.resumed) for (const m of held) this.send(m);
+			}
 		});
 		ws.addEventListener("close", (e) => {
 			this.clearHeartbeat();
 			if (this.ws !== ws) return;
+			this.ready = false;
 			this.ws = null;
 			if (this.stopped) return;
 			if (NO_RETRY.has(e.code)) {

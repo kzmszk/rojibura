@@ -41,6 +41,8 @@ export class CityConnection {
 	private stopped = false;
 	/** hostTime = Date.now() + offset */
 	private offset = 0;
+	/** Said while reconnecting: sent once back where we were (WELCOME `resumed`, docs/prd.md 3.3). */
+	private held: ClientToHost[] = [];
 	private readonly o: CityConnectionOptions;
 
 	constructor(o: CityConnectionOptions) {
@@ -63,6 +65,8 @@ export class CityConnection {
 
 	send(msg: ClientToHost): void {
 		if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(encode(msg));
+		else if (!this.stopped && (msg.t === "SAY" || msg.t === "ANSWER") && this.held.length < 10)
+			this.held.push(msg);
 	}
 
 	/**
@@ -115,6 +119,11 @@ export class CityConnection {
 			if ("at" in msg && typeof msg.at === "number" && msg.at > this.hostNow())
 				this.offset = msg.at - Date.now();
 			this.o.onMessage(msg);
+			if (msg.t === "WELCOME") {
+				const held = this.held;
+				this.held = [];
+				if (msg.resumed) for (const m of held) this.send(m);
+			}
 		};
 		ws.onclose = (e) => {
 			if (this.timer) clearInterval(this.timer);

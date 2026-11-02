@@ -246,6 +246,11 @@ export type HostToClient =
 			/** Only where building is allowed (free play, docs/prd.md 3.7); may be empty. */
 			builds?: Build[];
 			items?: Item[];
+			/**
+			 * Back within moments of a dropped connection (docs/prd.md 3.3): still where they were, conversations and
+			 * company still on; what they missed meanwhile follows. Others heard nothing.
+			 */
+			resumed?: true;
 	  }
 	| { t: "JOINED"; avatar: AvatarState }
 	| { t: "LEFT"; id: AvatarId; reason: LeaveReason }

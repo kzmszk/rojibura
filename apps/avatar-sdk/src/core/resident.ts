@@ -157,9 +157,17 @@ export class Resident {
 	handle(msg: HostToClient): void {
 		// someone leaving is reported only if they were near, which is known only before the state changes
 		const leaving = msg.t === "LEFT" ? this.near(msg.id) : null;
+		// told again after a dropped connection that it walks with its owner: nothing new
+		const already = msg.t === "COMPANY" && msg.on && this.world.company === msg.owner;
 		if (this.world.apply(msg)) {
 			switch (msg.t) {
 				case "WELCOME":
+					// back after a dropped connection (docs/prd.md 3.3): it never left; talks go on
+					if (msg.resumed) {
+						this.o.logger.info(`back as ${msg.you}; ${msg.avatars.length} avatars here`);
+						this.scheduleTick(5000);
+						return;
+					}
 					this.o.logger.info(`joined as ${msg.you}; ${msg.avatars.length} avatars here`);
 					this.pending.clear();
 					this.convs.clear();
@@ -180,6 +188,7 @@ export class Resident {
 					if (!this.turn) this.scheduleTick();
 					return;
 				case "COMPANY": {
+					if (already) return;
 					const owner = this.nameOf(msg.owner);
 					this.push(
 						msg.on

@@ -27,7 +27,8 @@ export class World {
 				this.me = msg.you;
 				this.offset = msg.serverTime - Date.now();
 				this.budget = msg.budget;
-				this.company = null;
+				// back after a dropped connection: still walking with its owner, if it was
+				if (!msg.resumed) this.company = null;
 				this.avatars.clear();
 				for (const a of msg.avatars) this.avatars.set(a.id, a);
 				return true;

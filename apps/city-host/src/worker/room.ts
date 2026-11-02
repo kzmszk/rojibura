@@ -346,21 +346,35 @@ export class CityRoomDO extends DurableObject<Env> {
 			safeSend(ws, { t: "USAGE", ...this.meter.snapshot(), events: [...this.meter.recent] });
 	}
 
-	async webSocketClose(ws: WebSocket): Promise<void> {
+	async webSocketClose(ws: WebSocket, code: number): Promise<void> {
 		const member = attachmentOf(ws)?.member;
 		const name = this.core.members.get(ws)?.name ?? member?.name ?? "?";
-		this.meter.track(`${name}：退出`, () => this.depart(ws, member), { doRequests: WS_MESSAGE });
+		const dropped = DROPPED.has(code);
+		this.meter.track(`${name}：${dropped ? "接続切れ" : "退出"}`, () => this.depart(ws, member, dropped), {
+			doRequests: WS_MESSAGE,
+		});
 	}
 
 	async webSocketError(ws: WebSocket): Promise<void> {
-		this.depart(ws, attachmentOf(ws)?.member);
+		this.depart(ws, attachmentOf(ws)?.member, true);
 	}
 
 	/**
 	 * The socket is gone. Waking for its close, the room did not restore it (disconnected sockets are not in
 	 * getWebSockets()), so who it was comes from its attachment; otherwise the others never hear LEFT.
+	 * Dropped without a word, they stay a little in case they come straight back (docs/prd.md 3.3); the
+	 * timer for letting them go also keeps the room awake until then, so they are not forgotten asleep.
 	 */
-	private depart(ws: WebSocket, member: Member | undefined): void {
+	private depart(ws: WebSocket, member: Member | undefined, dropped: boolean): void {
+		if (dropped) {
+			const until = this.core.dropped(ws, member);
+			if (until !== null)
+				setTimeout(
+					() => this.meter.track("接続が切れたまま", () => this.core.expireAway()),
+					until - Date.now() + 100,
+				);
+			return;
+		}
 		if (member) this.core.departed(ws, member, "quit");
 		else this.core.leave(ws, "quit");
 	}
@@ -692,6 +706,12 @@ function safeSend(ws: WebSocket, msg: HostToClient): void {
 		// socket already closing
 	}
 }
+
+/**
+ * Close codes of a connection that dropped rather than ended (docs/prd.md 3.3): no close frame (1006), or
+ * the server side failing or restarting. A tab closed (1001) or a client stopping (1000, 1005) has left.
+ */
+const DROPPED = new Set([1006, 1011, 1012, 1013, 1014]);
 
 function attachmentOf(ws: WebSocket): Attachment | null {
 	try {

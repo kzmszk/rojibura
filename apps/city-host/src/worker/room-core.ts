@@ -90,6 +90,25 @@ const COMPANION_WALKING: Vec2 = [2, 0.8];
 const COMPANION_STANDING: Vec2 = [0.45, 0.21];
 /** How long after arriving an AI that took its owner somewhere waits for them before walking with them again. */
 const LEAD_GRACE_MS = 2 * 60_000;
+/**
+ * Someone whose connection dropped stays this long (docs/prd.md 3.3): back within it, they carry on where they
+ * were; the others see nothing. Covers a few of the clients' reconnect attempts (after 1, 2, 4... s).
+ */
+export const AWAY_GRACE_MS = 20_000;
+/** What someone away is sent meanwhile and gets when back: what was said and asked, not what moved. */
+const KEPT_WHILE_AWAY = new Set<HostToClient["t"]>([
+	"SAID",
+	"ADDRESSED",
+	"CONV_END",
+	"OFFERED",
+	"ANSWERED",
+	"COMPANY",
+	"LEAD_OFFERED",
+	"LEAD_ANSWERED",
+	"LEADING",
+	"NOTICE",
+]);
+const KEPT_WHILE_AWAY_MAX = 50;
 
 /** Saves the area's small things whenever one changes (DO key-value storage). */
 export interface ItemStore {
@@ -273,6 +292,8 @@ export class RoomCore<C> {
 	/** Small things in the area (docs/prd.md 3.4.7). */
 	private readonly items = new Map<ItemId, Item>();
 	private readonly itemStore: ItemStore | undefined;
+	/** Members whose connection dropped, by that dead connection: until when they wait, and what they missed. */
+	private readonly away = new Map<C, { until: number; missed: HostToClient[] }>();
 
 	constructor(
 		transport: Transport<C>,
@@ -281,7 +302,18 @@ export class RoomCore<C> {
 		newId: () => string,
 		options: { rules?: RoomRules; store?: BuildStore; items?: ItemStore } = {},
 	) {
-		this.transport = transport;
+		// nothing reaches a dropped connection: what matters is kept for when they are back, and their state
+		// is saved on the new connection
+		this.transport = {
+			send: (c, msg) => {
+				const away = this.away.get(c);
+				if (!away) transport.send(c, msg);
+				else if (KEPT_WHILE_AWAY.has(msg.t) && away.missed.length < KEPT_WHILE_AWAY_MAX)
+					away.missed.push(msg);
+			},
+			close: (c, code, reason) => transport.close(c, code, reason),
+			persist: (c, member) => !this.away.has(c) && transport.persist(c, member),
+		};
 		this.world = world;
 		this.clock = clock;
 		this.newId = newId;
@@ -385,10 +417,8 @@ export class RoomCore<C> {
 	join(conn: C, info: JoinInfo, arrive?: string): boolean {
 		const now = this.clock();
 		const old = this.byId.get(info.id);
-		if (old !== undefined && old !== conn) {
-			this.removeMember(old, "quit");
-			this.transport.close(old, CLOSE_REPLACED, "replaced by a new connection");
-		}
+		// still here: their connection dropped, or it has not been noticed yet (the old one is let go)
+		if (old !== undefined && old !== conn) return this.resume(old, conn, info, now);
 		const err = this.admissionError(info);
 		if (err) {
 			this.transport.send(conn, { t: "NOTICE", kind: "rejected", message: err });
@@ -406,16 +436,7 @@ export class RoomCore<C> {
 		this.volatile.set(conn, this.freshVolatile());
 		this.stats.connects++;
 		this.transport.persist(conn, member);
-		const welcome: HostToClient = {
-			t: "WELCOME",
-			you: member.id,
-			serverTime: now,
-			budget: 0,
-			avatars: [...this.members.values()].map((m) => this.toState(m)),
-		};
-		if (this.canBuild) welcome.builds = [...this.builds.values()];
-		if (this.items.size > 0) welcome.items = [...this.items.values()];
-		this.transport.send(conn, welcome);
+		this.welcome(conn, member, now);
 		this.broadcastAbout(member, { t: "JOINED", avatar: this.toState(member) }, conn);
 		// an AI whose owner is walking with company joins them at once
 		if (member.kind === "ai") {
@@ -426,6 +447,75 @@ export class RoomCore<C> {
 			}
 		}
 		return true;
+	}
+
+	/**
+	 * Someone still here comes in again on a new connection: their connection dropped (or this one replaces
+	 * theirs, like their PC taking over from the browser). They carry on as they were (where they stand, their
+	 * conversations, company, what they hold), and the others hear nothing unless they look different now.
+	 * They get the area afresh (WELCOME, `resumed`), then what they missed while away.
+	 */
+	private resume(old: C, conn: C, info: JoinInfo, now: number): boolean {
+		const was = this.members.get(old) as Member;
+		const away = this.away.get(old);
+		this.away.delete(old);
+		if (!away) this.transport.close(old, CLOSE_REPLACED, "replaced by a new connection");
+		const v = this.volatile.get(old) ?? this.freshVolatile();
+		v.lastSeen = now;
+		this.members.delete(old);
+		this.volatile.delete(old);
+		const member: Member = { ...was, ...info };
+		this.members.set(conn, member);
+		this.byId.set(member.id, conn);
+		this.volatile.set(conn, v);
+		this.transport.persist(conn, member);
+		this.welcome(conn, member, now, true);
+		for (const msg of away?.missed ?? []) this.transport.send(conn, msg);
+		const before = this.toState(was);
+		const after = this.toState(member);
+		if (JSON.stringify({ ...before, move: null }) !== JSON.stringify({ ...after, move: null }))
+			this.broadcastAbout(member, { t: "JOINED", avatar: after }, conn);
+		// an AI walking with its owner: its new connection is told again (the host moves it all along)
+		if (this.accompanying(member))
+			this.transport.send(conn, { t: "COMPANY", owner: member.ownerId, on: true });
+		return true;
+	}
+
+	private welcome(conn: C, member: Member, now: number, resumed = false): void {
+		const welcome: HostToClient = {
+			t: "WELCOME",
+			you: member.id,
+			serverTime: now,
+			budget: 0,
+			avatars: [...this.members.values()].map((m) => this.toState(m)),
+		};
+		if (resumed) welcome.resumed = true;
+		if (this.canBuild) welcome.builds = [...this.builds.values()];
+		if (this.items.size > 0) welcome.items = [...this.items.values()];
+		this.transport.send(conn, welcome);
+	}
+
+	/**
+	 * Called when a connection dropped (closed without a word, or errored): they stay AWAY_GRACE_MS in case they
+	 * come straight back (`join` then resumes them). `member` is what it last persisted, for a connection that
+	 * dropped while the room slept (not restored on waking). Returns until when they wait, or null when there
+	 * is no one to wait for (they are back already, or were let go).
+	 */
+	dropped(conn: C, member?: Member): number | null {
+		if (this.away.has(conn)) return null;
+		if (!this.members.has(conn)) {
+			if (!member || this.byId.has(member.id)) return null;
+			this.restore(conn, member);
+		}
+		const until = this.clock() + AWAY_GRACE_MS;
+		this.away.set(conn, { until, missed: [] });
+		return until;
+	}
+
+	/** Those whose connection dropped and who did not come back in time leave now. */
+	expireAway(): void {
+		const now = this.clock();
+		for (const [conn, a] of [...this.away]) if (a.until <= now) this.removeMember(conn, "timeout");
 	}
 
 	/** Called when the socket closed or errored. */
@@ -447,7 +537,9 @@ export class RoomCore<C> {
 	/** Removes members without a heartbeat or message for PRESENCE_TIMEOUT_MS and stale conversations. */
 	sweep(lastPing: (conn: C) => number | null): void {
 		const now = this.clock();
+		this.expireAway();
 		for (const [conn, m] of [...this.members]) {
+			if (this.away.has(conn)) continue;
 			const v = this.volatile.get(conn);
 			const last = Math.max(v?.lastSeen ?? 0, lastPing(conn) ?? 0);
 			if (now - last > PRESENCE_TIMEOUT_MS) {
@@ -1494,6 +1586,7 @@ export class RoomCore<C> {
 	private removeMember(conn: C, reason: LeaveReason): void {
 		const m = this.members.get(conn);
 		this.volatile.delete(conn);
+		this.away.delete(conn);
 		if (!m) return;
 		this.members.delete(conn);
 		if (this.byId.get(m.id) === conn) {

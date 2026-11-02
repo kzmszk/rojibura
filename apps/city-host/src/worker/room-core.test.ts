@@ -1,7 +1,7 @@
 import type { ClientToHost, HostToClient, Item, Vec2 } from "@rojibura/protocol";
 import { AI_CONV_MAX_TURNS, PRESENCE_TIMEOUT_MS } from "@rojibura/protocol";
 import { beforeEach, describe, expect, test } from "vitest";
-import { type JoinInfo, RoomCore, type Walkable, type World } from "./room-core.ts";
+import { AWAY_GRACE_MS, type JoinInfo, RoomCore, type Walkable, type World } from "./room-core.ts";
 
 // 40 x 40 m square with a 10 x 10 m building in the middle (x, z in [-5, 5]).
 const inBuilding = (p: Vec2) => Math.abs(p[0]) < 5 && Math.abs(p[1]) < 5;
@@ -256,6 +256,94 @@ describe("movement", () => {
 		expect(bot.inbox).toContainEqual(expect.objectContaining({ t: "JOINED" }));
 		ctx.room.leave(a, "quit");
 		expect(last(bot)).toMatchObject({ t: "LEFT", id: "h_alice" });
+	});
+});
+
+describe("a dropped connection", () => {
+	/** alice talking with her AI mina (who stands at [3, -10]), bob watching. */
+	function talking() {
+		const h = conn("h");
+		const bot = conn("bot");
+		const other = conn("other");
+		place(h, human("alice"), [0, -10]);
+		place(bot, ai("mina", "alice"), [3, -10]);
+		place(other, human("bob"), [-3, -10]);
+		ctx.room.handle(h, { t: "SAY", text: "こんばんは", to: "a_mina" });
+		const addressed = bot.inbox.find((m) => m.t === "ADDRESSED");
+		if (addressed?.t !== "ADDRESSED") throw new Error("not addressed");
+		return { h, bot, other, convId: addressed.convId };
+	}
+
+	test("back within moments, it carries on where it was: no one hears it leave, the talk goes on", () => {
+		const { h, bot, other, convId } = talking();
+		other.inbox.length = 0;
+		expect(ctx.room.dropped(bot)).toBe(ctx.clock.now() + AWAY_GRACE_MS);
+		// meanwhile she says something more: kept for it
+		ctx.room.handle(h, { t: "SAY", text: "聞こえる？", convId });
+		ctx.clock.advance(3000);
+		const back = conn("back");
+		ctx.room.join(back, ai("mina", "alice"));
+		expect(bot.closed).toBeUndefined();
+		const welcome = back.inbox[0];
+		expect(welcome).toMatchObject({ t: "WELCOME", you: "a_mina", resumed: true });
+		const me = welcome?.t === "WELCOME" ? welcome.avatars.find((a) => a.id === "a_mina") : undefined;
+		expect(me?.move).toMatchObject({ kind: "idle", pos: [3, -10] });
+		expect(back.inbox.slice(1)).toContainEqual(
+			expect.objectContaining({ t: "ADDRESSED", from: "h_alice", text: "聞こえる？", convId }),
+		);
+		// the others saw no LEFT or JOINED
+		expect(types(other).filter((t) => t === "LEFT" || t === "JOINED")).toEqual([]);
+		// its reply on the new connection is in the same conversation
+		ctx.room.handle(back, { t: "SAY", text: "聞こえるよ", convId });
+		expect(last(h)).toMatchObject({ t: "SAID", id: "a_mina", to: "h_alice", convId });
+		expect(ctx.room.size).toBe(3);
+	});
+
+	test("not back in time, it leaves then; until then it waits, heartbeat or not", () => {
+		const { bot, other } = talking();
+		ctx.room.dropped(bot);
+		ctx.clock.advance(AWAY_GRACE_MS - 1);
+		ctx.room.sweep(() => null);
+		expect(ctx.room.has("a_mina")).toBe(true);
+		ctx.clock.advance(1);
+		ctx.room.expireAway();
+		expect(last(other)).toEqual({ t: "LEFT", id: "a_mina", reason: "timeout" });
+		expect(ctx.room.has("a_mina")).toBe(false);
+		// coming in later is a new arrival
+		const later = conn("later");
+		ctx.room.join(later, ai("mina", "alice"));
+		expect(later.inbox[0]).not.toHaveProperty("resumed");
+		expect(last(other)).toMatchObject({ t: "JOINED", avatar: { id: "a_mina" } });
+	});
+
+	test("dropped while the room slept: it waits from what it last saved; a second word changes nothing", () => {
+		const { bot, other } = talking();
+		const saved = structuredClone(ctx.room.members.get(bot));
+		const bob = structuredClone(ctx.room.members.get(other));
+		if (!saved || !bob) throw new Error("not joined");
+		const woke = setup().room;
+		woke.restore(other, bob);
+		expect(woke.dropped(bot, saved)).not.toBeNull();
+		expect(woke.dropped(bot, saved)).toBeNull();
+		const back = conn("back");
+		woke.join(back, ai("mina", "alice"));
+		expect(back.inbox[0]).toMatchObject({ t: "WELCOME", resumed: true });
+		expect(woke.size).toBe(2);
+	});
+
+	test("a new connection while the old one still seems open takes over where it was", () => {
+		const first = conn("first");
+		const other = conn("other");
+		place(first, human("alice"), [7, 7]);
+		place(other, human("bob"), [-3, -10]);
+		const second = conn("second");
+		ctx.room.join(second, human("alice"));
+		expect(first.closed).toBe(4000);
+		expect(other.inbox).toEqual([]);
+		const w = second.inbox[0];
+		expect(w?.t === "WELCOME" && w.avatars.find((a) => a.id === "h_alice")?.move).toMatchObject({
+			pos: [7, 7],
+		});
 	});
 });
 

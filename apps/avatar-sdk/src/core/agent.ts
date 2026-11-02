@@ -128,7 +128,9 @@ export class Agent {
 	handle(msg: HostToClient): void {
 		if (this.world.apply(msg)) {
 			if (msg.t === "WELCOME") {
-				this.o.logger.info(`joined as ${msg.you}; ${msg.avatars.length} avatars here`);
+				this.o.logger.info(
+					`${msg.resumed ? "back" : "joined"} as ${msg.you}; ${msg.avatars.length} avatars here`,
+				);
 				this.scheduleWander(3000);
 			}
 			return;

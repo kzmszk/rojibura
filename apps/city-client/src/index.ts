@@ -569,23 +569,45 @@ async function startCity(
 		},
 		onMessage: (m: HostToClient) => {
 			switch (m.t) {
-				case "WELCOME":
+				case "WELCOME": {
 					myId = m.you;
 					// (re)subscribe after every (re)connect
 					if (usage?.isShown) conn.send({ t: "WATCH_USAGE", on: true });
-					for (const v of avatars.values()) v.dispose();
-					avatars.clear();
+					// a reconnect: those still here keep their figures (nothing reloads); who left or looks
+					// different now is taken away or built again
+					const here = new Set(m.avatars.map((a) => a.id));
+					for (const [id, v] of avatars)
+						if (!here.has(id)) {
+							v.dispose();
+							avatars.delete(id);
+						}
 					for (const a of m.avatars) {
-						add(a);
+						const v = avatars.get(a.id);
+						const same =
+							v &&
+							!relations.blocks.has(a.id) &&
+							v.state.name === a.name &&
+							JSON.stringify(v.state.assets) === JSON.stringify(a.assets);
+						if (v && same) {
+							Object.assign(v.state, a);
+							v.setStatus(a.status);
+						} else {
+							v?.dispose();
+							avatars.delete(a.id);
+							add(a);
+						}
 						agentPanel.present(a.id);
 					}
 					if (m.builds) builds.set(m.builds);
 					items.reset(m.items ?? []);
 					showHeld();
+					// back where we were after a dropped connection (docs/prd.md 3.3): the host kept everything
+					if (m.resumed) break;
 					// the host forgets on a new connection; tell it again (a walk behind your AI is over then)
 					if (following?.lead) following = null;
 					if (companion) conn.send({ t: "COMPANION", on: true });
 					break;
+				}
 				case "ITEM": {
 					const change = items.set(m.item, conn.hostNow());
 					// picking up faces the thing; throwing goes the way the avatar faces already
