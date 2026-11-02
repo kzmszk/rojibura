@@ -61,6 +61,12 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #bfd6e8; }
   background: rgba(30,30,30,.85); color: #fff; font-size: 14px; opacity: 0; transition: opacity .3s; pointer-events: none; }
 .rj-toast.show { opacity: 1; }
 .rj-portal { font-size: 13px; padding: 3px 9px; border-radius: 10px; background: rgba(20, 90, 140, .82); color: #fff; white-space: nowrap; }
+.rj-agent-life { font-size: 12px; line-height: 1.6; padding: 6px 8px; border-radius: 8px; background: #f3f6f9; white-space: pre-line; }
+.rj-acts { position: absolute; left: 50%; bottom: 150px; transform: translateX(-50%); display: flex; flex-wrap: wrap; gap: 6px;
+  justify-content: center; max-width: calc(100% - 32px); }
+.rj-acts button { font-size: 14px; padding: 7px 12px; border-radius: 10px; border: 0; background: rgba(255,255,255,.92); color: #222;
+  box-shadow: 0 2px 6px rgba(0,0,0,.25); cursor: pointer; }
+.rj-acts button.on { background: #c4781e; color: #fff; }
 .rj-travel { position: absolute; left: 50%; bottom: 96px; transform: translateX(-50%); font-size: 16px; padding: 10px 18px;
   border-radius: 12px; border: 0; background: #1f7fbf; color: #fff; box-shadow: 0 2px 8px rgba(0,0,0,.3); cursor: pointer; }
 .rj-credit { position: absolute; right: 8px; bottom: 6px; font-size: 11px; color: rgba(20, 24, 32, .75); background: rgba(255,255,255,.55);

@@ -10,6 +10,7 @@ import {
 	validatePath,
 } from "@rojibura/nav";
 import type {
+	ActivitiesData,
 	AreaId,
 	AreaInfo,
 	AreasData,
@@ -29,6 +30,7 @@ import modelIndex from "../../../../assets/models/index.json";
 import lampNav from "../../../../assets/models/lamp.nav.json";
 import towerNav from "../../../../assets/models/tower.nav.json";
 import treeNav from "../../../../assets/models/tree.nav.json";
+import activitiesJson from "../../../../assets/test-city/activities.json";
 import publishedJson from "../../../../assets/test-city/builds.json";
 import landmarksJson from "../../../../assets/test-city/landmarks.json";
 import baseNavmeshJson from "../../../../assets/test-city/navmesh.base.json";
@@ -115,6 +117,7 @@ export const world: World = {
 	spawn: [sx, sz],
 	areaName: areaOf(MAIN_AREA).name,
 	fixedBuilds: PUBLISHED.builds,
+	activities: (activitiesJson as ActivitiesData).activities,
 	// two balls and a box near where people arrive (docs/prd.md 3.4.7)
 	items: [
 		{ kind: "ball", pos: [sx + 2, sz + 1.5] },

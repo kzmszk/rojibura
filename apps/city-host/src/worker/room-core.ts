@@ -3,11 +3,14 @@
 
 import { boxNav, claimed, type ModelNav, occupied, overlaps, type PlacedModel } from "@rojibura/nav";
 import {
+	ACTIVITY_REACH,
+	type Activity,
 	type AreaId,
 	type AvatarAssets,
 	type AvatarId,
 	type AvatarKind,
 	type AvatarState,
+	activityOpen,
 	BODY_CALL_REACH,
 	BODY_CALLED_TO,
 	BODY_INTERVAL_MS,
@@ -26,9 +29,17 @@ import {
 	CONTEXT_LANDMARK_RADIUS,
 	CONTEXT_MAX_ITEMS,
 	CONV_TIMEOUT_MS,
+	cannotStart,
+	canRun,
+	cityTime,
+	type DayReview,
+	type Doing,
+	decay,
 	dist,
 	facing,
+	finishActivity,
 	type HostToClient,
+	hoursText,
 	INTEREST_RADIUS_DEFAULT,
 	ITEM_REACH,
 	type Item,
@@ -39,11 +50,14 @@ import {
 	LEAD_MIN_DISTANCE,
 	LEAD_REACH,
 	type LeaveReason,
+	type LifeState,
 	MAX_PATH_LENGTH,
 	MAX_PATH_POINTS,
 	MAX_SPEED,
 	type ModelId,
 	type MoveState,
+	newDay,
+	newLife,
 	OFFER_REACH,
 	OFFER_TTL_MS,
 	POSITION_TOLERANCE,
@@ -51,8 +65,10 @@ import {
 	polylineLength,
 	poseAt,
 	RATE_VIOLATIONS_BEFORE_CLOSE,
+	realMs,
 	type SpatialContext,
 	type Status,
+	startActivity,
 	THROW_MS,
 	THROW_RANGE,
 	THROW_RELEASE_MS,
@@ -144,6 +160,13 @@ export interface World {
 	fixedBuilds?: Build[];
 	/** Small things that are there when the area starts with none saved (docs/prd.md 3.4.7). */
 	items?: { kind: ItemKind; pos: Vec2 }[];
+	/** What can be done where (assets/<area>/activities.json, docs/life.md 3). */
+	activities?: Activity[];
+}
+
+/** Saves an AI's life (D1 agent_life) when it changes: an activity ends, a morning, leaving. */
+export interface LifeStore {
+	save(id: AvatarId, life: LifeState): void;
 }
 
 /** Identity of a connection, decided by the gateway (humans) or after AUTH (agents). */
@@ -164,6 +187,8 @@ export interface JoinInfo {
 	system?: boolean;
 	/** Admins, moderators and development: may watch the area's free-tier usage (docs/prd.md 2.5). */
 	canWatchUsage?: boolean;
+	/** AIs: their life as last saved (D1 agent_life); a new one on their first day (docs/life.md 2). */
+	life?: LifeState;
 }
 
 /** Member state that survives hibernation (kept in the WebSocket attachment, < 2 KB). */
@@ -186,6 +211,8 @@ export interface Member extends JoinInfo {
 	lead?: { to: Vec2; place: string; until: number };
 	/** AIs: when it last asked its owner to come along (one ask per LEAD_INTERVAL_MS). */
 	leadAskedAt?: number;
+	/** What it is doing now (docs/life.md 3). */
+	doing?: Doing;
 }
 
 /** Personal mutes and blocks that concern one avatar (docs/prd.md 4.2). */
@@ -305,6 +332,7 @@ export class RoomCore<C> {
 	/** Small things in the area (docs/prd.md 3.4.7). */
 	private readonly items = new Map<ItemId, Item>();
 	private readonly itemStore: ItemStore | undefined;
+	private readonly lifeStore: LifeStore | undefined;
 	/** Members whose connection dropped, by that dead connection: until when they wait, and what they missed. */
 	private readonly away = new Map<C, { until: number; missed: HostToClient[] }>();
 
@@ -313,7 +341,7 @@ export class RoomCore<C> {
 		world: World,
 		clock: () => number,
 		newId: () => string,
-		options: { rules?: RoomRules; store?: BuildStore; items?: ItemStore } = {},
+		options: { rules?: RoomRules; store?: BuildStore; items?: ItemStore; life?: LifeStore } = {},
 	) {
 		// nothing reaches a dropped connection: what matters is kept for when they are back, and their state
 		// is saved on the new connection
@@ -333,6 +361,7 @@ export class RoomCore<C> {
 		this.rules = options.rules ?? PRODUCTION_RULES;
 		this.store = options.store;
 		this.itemStore = options.items;
+		this.lifeStore = options.life;
 		this.walk = world.walk;
 	}
 
@@ -444,12 +473,22 @@ export class RoomCore<C> {
 			move: { kind: "idle", pos: this.spawnPoint(arrive), at: now },
 			interest: INTEREST_RADIUS_DEFAULT,
 		};
+		const entered = member.kind === "ai" ? this.lifeOnEntry(info.life, now) : null;
+		if (entered) member.life = entered.life;
+		else delete member.life;
 		this.members.set(conn, member);
 		this.byId.set(member.id, conn);
 		this.volatile.set(conn, this.freshVolatile());
 		this.stats.connects++;
 		this.transport.persist(conn, member);
 		this.welcome(conn, member, now);
+		if (entered?.review) {
+			this.lifeStore?.save(member.id, entered.life);
+			this.transport.send(conn, { t: "DAY", review: entered.review, life: entered.life });
+		}
+		// the owner's page shows how their AI is doing (docs/life.md 8), whichever of them came first
+		if (member.kind === "ai") this.sendLife(member, false);
+		else for (const ai of this.members.values()) if (ai.ownerId === member.id) this.sendLife(ai, false);
 		this.broadcastAbout(member, { t: "JOINED", avatar: this.toState(member) }, conn);
 		// an AI whose owner is walking with company joins them at once
 		if (member.kind === "ai") {
@@ -477,7 +516,8 @@ export class RoomCore<C> {
 		v.lastSeen = now;
 		this.members.delete(old);
 		this.volatile.delete(old);
-		const member: Member = { ...was, ...info };
+		// the life kept here is newer than what the gateway read from D1
+		const member: Member = { ...was, ...info, ...(was.life ? { life: was.life } : {}) };
 		this.members.set(conn, member);
 		this.byId.set(member.id, conn);
 		this.volatile.set(conn, v);
@@ -505,6 +545,7 @@ export class RoomCore<C> {
 		if (resumed) welcome.resumed = true;
 		if (this.canBuild) welcome.builds = [...this.builds.values()];
 		if (this.items.size > 0) welcome.items = [...this.items.values()];
+		if (member.life) welcome.life = decay(member.life, now);
 		this.transport.send(conn, welcome);
 	}
 
@@ -567,6 +608,7 @@ export class RoomCore<C> {
 		for (const c of [...this.convs.values()]) {
 			if (now - c.lastAt > CONV_TIMEOUT_MS) this.endConv(c, "timeout");
 		}
+		this.lifeTick(now);
 		for (const [k, until] of this.pairCooldown) if (until <= now) this.pairCooldown.delete(k);
 	}
 
@@ -776,6 +818,18 @@ export class RoomCore<C> {
 			case "ANSWER":
 				if (!this.answerLead(m, msg.to, msg.accept, now)) this.answer(m, msg.to, msg.accept, now);
 				return;
+			case "ACT": {
+				if (!this.moveToken(v, now)) {
+					this.violation(conn, v, now);
+					return;
+				}
+				const err = this.startDoing(conn, m, msg.activity, now);
+				if (err) this.notice(conn, "rejected", err);
+				return;
+			}
+			case "ACT_STOP":
+				this.stopDoing(conn, m, now);
+				return;
 			case "AUTH":
 				return; // handled by the adapter before join
 		}
@@ -835,6 +889,7 @@ export class RoomCore<C> {
 
 	/** Walks a member a short way to `to` (or puts them there); returns how long it takes (ms). */
 	private stepTo(conn: C, m: Member, here: Vec2, to: Vec2, now: number): number {
+		this.stopDoing(conn, m, now);
 		const d = dist(here, to);
 		const walk = d > 0.05 && this.walk.validatePath([here, to]);
 		m.move = walk
@@ -1035,6 +1090,7 @@ export class RoomCore<C> {
 		if (!path) return true;
 		const end = path[path.length - 1] as Vec2;
 		ai.lead = { to: end, place: lead.place, until: now + ms + LEAD_GRACE_MS };
+		this.stopDoing(ac, ai, now);
 		ai.move = { kind: "path", path, speed: WALK_SPEED, at: now };
 		this.transport.persist(ac, ai);
 		this.broadcastAbout(ai, { t: "MOVED", id: ai.id, move: ai.move });
@@ -1118,9 +1174,127 @@ export class RoomCore<C> {
 		if (length < 0.15) return;
 		// as long as the owner takes; when the owner has stopped, a walk (a run if far behind)
 		const speed = ms > 0 ? (length / ms) * 1000 : length > 6 ? 4 : WALK_SPEED;
-		ai.move = { kind: "path", path, speed: Math.min(MAX_SPEED, Math.max(0.5, speed)), at: now };
+		this.stopDoing(conn, ai, now);
+		ai.move = {
+			kind: "path",
+			path,
+			speed: this.speedFor(ai, Math.min(MAX_SPEED, Math.max(0.5, speed)), now),
+			at: now,
+		};
 		this.transport.persist(conn, ai);
 		this.broadcastAbout(ai, { t: "MOVED", id: ai.id, move: ai.move });
+	}
+
+	// ---- life: activities and the meters (docs/life.md) ----------------------
+
+	private activity(id: string): Activity | undefined {
+		return this.world.activities?.find((a) => a.id === id);
+	}
+
+	/**
+	 * An AI's life as it comes in: where it left off (time away does not count), or a first day. On a new city
+	 * day, the day it last lived is scored and it wakes up (`review`).
+	 */
+	private lifeOnEntry(saved: LifeState | undefined, now: number): { life: LifeState; review?: DayReview } {
+		if (!saved) return { life: newLife(now) };
+		const life: LifeState = { ...saved, at: now };
+		return cityTime(now).block !== saved.block ? newDay(life, now) : { life };
+	}
+
+	/** Starts activity `id` where `m` stands: they stop walking, and sit if it is done sitting. */
+	private startDoing(conn: C, m: Member, id: string, now: number): string | null {
+		const a = this.activity(id);
+		if (!a) return "ここではできないことです";
+		const place = this.world.landmarks.find((l) => l.id === a.place);
+		if (!place) return "ここではできないことです";
+		if (dist(this.positionOf(m, now), place.pos) > ACTIVITY_REACH)
+			return `${place.name}まで行ってからにしてください`;
+		if (!activityOpen(a, cityTime(now).minutes))
+			return `${a.name}は、いまの時間はできません（${hoursText(a)}）`;
+		if (m.doing?.activity === a.id) return `もう${a.name}をしています`;
+		const others = [...this.members.values()].filter((o) => o.id !== m.id && o.doing?.activity === a.id);
+		if (a.capacity !== undefined && others.length >= a.capacity) return `${a.name}は、いまいっぱいです`;
+		if (m.life) {
+			const err = cannotStart(decay(m.life, now), a);
+			if (err) return err;
+		}
+		this.stopDoing(conn, m, now);
+		if (m.life) m.life = startActivity(decay(m.life, now), a);
+		m.doing = { activity: a.id, since: now, until: now + Math.round(realMs(a.minutes)) };
+		const face = m.move.kind === "idle" ? m.move.face : undefined;
+		m.move = {
+			kind: "idle",
+			pos: this.positionOf(m, now),
+			at: now,
+			...(a.pose ? { posture: a.pose } : {}),
+			...(face ? { face } : {}),
+		};
+		this.transport.persist(conn, m);
+		this.broadcastAbout(m, { t: "MOVED", id: m.id, move: m.move });
+		this.broadcastAbout(m, { t: "ACTING", id: m.id, doing: m.doing });
+		this.sendLife(m);
+		return null;
+	}
+
+	/**
+	 * Ends what `m` is doing: done once its time is up, otherwise stopped part way, with that share of its
+	 * effects and pay. `tell`: false when they are leaving (nobody needs to hear, nothing to persist).
+	 */
+	private stopDoing(conn: C, m: Member, now: number, tell = true): void {
+		const d = m.doing;
+		if (!d) return;
+		delete m.doing;
+		const a = this.activity(d.activity);
+		const share = Math.min(1, Math.max(0, (now - d.since) / Math.max(1, d.until - d.since)));
+		const done: Extract<HostToClient, { t: "ACT_DONE" }> = {
+			t: "ACT_DONE",
+			activity: d.activity,
+			share: round2(share),
+		};
+		if (m.life && a) {
+			const r = finishActivity(decay(m.life, now), a, share);
+			m.life = r.life;
+			done.delta = r.delta;
+			done.life = r.life;
+			this.lifeStore?.save(m.id, r.life);
+		}
+		if (!tell) return;
+		this.transport.persist(conn, m);
+		this.transport.send(conn, done);
+		this.broadcastAbout(m, { t: "ACTING", id: m.id, doing: null });
+		this.sendLife(m, false);
+	}
+
+	/** Activities whose time is up end; AIs whose city day is over wake up to a new one. */
+	private lifeTick(now: number): void {
+		const block = cityTime(now).block;
+		for (const [conn, m] of [...this.members]) {
+			if (this.away.has(conn)) continue;
+			if (m.doing && m.doing.until <= now) this.stopDoing(conn, m, now);
+			if (m.life && m.life.block !== block) {
+				const { life, review } = newDay(decay(m.life, now), now);
+				m.life = life;
+				this.transport.persist(conn, m);
+				this.lifeStore?.save(m.id, life);
+				this.transport.send(conn, { t: "DAY", review, life });
+				this.sendLife(m, false);
+			}
+		}
+	}
+
+	/** Tells an AI (`self`) and its owner here what its life is now. */
+	private sendLife(m: Member, self = true): void {
+		if (!m.life) return;
+		const msg: HostToClient = { t: "LIFE", id: m.id, life: m.life };
+		const own = this.byId.get(m.id);
+		if (self && own !== undefined) this.transport.send(own, msg);
+		const owner = m.kind === "ai" ? this.byId.get(m.ownerId) : undefined;
+		if (owner !== undefined) this.transport.send(owner, msg);
+	}
+
+	/** An AI too hungry or unfit to run walks instead. */
+	private speedFor(m: Member, speed: number, now: number): number {
+		return m.life && speed > WALK_SPEED && !canRun(decay(m.life, now)) ? WALK_SPEED : speed;
 	}
 
 	// ---- small things (docs/prd.md 3.4.7) -----------------------------------
@@ -1198,7 +1372,8 @@ export class RoomCore<C> {
 			this.reject(conn, m, here, now);
 			return;
 		}
-		m.move = { kind: "path", path, speed: msg.speed, at: now };
+		this.stopDoing(conn, m, now);
+		m.move = { kind: "path", path, speed: this.speedFor(m, msg.speed, now), at: now };
 		this.transport.persist(conn, m);
 		this.broadcastAbout(m, { t: "MOVED", id: m.id, move: m.move });
 	}
@@ -1210,13 +1385,14 @@ export class RoomCore<C> {
 			return;
 		}
 		const still = msg.dir[0] === 0 && msg.dir[1] === 0;
+		if (msg.speed > 0 && !still) this.stopDoing(conn, m, now);
 		// speed 0 with a direction: standing, turned that way (docs/prd.md 3.4.11)
 		m.move =
 			msg.speed === 0 && !still
 				? { kind: "idle", pos: msg.pos, at: now, face: msg.dir }
 				: msg.speed === 0 || still
 					? { kind: "idle", pos: msg.pos, at: now }
-					: { kind: "vel", pos: msg.pos, dir: msg.dir, speed: msg.speed, at: now };
+					: { kind: "vel", pos: msg.pos, dir: msg.dir, speed: this.speedFor(m, msg.speed, now), at: now };
 		this.transport.persist(conn, m);
 		this.broadcastAbout(m, { t: "MOVED", id: m.id, move: m.move });
 	}
@@ -1629,6 +1805,7 @@ export class RoomCore<C> {
 				name: o.name,
 				kind: o.kind,
 				distance: round1(dist(pos, this.positionOf(o, now))),
+				...(o.doing ? { doing: this.activity(o.doing.activity)?.name ?? o.doing.activity } : {}),
 			}))
 			.filter((o) => o.distance <= CONTEXT_AVATAR_RADIUS)
 			.sort((a, b) => a.distance - b.distance)
@@ -1714,6 +1891,10 @@ export class RoomCore<C> {
 		}
 		for (const c of [...this.convs.values()]) if (c.a === m.id || c.b === m.id) this.endConv(c, "left");
 		this.leads.delete(m.id);
+		// what they were doing ends with what they did of it; their life is saved as it is
+		const now = this.clock();
+		if (m.doing) this.stopDoing(conn, m, now, false);
+		else if (m.life) this.lifeStore?.save(m.id, decay(m.life, now));
 		// their AIs no longer walk with them
 		if (m.companion) this.tellCompany(m, false);
 		// what they held stays where they were
@@ -1744,6 +1925,7 @@ export class RoomCore<C> {
 		if (m.kind === "ai") s.ownerId = m.ownerId;
 		if (m.trust) s.trust = m.trust;
 		if (m.kind === "human") s.acceptsAi = m.allowAiApproach !== false;
+		if (m.doing) s.doing = m.doing;
 		return s;
 	}
 

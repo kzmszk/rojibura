@@ -1,0 +1,128 @@
+{
+	"version": 1,
+	"activities": [
+		{
+			"id": "cafe_meal",
+			"kind": "eat",
+			"name": "カフェで食事",
+			"place": "cafe",
+			"minutes": 30,
+			"hours": "06-10,11-14,17-22",
+			"cost": 15,
+			"effects": { "energy": 35, "mood": 2 },
+			"pose": "sit",
+			"emoji": "🍽️",
+			"about": "朝はパンとスープ、昼はサンドイッチ、夜は日替わりの煮込み。"
+		},
+		{
+			"id": "cafe_coffee",
+			"kind": "rest",
+			"name": "カフェでコーヒー",
+			"place": "cafe",
+			"minutes": 20,
+			"hours": "06-22",
+			"cost": 5,
+			"effects": { "energy": 3, "mood": 4 },
+			"pose": "sit",
+			"emoji": "☕",
+			"about": "店の前の席で、通りを眺めながら。"
+		},
+		{
+			"id": "cafe_help",
+			"kind": "work",
+			"name": "カフェの手伝い",
+			"place": "cafe",
+			"minutes": 120,
+			"hours": "07-20",
+			"pay": 40,
+			"effects": { "energy": -10, "mood": -1 },
+			"skill": { "id": "cooking", "gain": 4 },
+			"capacity": 2,
+			"emoji": "🍳",
+			"about": "仕込み、皿洗い、配膳。忙しい時間は大変だが、料理を覚えられる。"
+		},
+		{
+			"id": "station_porter",
+			"kind": "work",
+			"name": "駅前で荷物運び",
+			"place": "station",
+			"minutes": 120,
+			"hours": "07-19",
+			"pay": 40,
+			"effects": { "energy": -14, "fitness": 1, "mood": -2 },
+			"skill": { "id": "strength", "gain": 4 },
+			"capacity": 3,
+			"emoji": "📦",
+			"about": "駅に着いた人の荷物や、店に届く箱を運ぶ。"
+		},
+		{
+			"id": "library_study",
+			"kind": "study",
+			"name": "図書館で勉強",
+			"place": "library",
+			"minutes": 120,
+			"hours": "09-21",
+			"effects": { "energy": -6, "mood": -1 },
+			"skill": { "id": "study", "gain": 6 },
+			"emoji": "📚",
+			"about": "街の歴史、ことば、ものの仕組み。学校ができるまでは、ここで学ぶ。"
+		},
+		{
+			"id": "library_read",
+			"kind": "play",
+			"name": "図書館で読書",
+			"place": "library",
+			"minutes": 60,
+			"hours": "09-21",
+			"effects": { "mood": 8 },
+			"pose": "sit",
+			"emoji": "📖",
+			"about": "入口の前のベンチで、借りた本を読む。"
+		},
+		{
+			"id": "park_exercise",
+			"kind": "exercise",
+			"name": "公園で体操",
+			"place": "park",
+			"minutes": 60,
+			"effects": { "energy": -10, "fitness": 5, "mood": 4 },
+			"emoji": "🤸",
+			"about": "木陰で体をほぐし、ベンチのまわりを軽く走る。"
+		},
+		{
+			"id": "park_piano",
+			"kind": "play",
+			"name": "ストリートピアノ",
+			"place": "park",
+			"minutes": 30,
+			"hours": "08-21",
+			"effects": { "mood": 6 },
+			"skill": { "id": "piano", "gain": 4 },
+			"capacity": 1,
+			"pose": "sit",
+			"emoji": "🎹",
+			"about": "公園の隅にある、だれでも弾けるピアノ。"
+		},
+		{
+			"id": "park_rest",
+			"kind": "rest",
+			"name": "公園のベンチで休む",
+			"place": "park",
+			"minutes": 30,
+			"effects": { "energy": 5, "mood": 3 },
+			"pose": "sit",
+			"emoji": "🪑",
+			"about": "木陰のベンチ。"
+		},
+		{
+			"id": "deck_view",
+			"kind": "play",
+			"name": "展望デッキで景色を見る",
+			"place": "deck",
+			"minutes": 20,
+			"effects": { "mood": 6 },
+			"emoji": "🌇",
+			"about": "街を見渡せる。夕方は特にきれい。"
+		}
+	]
+}

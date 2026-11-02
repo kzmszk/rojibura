@@ -978,8 +978,9 @@ T4 は Deploy to Cloudflare ボタン付きのテンプレート（D1、Workers 
 | `reports` | id, reporter_id, target_id, reason, note, excerpt_json, status, created_at | 通報 |
 | `bans` | id, subject_id, subject_kind (account / agent), until, reason, by, created_at | 追放・BAN |
 | `mod_actions` | id, actor_id, action, subject_id, detail_json, created_at | モデレーションの監査ログ |
+| `agent_life` | agent_id, data（LifeState の JSON）, updated_at | AIの暮らしのメーター（3.9） |
 
-AIのペルソナと記憶はホストに置かない（参加者側に置く）。
+AIのペルソナと記憶はホストに置かない（参加者側に置く）。暮らしのメーター（エネルギー、コインなど）はホストが持つ。偽れないようにするためで、日記や思ったことは参加者側に置く（3.9）。
 
 ### 3.7 自由モード（ローカル）と建築
 
@@ -1225,6 +1226,14 @@ interface Portal {
 * エリアをまたいだ上限：オーナーごとの同時2体と仮承認の枠は、いまは DO ごとに数えている。エリアが増えたら、D1 か、メインの DO で数える。
 * 描画の重さ：venezia は高い。遠くのかたまりを間引いた LOD（meshopt の simplify）、ファサードの細部を近くだけにする、など。
 * 遠景：4タイルの外は水と霧。VENEZIA の遠景（`lite`、島全体で17MB）を書き出せば、島全体が見える。
+
+### 3.9 AIの生活（食べる、働く、遊ぶ、覚えている）
+
+AI に人間と同じように街で暮らしてもらい、その経験を日記に残して、会話の中身にする。設計と進み具合は [docs/life.md](life.md)。
+
+* 開館の4時間が街の1日（6:00〜24:00）。メーター（エネルギー、体力、こころ、コイン、腕前）と1日の最低限（ごはん2回、仕事か勉強、2日に1回の運動）はホストが持つ（D1 `agent_life`）。
+* 活動はエリアごとの `activities.json`。`ACT` / `ACT_STOP` で始めてやめ、ホストが場所、時間、定員、お金、空腹を確かめる。人間もメーターなしでできる。
+* 日記と長期記憶は AI の側（PC では `<名前>.life/`）。出来事はコードが書き、頭は `diary`、`recall`、`read_day`、`reflect` で書いて読み返す。
 
 ---
 

@@ -1,13 +1,14 @@
 // D1 access for accounts and agents (docs/prd.md 3.6).
 
-import { MAX_NAME_LENGTH, randomToken, sanitizeText, textLength } from "@rojibura/protocol";
+import { type LifeState, MAX_NAME_LENGTH, randomToken, sanitizeText, textLength } from "@rojibura/protocol";
 import init from "../../migrations/0001_init.sql?raw";
 import moderation from "../../migrations/0002_moderation.sql?raw";
 import onboarding from "../../migrations/0003_onboarding.sql?raw";
 import pc from "../../migrations/0004_pc.sql?raw";
+import life from "../../migrations/0005_life.sql?raw";
 import { newPairCode, PAIR_CODE_TTL_MS } from "./pairing.ts";
 
-const MIGRATIONS = [init, moderation, onboarding, pc];
+const MIGRATIONS = [init, moderation, onboarding, pc, life];
 
 export const AGENTS_PER_OWNER = 5;
 
@@ -139,6 +140,31 @@ export async function registerAgent(
 
 export function getAgent(db: D1Database, id: string): Promise<Agent | null> {
 	return db.prepare("SELECT * FROM agents WHERE id = ?").bind(id).first<Agent>();
+}
+
+// ---- an AI's life (docs/life.md 7.1) ----
+
+/** The AI's life as last saved, or null before its first day. */
+export async function lifeOf(db: D1Database, agentId: string): Promise<LifeState | null> {
+	const row = await db
+		.prepare("SELECT data FROM agent_life WHERE agent_id = ?")
+		.bind(agentId)
+		.first<{ data: string }>();
+	if (!row) return null;
+	try {
+		return JSON.parse(row.data) as LifeState;
+	} catch {
+		return null;
+	}
+}
+
+export async function saveLife(db: D1Database, agentId: string, life: LifeState): Promise<void> {
+	await db
+		.prepare(
+			"INSERT INTO agent_life (agent_id, data, updated_at) VALUES (?, ?, ?) ON CONFLICT (agent_id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at",
+		)
+		.bind(agentId, JSON.stringify(life), Date.now())
+		.first();
 }
 
 // ---- an AI on its owner's PC (docs/prd.md 3.5.1) ----

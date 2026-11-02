@@ -119,6 +119,8 @@ export class AgentPanel {
 	/** Paired with a PC since then, when it is. */
 	private pairedAt: number | null = null;
 	private readonly log = el("div", "rj-excerpt rj-agent-log");
+	/** The AI's life (docs/life.md 8): meters, today's must-dos, what it is doing. */
+	private readonly lifeBox = el("div", "rj-agent-life");
 
 	/** `onRunning`: whether the AI is running in this tab, for the HUD button. */
 	/** The area this page is in, and where it arrived (a tab's AI is where its owner's page is). */
@@ -215,9 +217,11 @@ export class AgentPanel {
 		};
 		const logBox = el("details", "");
 		logBox.append(el("summary", "", "AIのようす（ログ）"), this.log);
+		this.lifeBox.hidden = true;
 		this.mine.append(
 			this.state,
 			this.remaining,
+			this.lifeBox,
 			actions,
 			el(
 				"span",
@@ -263,6 +267,16 @@ export class AgentPanel {
 		this.here = true;
 		this.render();
 		void this.refresh();
+	}
+
+	/**
+	 * What the host says of one of your AIs' life (LIFE), and what it is doing now: shown under its state, for
+	 * the AI this panel is about (from this tab or a PC alike).
+	 */
+	life(id: string, text: string | null): void {
+		if (id !== this.agentId) return;
+		this.lifeBox.hidden = !text;
+		this.lifeBox.textContent = text ?? "";
 	}
 
 	/** Avatar `id` left this area: whether it is still in the city (in another area) is the host's to say. */

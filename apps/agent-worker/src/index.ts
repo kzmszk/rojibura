@@ -148,6 +148,7 @@ export class AgentDO extends DurableObject<Env> {
 			memory: new StorageMemory(this.ctx.storage),
 			nav: city.nav,
 			landmarks: city.landmarks,
+			activities: city.activities,
 			logger: this.log,
 			send: (m) => this.conn?.send(m),
 			dailyLlmLimit: 300,

@@ -1,7 +1,7 @@
 // Loads the city's landmarks and navmesh from the host's static assets.
 
 import { type LandmarksData, NavMesh, type NavMeshData } from "@rojibura/nav";
-import type { AreasData, Vec2 } from "@rojibura/protocol";
+import type { ActivitiesData, Activity, AreasData, Vec2 } from "@rojibura/protocol";
 import type { Landmark, Navigator } from "./types.ts";
 
 export interface City {
@@ -11,6 +11,8 @@ export interface City {
 	spawn: Vec2 | null;
 	nav: Navigator;
 	hasNavmesh: boolean;
+	/** What can be done where (activities.json next to the landmarks, docs/life.md 3); empty without one. */
+	activities: Activity[];
 }
 
 /** Fallback when no navmesh is available: walk in a straight line (the host still validates). */
@@ -59,6 +61,7 @@ export async function loadCity(baseUrl: string, area?: string): Promise<City> {
 	let nav = straightLine;
 	let hasNavmesh = false;
 	let name = "街";
+	let activities: Activity[] = [];
 	try {
 		const { dir: cityPath, portals, name: areaName } = await areaFiles(baseUrl, area);
 		name = areaName;
@@ -72,6 +75,11 @@ export async function loadCity(baseUrl: string, area?: string): Promise<City> {
 			landmarks = [...landmarksOf(data, places), ...portals];
 			spawn = [data.spawn.pos[0], data.spawn.pos[1]];
 		}
+		// optional, like places.json
+		activities = await fetch(`${baseUrl}${cityPath}/activities.json`)
+			.then((a) => (a.ok ? (a.json() as Promise<ActivitiesData>) : null))
+			.then((a) => (Array.isArray(a?.activities) ? a.activities : []))
+			.catch(() => []);
 		const n = await fetch(`${baseUrl}${cityPath}/navmesh.json`);
 		if (n.ok) {
 			nav = navigatorFor(NavMesh.fromJSON((await n.json()) as NavMeshData));
@@ -80,5 +88,5 @@ export async function loadCity(baseUrl: string, area?: string): Promise<City> {
 	} catch {
 		// keep the fallbacks
 	}
-	return { name, landmarks, spawn, nav, hasNavmesh };
+	return { name, landmarks, spawn, nav, hasNavmesh, activities };
 }

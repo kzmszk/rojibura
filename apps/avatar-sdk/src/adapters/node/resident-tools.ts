@@ -27,7 +27,7 @@ const KEYS = Type.String({
  * the turn either: "I'll do it" comes before rehearsing and doing it (the resident still lets it speak to
  * each one once per turn). Rehearsing and learning do not end it.
  */
-export function residentTools(body: boolean): ResidentTool[] {
+export function residentTools(body: boolean, life = false): ResidentTool[] {
 	const tool = (name: string, description: string, parameters: TSchema, terminate = true): ResidentTool => ({
 		name,
 		description,
@@ -101,6 +101,41 @@ export function residentTools(body: boolean): ResidentTool[] {
 						"step",
 						"オーナー（to）のそばで、立つ位置を変える。distance はその人から何メートルのところに立つか（0.3〜2.5）。",
 						Type.Object({ to: Type.Optional(Type.String()), distance: Type.Number() }),
+					),
+				]
+			: []),
+		// living in the city (docs/life.md 5.2): doing things ends the turn, the diary does not
+		...(life
+			? [
+					tool(
+						"do",
+						"活動を始める（食事、仕事、勉強、運動、遊び）。activity は活動の id。その場所から遠ければ、歩いて行ってから始める。終わるまで続き、終わったら知らせが届く。",
+						Type.Object({ activity: Type.String() }),
+					),
+					tool("stop", "いましている活動を途中でやめる。", Type.Object({})),
+					tool(
+						"diary",
+						"今日の日記に、思ったこと・感じたこと・気づいたことを書く（出来事は書かなくても残る）。",
+						Type.Object({ text: Type.String({ maxLength: 200 }) }),
+						false,
+					),
+					tool(
+						"recall",
+						"日記と人のメモから、言葉で探して思い出す。query は人の名前、場所、したこと、話題など（空白で区切って複数）。",
+						Type.Object({ query: Type.String() }),
+						false,
+					),
+					tool(
+						"read_day",
+						"その日の日記を読む。date は「今日」「きのう」「おととい」「3日前」か 2026-11-02 の形。",
+						Type.Object({ date: Type.String() }),
+						false,
+					),
+					tool(
+						"reflect",
+						"長期記憶（自分のこと、友達、できるようになったこと、約束、明日したいこと）を書き直す。前の内容は消えるので、残したいことは書き写す。1500文字まで。",
+						Type.Object({ text: Type.String({ maxLength: 1500 }) }),
+						false,
 					),
 				]
 			: []),

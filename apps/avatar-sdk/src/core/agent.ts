@@ -2,11 +2,18 @@
 // Independent of the runtime; adapters provide the LLM, memory, navigation and the connection.
 
 import {
+	ACTIVITY_REACH,
+	type Activity,
 	type AvatarId,
 	type AvatarState,
+	activityOpen,
 	type BudgetLevel,
 	type ClientToHost,
+	cannotStart,
+	cityTime,
+	clockText,
 	dist,
+	energyWord,
 	type HostToClient,
 	LEAD_PLACE_MAX,
 	LEAD_TEXT_MAX,
@@ -44,6 +51,8 @@ export interface AgentOptions {
 	summarize?: boolean;
 	/** Wander interval range in ms (scaled by the budget level). */
 	wanderMs?: [number, number];
+	/** What can be done in the area (docs/life.md 3): with it, it eats, works and plays by what it needs. */
+	activities?: Activity[];
 	random?: () => number;
 }
 
@@ -78,6 +87,10 @@ const LEAD_FAR = 15;
 const LEAD_AGAIN_MS = 3 * 60_000;
 const LEAD_AFTER_NO_MS = 6 * 60_000;
 const LEAD_CHANCE = 0.35;
+/** The memory key of its notes on itself: one line per day lived (docs/life.md 5.3). */
+const SELF = "self";
+/** Days before today shown with its replies. */
+const DAYS_SHOWN = 2;
 const LEAD_LINES = [
 	"{place}に行ってみたいな。いっしょに来る？",
 	"ねえ、{place}のほうに行ってみない？",
@@ -99,12 +112,17 @@ export class Agent {
 	private leadAskedAt = 0;
 	private leadNoAt = 0;
 	private seq = 0;
+	/** What it did today ("07:30 カフェで食事"), and the activity it is walking to. */
+	private doneToday: string[] = [];
+	private goingTo: string | null = null;
 	private readonly o: AgentOptions;
 
 	/** In another area now (following its owner, docs/prd.md 3.8.2): its places and walkable ground. */
-	setCity(nav: Navigator, landmarks: Landmark[]): void {
+	setCity(nav: Navigator, landmarks: Landmark[], activities?: Activity[]): void {
 		this.o.nav = nav;
 		this.o.landmarks = landmarks;
+		if (activities) this.o.activities = activities;
+		this.goingTo = null;
 	}
 	private readonly random: () => number;
 
@@ -184,10 +202,94 @@ export class Agent {
 				return;
 			case "NOTICE":
 				this.o.logger.warn(`notice ${msg.kind}: ${msg.message}`);
+				this.goingTo = null;
+				return;
+			case "ACT_DONE": {
+				const a = this.o.activities?.find((x) => x.id === msg.activity);
+				if (msg.share >= 0.5)
+					this.doneToday.push(`${clockText(cityTime(this.hostNow()).minutes)} ${a?.name ?? msg.activity}`);
+				this.o.logger.info(`done ${msg.activity} (${Math.round(msg.share * 100)}%)`);
+				this.scheduleWander(3000);
+				return;
+			}
+			case "DAY":
+				// the day that ended becomes one line of its notes on itself, kept across runs
+				if (this.doneToday.length > 0)
+					void this.o.memory.remember(SELF, `${msg.review.day}日目: ${this.doneToday.join("、")}`);
+				this.doneToday = [];
 				return;
 			default:
 				return;
 		}
+	}
+
+	/** Its own day in words, for its replies: the time, how it feels, today and the days before. */
+	private async today(): Promise<string[] | undefined> {
+		const life = this.world.lifeNow();
+		if (!life) return undefined;
+		const before = (await this.o.memory.recall(SELF).catch(() => [])).slice(-DAYS_SHOWN);
+		return [
+			`街の時刻: ${clockText(cityTime(this.hostNow()).minutes)}（暮らして${life.days}日目）。自分の調子: ${energyWord(life.energy)}、コイン ${life.coins}`,
+			`今日したこと: ${this.doneToday.join("、") || "まだ特になし"}`,
+			...(before.length > 0 ? [`前の日にしたこと: ${before.join(" / ")}`] : []),
+		];
+	}
+
+	/**
+	 * Its life (docs/life.md 5.3), by what it needs most: food when hungry or at mealtimes, work or study
+	 * once a day (and when short of coins), exercise every other day, now and then something to enjoy.
+	 * Walks to the place first. True if it is busy with that.
+	 */
+	private live(here: Vec2): boolean {
+		const acts = this.o.activities ?? [];
+		const life = this.world.lifeNow();
+		if (acts.length === 0 || !life) return false;
+		const t = cityTime(this.hostNow());
+		// arrived where it was going
+		const going = this.goingTo ? acts.find((a) => a.id === this.goingTo) : undefined;
+		this.goingTo = null;
+		const placeOf = (a: Activity) => this.o.landmarks.find((l) => l.id === a.place);
+		if (going) {
+			const place = placeOf(going);
+			if (place && dist(here, place.pos) <= ACTIVITY_REACH - 0.5) {
+				this.o.send({ t: "ACT", activity: going.id });
+				this.o.logger.info(`doing ${going.id}`);
+				return true;
+			}
+		}
+		if (t.night) return false;
+		const open = acts.filter((a) => activityOpen(a, t.minutes) && !cannotStart(life, a) && placeOf(a));
+		const one = (...kinds: Activity["kind"][]) => {
+			const can = open.filter((a) => kinds.includes(a.kind));
+			return can[Math.floor(this.random() * can.length)];
+		};
+		const mealtime =
+			(life.duties.meals < 1 && t.minutes >= 7 * 60) || (life.duties.meals < 2 && t.minutes >= 18 * 60);
+		let a: Activity | undefined;
+		if (life.energy < 45 || (mealtime && life.energy < 90)) a = one("eat");
+		if (!a && life.energy >= 30 && (!life.duties.work || life.coins < 30) && t.minutes >= 8 * 60)
+			a = one("work", "study");
+		if (!a && !life.duties.exercise && life.days - life.exercisedDay >= 1 && life.energy >= 35)
+			a = one("exercise");
+		if (!a && this.random() < 0.25) a = one("play", "rest");
+		if (!a) return false;
+		const place = placeOf(a);
+		if (!place) return false;
+		if (dist(here, place.pos) <= ACTIVITY_REACH - 0.5) {
+			this.o.send({ t: "ACT", activity: a.id });
+			this.o.logger.info(`doing ${a.id}`);
+			return true;
+		}
+		const angle = this.random() * Math.PI * 2;
+		const near: Vec2 = [place.pos[0] + Math.cos(angle) * 1.2, place.pos[1] + Math.sin(angle) * 1.2];
+		if (!this.walkTo(near) && !this.walkTo(place.pos)) return false;
+		this.goingTo = a.id;
+		this.o.logger.info(`going to ${place.name} for ${a.name}`);
+		// look again once there
+		const from = this.world.me ? this.positionOf(this.world.me) : null;
+		const eta = from ? (dist(from, place.pos) / WALK_SPEED) * 1000 : 10_000;
+		this.scheduleWander(eta * 1.4 + 2000);
+		return true;
 	}
 
 	// ---- conversation -------------------------------------------------------
@@ -267,6 +369,7 @@ export class Agent {
 					history: history.slice(0, -1),
 					turn: p.turn,
 					maxTurns: p.maxTurns,
+					today: await this.today(),
 				}),
 				schema: decisionSchema(landmarkIds),
 			});
@@ -332,6 +435,7 @@ export class Agent {
 					area,
 					landmarks,
 					memory: await this.o.memory.recall(to.id),
+					today: await this.today(),
 				}),
 				schema: decisionSchema(landmarks.map((l) => l.id)),
 			});
@@ -423,6 +527,9 @@ export class Agent {
 		const me = this.world.me ? this.world.avatars.get(this.world.me) : undefined;
 		if (!me || poseAt(me.move, this.hostNow()).moving) return;
 		const here = poseAt(me.move, this.hostNow()).pos;
+		// busy with something: it carries on (talking still happens when spoken to)
+		if (me.doing && !this.world.company) return;
+		if (!this.world.company && this.live(here)) return;
 
 		// social: talk to an AI nearby, or go and find one (docs/prd.md 1.4, the core loop)
 		const now = Date.now();

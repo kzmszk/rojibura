@@ -19,6 +19,7 @@ import type { ClientToHost, HostToClient } from "@rojibura/protocol";
 import { ClaudeCodeLLM } from "./adapters/node/claude-code.ts";
 import { createClaudeMind } from "./adapters/node/claude-mind.ts";
 import { EchoLLM } from "./adapters/node/echo-llm.ts";
+import { FileJournal } from "./adapters/node/file-journal.ts";
 import { FileMemory } from "./adapters/node/file-memory.ts";
 import {
 	devHeaders,
@@ -164,7 +165,11 @@ if (args.mind === "pi" || args.mind === "claude") {
 	if (moves) log.info(`わざ帳: ${shortPath(moves.page, homedir())}`);
 	const act = (tool: string, params: Record<string, unknown>) =>
 		resident ? resident.act(tool, params) : Promise.resolve("まだ街にいない。");
-	const system = residentSystemPrompt(persona, city.landmarks, body);
+	// it lives in the city where there is something to do: a diary in <name>.life (docs/life.md 5)
+	const life = city.activities.length > 0;
+	const journal = life ? new FileJournal(join(dir, `${encodeURIComponent(name)}.life`)) : undefined;
+	if (journal) log.info(`日記: ${shortPath(journal.dir, homedir())}`);
+	const system = residentSystemPrompt(persona, city.landmarks, body, city.activities);
 	const mind = claude
 		? await createClaudeMind({
 				model: args.model,
@@ -173,6 +178,7 @@ if (args.mind === "pi" || args.mind === "claude") {
 				sessionDir: join(dir, `${encodeURIComponent(name)}.claude`),
 				fresh: args.fresh,
 				act,
+				life,
 				logger: log,
 			})
 		: await createPiMind({
@@ -184,6 +190,7 @@ if (args.mind === "pi" || args.mind === "claude") {
 				sessionDir: join(dir, `${encodeURIComponent(name)}.pi`),
 				fresh: args.fresh,
 				act,
+				life,
 				logger: log,
 			});
 	resident = new Resident({
@@ -193,6 +200,7 @@ if (args.mind === "pi" || args.mind === "claude") {
 		memory: new FileMemory(join(dir, `${encodeURIComponent(name)}.memory.json`)),
 		nav: city.nav,
 		landmarks: city.landmarks,
+		...(journal ? { journal, activities: city.activities } : {}),
 		logger: log,
 		send,
 		dailyTurnLimit: dailyLimit,
@@ -202,7 +210,7 @@ if (args.mind === "pi" || args.mind === "claude") {
 		...(moves ? { moves, mirror: new ChromeMirror({ base, logger: log }), sees: claude || args.vision } : {}),
 	});
 	handle = (m) => resident?.handle(m);
-	enter = (next) => resident?.setCity(next.nav, next.landmarks, next.name);
+	enter = (next) => resident?.setCity(next.nav, next.landmarks, next.name, next.activities);
 	stopMind = () => resident?.stop();
 	log.info(
 		`mind ${mind.name}; ${city.landmarks.length} landmarks; navmesh ${city.hasNavmesh ? "yes" : "no"}`,
@@ -217,12 +225,13 @@ if (args.mind === "pi" || args.mind === "claude") {
 		memory: new FileMemory(join(dir, `${encodeURIComponent(name)}.memory.json`)),
 		nav: city.nav,
 		landmarks: city.landmarks,
+		activities: city.activities,
 		logger: log,
 		send,
 		dailyLlmLimit: dailyLimit,
 	});
 	handle = (m) => agent.handle(m);
-	enter = (next) => agent.setCity(next.nav, next.landmarks);
+	enter = (next) => agent.setCity(next.nav, next.landmarks, next.activities);
 	stopMind = () => agent.stop();
 	log.info(
 		`LLM ${llm.name}; ${city.landmarks.length} landmarks; navmesh ${city.hasNavmesh ? "yes" : "no (straight lines)"}`,

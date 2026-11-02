@@ -28,6 +28,7 @@ import {
 	getAccount,
 	getAgent,
 	isBanned,
+	lifeOf,
 	listAgents,
 	listOnboarding,
 	listReports,
@@ -289,7 +290,7 @@ async function wsGateway(request: Request, areaId: string): Promise<Response> {
 		if (!owner) return error(403, "owner not found");
 		if (await isBanned(DB, [agent.id, owner.id])) return error(403, "banned");
 		await markOnboarding(DB, owner.id, "ai_at");
-		const pc = await pcOf(DB, agent.id);
+		const [pc, life] = await Promise.all([pcOf(DB, agent.id), lifeOf(DB, agent.id)]);
 		join = {
 			areaId,
 			...arrive,
@@ -304,6 +305,7 @@ async function wsGateway(request: Request, areaId: string): Promise<Response> {
 				ownerName: owner.display_name,
 				trust: agent.trust,
 				ownerAgentLimit: owner.agent_concurrency,
+				...(life ? { life } : {}),
 			},
 		};
 	} else {

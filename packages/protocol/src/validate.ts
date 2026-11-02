@@ -57,6 +57,7 @@ const CONV_RE = /^c_[A-Za-z0-9_-]{1,64}$/;
 const REF_RE = /^[A-Za-z0-9_-]{1,32}$/;
 const LANDMARK_RE = /^[A-Za-z0-9_-]{1,32}$/;
 const AREA_RE = /^[A-Za-z0-9_-]{1,32}$/;
+const ACTIVITY_RE = /^[A-Za-z0-9_-]{1,32}$/;
 
 /**
  * Going through a portal, a page closes its connection with this reason (docs/prd.md 3.8.2): the area it goes
@@ -233,6 +234,11 @@ export function parseClientMessage(raw: string | ArrayBuffer): Parsed<ClientToHo
 		}
 		case "BUILD":
 			return parseBuild(v);
+		case "ACT":
+			if (typeof v.activity !== "string" || !ACTIVITY_RE.test(v.activity)) return fail("bad activity");
+			return { ok: true, msg: { t: "ACT", activity: v.activity } };
+		case "ACT_STOP":
+			return { ok: true, msg: { t: "ACT_STOP" } };
 		case "UNBUILD": {
 			if (!isBuildId(v.id)) return fail("bad id");
 			if (v.ref !== undefined && !(typeof v.ref === "string" && REF_RE.test(v.ref))) return fail("bad ref");
