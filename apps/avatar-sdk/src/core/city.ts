@@ -5,6 +5,8 @@ import type { AreasData, JobZone, Shop, ShopsData, Vec2 } from "@rojibura/protoc
 import type { Landmark, Navigator } from "./types.ts";
 
 export interface City {
+	/** The area's name (areas.json), or "街" without one. */
+	name: string;
 	landmarks: Landmark[];
 	spawn: Vec2 | null;
 	nav: Navigator;
@@ -35,8 +37,11 @@ export function landmarksOf(data: LandmarksData, places?: PlacesData | null): La
 }
 
 /** Where an area's files are (assets/areas.json, docs/prd.md 3.8), and its portals as landmarks. */
-async function areaFiles(baseUrl: string, area?: string): Promise<{ dir: string; portals: Landmark[] }> {
-	const fallback = { dir: "/test-city", portals: [] };
+async function areaFiles(
+	baseUrl: string,
+	area?: string,
+): Promise<{ dir: string; name: string; portals: Landmark[] }> {
+	const fallback = { dir: "/test-city", name: "街", portals: [] };
 	const r = await fetch(`${baseUrl}/areas.json`).catch(() => null);
 	// a host without areas.json (or one answering with its app page) has only the test city
 	const data = r?.ok ? ((await r.json().catch(() => null)) as AreasData | null) : null;
@@ -47,7 +52,7 @@ async function areaFiles(baseUrl: string, area?: string): Promise<{ dir: string;
 		const to = data.areas[p.to]?.name ?? p.to;
 		return { id: p.id, name: p.name, pos: [p.pos[0], p.pos[1]] as Vec2, description: `${to}へ通じる門。` };
 	});
-	return { dir: info.dir, portals };
+	return { dir: info.dir, name: info.name, portals };
 }
 
 /** The area's landmarks (with its portals), spawn point and navmesh; `area` is an ID in areas.json. */
@@ -56,10 +61,12 @@ export async function loadCity(baseUrl: string, area?: string): Promise<City> {
 	let spawn: Vec2 | null = null;
 	let nav = straightLine;
 	let hasNavmesh = false;
+	let name = "街";
 	let shops: Shop[] = [];
 	let jobZones: JobZone[] = [];
 	try {
-		const { dir: cityPath, portals } = await areaFiles(baseUrl, area);
+		const { dir: cityPath, portals, name: areaName } = await areaFiles(baseUrl, area);
+		name = areaName;
 		const r = await fetch(`${baseUrl}${cityPath}/landmarks.json`);
 		if (r.ok) {
 			const data = (await r.json()) as LandmarksData;
@@ -87,5 +94,5 @@ export async function loadCity(baseUrl: string, area?: string): Promise<City> {
 	} catch {
 		// keep the fallbacks
 	}
-	return { landmarks, spawn, nav, hasNavmesh, shops, jobZones };
+	return { name, landmarks, spawn, nav, hasNavmesh, shops, jobZones };
 }

@@ -23,7 +23,7 @@ import {
 export type FromPage =
 	| { cmd: "load" }
 	/** `preset`: the look of a new AI (kept once it is registered). */
-	| { cmd: "start"; name: string; personality: string; preset?: string }
+	| { cmd: "start"; name: string; personality: string; preset?: string; area?: string; at?: string }
 	| { cmd: "stop" }
 	| { cmd: "forget" };
 
@@ -58,7 +58,14 @@ function stop(): void {
 	conn = null;
 }
 
-async function start(name: string, personality: string, preset?: string): Promise<void> {
+/** `area`, `at`: where the page is, and the portal it came through (docs/prd.md 3.8.2). */
+async function start(
+	name: string,
+	personality: string,
+	preset?: string,
+	area = "main",
+	at?: string,
+): Promise<void> {
 	stop();
 	post({ t: "state", state: "starting" });
 	let id: BrowserIdentity | undefined = await loadBrowserIdentity();
@@ -70,7 +77,7 @@ async function start(name: string, personality: string, preset?: string): Promis
 		await saveBrowserIdentity(id);
 	}
 	post({ t: "agent", agentId: id.agentId });
-	const city = await loadCity(base);
+	const city = await loadCity(base, area);
 	const quota = await trialRemaining(base);
 	if (quota) post({ t: "remaining", remaining: quota.remaining, limit: quota.limit });
 	const trial = new HostTrialLLM({ baseUrl: base, agentId: id.agentId, personality });
@@ -87,7 +94,8 @@ async function start(name: string, personality: string, preset?: string): Promis
 	const identity = id;
 	conn = new AgentConnection({
 		baseUrl: base.replace(/^http/, "ws"),
-		areaId: "main",
+		areaId: area,
+		...(at ? { at } : {}),
 		agentId: identity.agentId,
 		privateKey: identity.privateKey,
 		logger: log,
@@ -124,7 +132,7 @@ scope.onmessage = async (e) => {
 				personality: id?.personality ?? "",
 			});
 		} else if (m.cmd === "start") {
-			await start(m.name, m.personality, m.preset);
+			await start(m.name, m.personality, m.preset, m.area, m.at);
 		} else if (m.cmd === "stop") {
 			stop();
 			post({ t: "state", state: "stopped" });

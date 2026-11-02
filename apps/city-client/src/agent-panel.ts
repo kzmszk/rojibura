@@ -121,7 +121,11 @@ export class AgentPanel {
 	private readonly log = el("div", "rj-excerpt rj-agent-log");
 
 	/** `onRunning`: whether the AI is running in this tab, for the HUD button. */
-	constructor(onRunning: (on: boolean) => void) {
+	/** The area this page is in, and where it arrived (a tab's AI is where its owner's page is). */
+	private readonly where: { area: string; at?: string };
+
+	constructor(where: { area: string; at?: string }, onRunning: (on: boolean) => void) {
+		this.where = where;
 		this.onRunning = onRunning;
 		this.el = el("div", "rj-agent");
 		this.el.hidden = true;
@@ -282,7 +286,13 @@ export class AgentPanel {
 			return;
 		}
 		setOn(true);
-		this.send({ cmd: "start", name: this.name.value.trim(), personality, preset: this.look.value });
+		this.send({
+			cmd: "start",
+			name: this.name.value.trim(),
+			personality,
+			preset: this.look.value,
+			...this.where,
+		});
 	}
 
 	/** Running it on your PC (docs/prd.md 3.5.1). */

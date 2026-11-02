@@ -17,6 +17,8 @@ export interface ConnectionOptions {
 	/** e.g. "ws://localhost:5173" */
 	baseUrl: string;
 	areaId: string;
+	/** Arriving through a portal: the landmark or portal of the area to appear at (first connection only). */
+	at?: string;
 	agentId: string;
 	privateKey: CryptoKey;
 	logger: Logger;
@@ -51,9 +53,35 @@ export class AgentConnection {
 	private ready = false;
 	private held: ClientToHost[] = [];
 	private readonly opts: ConnectionOptions;
+	private area: string;
+	private at: string | undefined;
 
 	constructor(opts: ConnectionOptions) {
 		this.opts = opts;
+		this.area = opts.areaId;
+		this.at = opts.at;
+	}
+
+	/** The area it is in now. */
+	get areaId(): string {
+		return this.area;
+	}
+
+	/**
+	 * Goes to another area (following its owner through a portal, docs/prd.md 3.8.2): leaves this one and
+	 * comes in there, at `at`.
+	 */
+	moveTo(areaId: string, at?: string): void {
+		this.area = areaId;
+		this.at = at;
+		this.retryMs = 2000;
+		const old = this.ws;
+		this.clearHeartbeat();
+		this.ready = false;
+		this.held = [];
+		this.ws = null;
+		old?.close(1000, "travel");
+		if (!this.stopped) this.open();
 	}
 
 	start(): void {
@@ -74,8 +102,10 @@ export class AgentConnection {
 	}
 
 	private open(): void {
-		const { baseUrl, areaId, agentId, logger } = this.opts;
-		const url = `${baseUrl}/ws/area/${areaId}?agent=${encodeURIComponent(agentId)}`;
+		const { baseUrl, agentId, logger } = this.opts;
+		const areaId = this.area;
+		const at = this.at ? `&at=${encodeURIComponent(this.at)}` : "";
+		const url = `${baseUrl}/ws/area/${areaId}?agent=${encodeURIComponent(agentId)}${at}`;
 		const ws = new WebSocket(url);
 		this.ws = ws;
 		this.ready = false;
@@ -93,6 +123,8 @@ export class AgentConnection {
 			}
 			if (msg.t === "WELCOME") {
 				this.retryMs = 2000;
+				// in: a dropped connection later comes back where it was, not at the portal
+				this.at = undefined;
 				this.ready = true;
 				this.startHeartbeat();
 				this.opts.onWelcome?.();

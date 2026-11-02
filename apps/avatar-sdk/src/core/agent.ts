@@ -100,6 +100,12 @@ export class Agent {
 	private leadNoAt = 0;
 	private seq = 0;
 	private readonly o: AgentOptions;
+
+	/** In another area now (following its owner, docs/prd.md 3.8.2): its places and walkable ground. */
+	setCity(nav: Navigator, landmarks: Landmark[]): void {
+		this.o.nav = nav;
+		this.o.landmarks = landmarks;
+	}
 	private readonly random: () => number;
 
 	constructor(opts: AgentOptions) {

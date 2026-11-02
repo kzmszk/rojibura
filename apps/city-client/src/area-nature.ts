@@ -87,13 +87,6 @@ export class AreaNature {
 		return made;
 	}
 
-	/** The next season round (spring, autumn, winter). */
-	next(): Season {
-		const s = SEASON_ORDER[(SEASON_ORDER.indexOf(this.season) + 1) % SEASON_ORDER.length] as Season;
-		void this.setSeason(s);
-		return s;
-	}
-
 	async setSeason(season: Season): Promise<void> {
 		this.season = season;
 		if (season === "winter") await this.loadWinter();

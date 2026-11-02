@@ -10,6 +10,8 @@ import { CSS2DRenderer } from "three/examples/jsm/renderers/CSS2DRenderer.js";
 /** The sun's direction (from the target) and the default reach of its shadow (metres around the camera). */
 const SUN_OFFSET = new THREE.Vector3(30, 50, 20);
 const SHADOW_HALF = 50;
+/** The orbiting camera goes no lower than this above the ground under it. */
+const CAMERA_ABOVE_GROUND = 0.25;
 
 export class CityScene {
 	readonly renderer: THREE.WebGLRenderer;
@@ -47,8 +49,9 @@ export class CityScene {
 		this.camera.position.set(0, 9, 14);
 		this.controls = new OrbitControls(this.camera, this.renderer.domElement);
 		this.controls.enableDamping = true;
-		this.controls.maxPolarAngle = Math.PI * 0.47;
-		this.controls.minDistance = 3;
+		// close to the avatar, and down near the ground looking up at it (follow keeps it above the ground)
+		this.controls.maxPolarAngle = Math.PI * 0.62;
+		this.controls.minDistance = 1.2;
 		this.controls.maxDistance = 45;
 		this.controls.enablePan = false;
 
@@ -194,6 +197,13 @@ export class CityScene {
 		this.controls.target.add(delta);
 		this.camera.position.add(delta);
 		this.controls.update();
+		const p = this.camera.position;
+		const ground = this.heightAt(p.x, p.z);
+		// a roof above the avatar's head is not the ground (the camera may be in a building)
+		if (ground !== null && ground < this.controls.target.y && p.y < ground + CAMERA_ABOVE_GROUND) {
+			p.y = ground + CAMERA_ABOVE_GROUND;
+			this.camera.lookAt(this.controls.target);
+		}
 	}
 
 	/** The sun's shadow and the water follow what the camera looks at, so a large area has them everywhere. */

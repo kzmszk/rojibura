@@ -355,6 +355,8 @@ export type HostToClient =
 	| { t: "LEADING"; by: AvatarId; to: Vec2; place: string }
 	/** Someone moves their body by a script from host time `at` (docs/prd.md 3.4.11). */
 	| { t: "BODIED"; id: AvatarId; keys: BodyKey[]; to?: AvatarId; at: number }
+	/** To an AI walking with its owner: they went to area `to` through a portal; come along, arriving at `at`. */
+	| { t: "FOLLOW"; owner: AvatarId; to: AreaId; at: string }
 	/** A small thing changed: picked up, thrown, put down or bought. */
 	| { t: "ITEM"; item: Item }
 	/** A small thing is gone: eaten (`by`), or tidied away (bought things beyond MAX_GOODS, oldest first). */

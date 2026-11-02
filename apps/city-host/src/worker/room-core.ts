@@ -3,6 +3,7 @@
 
 import { boxNav, claimed, type ModelNav, occupied, overlaps, type PlacedModel } from "@rojibura/nav";
 import {
+	type AreaId,
 	type AvatarAssets,
 	type AvatarId,
 	type AvatarKind,
@@ -880,6 +881,17 @@ export class RoomCore<C> {
 		this.transport.persist(conn, m);
 		this.broadcastAbout(m, { t: "MOVED", id: m.id, move: m.move });
 		return walk ? (d / WALK_SPEED) * 1000 : 0;
+	}
+
+	/**
+	 * Someone goes through a portal to area `to`, arriving at `at` (docs/prd.md 3.8.2): their AIs walking with
+	 * them come along (FOLLOW). `who` may be what a closed connection last persisted (its close says where to).
+	 */
+	travel(who: Pick<Member, "id" | "kind" | "companion">, to: AreaId, at: string): void {
+		if (who.kind !== "human" || !who.companion) return;
+		for (const [ac, ai] of this.members)
+			if (ai.kind === "ai" && ai.ownerId === who.id)
+				this.transport.send(ac, { t: "FOLLOW", owner: who.id, to, at });
 	}
 
 	// ---- an AI moving its own body (docs/prd.md 3.4.11) ----------------------

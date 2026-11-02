@@ -201,6 +201,23 @@ export class Resident {
 		return this.turn !== null || this.pending.size > 0;
 	}
 
+	/**
+	 * In another area now, having followed its owner through a portal (docs/prd.md 3.8.2): its places and
+	 * walkable ground, and what it is told about where it is.
+	 */
+	setCity(nav: Navigator, landmarks: Landmark[], areaName: string): void {
+		this.o.nav = nav;
+		this.o.landmarks = landmarks;
+		this.place = { name: "", since: Date.now() };
+		this.push(
+			`オーナーについて、門を通って${clean(areaName, 24)}に来た。前の街とは別の場所。ここの場所: ${
+				landmarks
+					.map((l) => `${l.id}=${clean(l.name, 24)}${l.description ? `（${clean(l.description, 60)}）` : ""}`)
+					.join("、") || "まだ分からない"
+			}`,
+		);
+	}
+
 	/** Takes a turn now, as a tick would (used by scripts/eval-resident.ts). */
 	turnNow(): Promise<void> {
 		return this.run();

@@ -17,6 +17,7 @@ import {
 	type ModelId,
 	type ModelInfo,
 	parseClientMessage,
+	parseTravelReason,
 	randomToken,
 	verifyAuth,
 } from "@rojibura/protocol";
@@ -359,8 +360,12 @@ export class CityRoomDO extends DurableObject<Env> {
 			safeSend(ws, { t: "USAGE", ...this.meter.snapshot(), events: [...this.meter.recent] });
 	}
 
-	async webSocketClose(ws: WebSocket, code: number): Promise<void> {
+	async webSocketClose(ws: WebSocket, code: number, reason = ""): Promise<void> {
 		const member = attachmentOf(ws)?.member;
+		// through a portal: the AIs walking with them come along (docs/prd.md 3.8.2)
+		const travel = parseTravelReason(reason);
+		const who = this.core.members.get(ws) ?? member;
+		if (travel && who) this.core.travel(who, travel.to, travel.at);
 		const name = this.core.members.get(ws)?.name ?? member?.name ?? "?";
 		const dropped = DROPPED.has(code);
 		this.meter.track(`${name}：${dropped ? "接続切れ" : "退出"}`, () => this.depart(ws, member, dropped), {
