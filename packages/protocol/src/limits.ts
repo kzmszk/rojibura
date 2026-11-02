@@ -109,6 +109,9 @@ export const BODY_OFFSET_YOU_MAX = 0.15;
  * its owner (a metre), so it steps up first.
  */
 export const BODY_REACH = 0.9;
+/** Touching your own AI from this far at most (m): the host brings it up to you, this far from you (m). */
+export const BODY_CALL_REACH = 4;
+export const BODY_CALLED_TO = 0.45;
 /** How close the one looked at must be (m). */
 export const BODY_LOOK_REACH = 15;
 /** One script per avatar this often at most. */

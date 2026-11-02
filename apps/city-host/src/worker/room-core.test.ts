@@ -869,4 +869,43 @@ describe("an AI moving its own body", () => {
 		ctx.room.handle(bot, wave);
 		expect(last(c)).toMatchObject({ t: "BODIED", id: "a_bot", to: "h_carol" });
 	});
+
+	test("an owner pats their own AI: it is brought up to them first; nobody else's AI, and not from far", () => {
+		const a = conn("a");
+		const c = conn("c");
+		const bot = conn("bot");
+		place(a, human("alice"), [-10, -10]);
+		place(c, human("carol"), [-8, -10]);
+		place(bot, ai("bot", "alice"), [-12, -10]);
+		const pat: Extract<ClientToHost, { t: "BODY" }> = {
+			t: "BODY",
+			to: "a_bot",
+			keys: [{ at: 1, right: { part: "head", of: "you", wiggle: { dir: "side", size: 0.04, hz: 1 } } }],
+		};
+		ctx.room.handle(c, pat);
+		expect(last(c)).toMatchObject({ t: "NOTICE", message: "手で触れられるのは自分のAIだけです" });
+		bot.inbox.length = 0;
+		ctx.room.handle(a, pat);
+		// two metres off: it walks up to 45 cm in front of her, and the pat starts once it is there
+		const moved = bot.inbox.find((m) => m.t === "MOVED") as Extract<HostToClient, { t: "MOVED" }>;
+		expect(moved.move).toMatchObject({
+			kind: "path",
+			path: [
+				[-12, -10],
+				[-10.45, -10],
+			],
+		});
+		const bodied = bot.inbox.find((m) => m.t === "BODIED");
+		expect(bodied).toMatchObject({
+			id: "h_alice",
+			to: "a_bot",
+			at: ctx.clock.now() + (1.55 / 1.4) * 1000 + 200,
+		});
+		ctx.clock.advance(5000);
+		// it wandered off four metres and more: too far to call
+		const botMember = ctx.room.members.get(bot);
+		if (botMember) botMember.move = { kind: "idle", pos: [-16, -10], at: ctx.clock.now() };
+		ctx.room.handle(a, pat);
+		expect(last(a)).toMatchObject({ t: "NOTICE", message: "自分のAIのそばへ行ってください" });
+	});
 });

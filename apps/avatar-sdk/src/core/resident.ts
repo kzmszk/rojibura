@@ -10,6 +10,7 @@ import {
 	type AvatarState,
 	BODY_REACH,
 	type BodyKey,
+	type BodyPart,
 	type BudgetLevel,
 	bodyDuration,
 	bodyNeedsPartner,
@@ -283,6 +284,19 @@ export class Resident {
 				if (msg.target !== this.world.me) return;
 				const a = this.world.avatars.get(msg.id);
 				if (a) this.push(`${clean(a.name, 24)}（id ${a.id}）があなたに ${msg.motion} をした。`);
+				return;
+			}
+			case "BODIED": {
+				if (msg.to !== this.world.me || msg.id === this.world.me) return;
+				const a = this.world.avatars.get(msg.id);
+				if (!a) return;
+				const touched = touchedParts(msg.keys);
+				const who = `${a.id === this.world.self?.ownerId ? "オーナーの" : ""}${clean(a.name, 24)}（id ${a.id}）`;
+				if (touched) {
+					this.push(`${who}が、あなたの${touched.parts}${touched.stroked ? "をなでた" : "に手を置いた"}。`);
+					// being touched is a moment to answer, not something to mention on the next tick
+					if (!this.turn) this.scheduleTick(1500);
+				} else this.push(`${who}が、あなたに向けて体を動かした。`);
 				return;
 			}
 			case "LEAD_ANSWERED": {
@@ -1061,6 +1075,33 @@ export function parseKeysText(text: string): unknown {
 		} catch {}
 	}
 	return null;
+}
+
+/** How the parts of a body are called. */
+const PART_NAMES: Partial<Record<BodyPart, string>> = {
+	head: "頭",
+	cheek_l: "左の頬",
+	cheek_r: "右の頬",
+	shoulder_l: "左の肩",
+	shoulder_r: "右の肩",
+	arm_l: "左の腕",
+	arm_r: "右の腕",
+	hand_l: "左手",
+	hand_r: "右手",
+	back: "背中",
+};
+
+/** The parts of "you" a script's hands touch, in words, and whether a hand moves on one (strokes it). */
+export function touchedParts(keys: readonly BodyKey[]): { parts: string; stroked: boolean } | null {
+	const parts = new Set<string>();
+	let stroked = false;
+	for (const k of keys)
+		for (const h of [k.right, k.left]) {
+			if (!h || h === "rest" || h.of !== "you") continue;
+			parts.add(PART_NAMES[h.part] ?? h.part);
+			if (h.wiggle) stroked = true;
+		}
+	return parts.size > 0 ? { parts: [...parts].join("と"), stroked } : null;
 }
 
 function jstDay(d: Date): string {

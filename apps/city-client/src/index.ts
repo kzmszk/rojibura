@@ -3,6 +3,8 @@
 import { applyBuilds, NavMesh, type NavMeshData, validatePath } from "@rojibura/nav";
 import {
 	type AvatarId,
+	BODY_CALL_REACH,
+	type BodyKey,
 	dist,
 	type HostToClient,
 	ITEM_REACH,
@@ -57,6 +59,17 @@ const MOTION_EMOJI: Record<Motion, string> = {
 	backflip: "🔄",
 };
 const TOGETHER_LABEL: Record<Together, string> = { handshake: "握手", hug: "ハグ" };
+/** Patting your AI's head (🤚, H): the palm comes down on top and moves gently from side to side. */
+const PAT: BodyKey[] = [
+	{
+		at: 0.7,
+		right: { part: "head", of: "you", palm: "down" },
+		look: { part: "face", of: "you" },
+		smile: true,
+	},
+	{ at: 1.2, right: { part: "head", of: "you", wiggle: { dir: "side", size: 0.04, hz: 1.2 } } },
+	{ at: 3.2, right: { part: "head", of: "you", wiggle: { dir: "side", size: 0.04, hz: 1.2 } } },
+];
 /** An AI this close to its owner looks at them (docs/prd.md 3.4.9). */
 const ATTEND_M = 5;
 /** The action bar (docs/prd.md 3.4.5): motion, label, key. Space also jumps. */
@@ -463,6 +476,14 @@ async function startCity(
 	dropButton.title = "置く（G）";
 	dropButton.onclick = () => conn.send({ t: "DROP" });
 	motionBar.append(pickButton, throwButton, dropButton);
+	// your own AI close by: pat its head (docs/prd.md 3.4.11)
+	const patButton = el("button", "", "🤚");
+	patButton.type = "button";
+	patButton.title = "自分のAIの頭をなでる（H）";
+	patButton.setAttribute("aria-label", "自分のAIの頭をなでる");
+	patButton.hidden = true;
+	patButton.onclick = () => patMine();
+	motionBar.append(patButton);
 	/** Asked to do something together: yes or no, for OFFER_TTL_MS. */
 	const offerBox = el("div", "rj-offer");
 	offerBox.hidden = true;
@@ -828,6 +849,8 @@ async function startCity(
 			nextView();
 		} else if (!typing() && !panel.open && e.key.toLowerCase() === "e") {
 			pickNearest();
+		} else if (!typing() && !panel.open && e.key.toLowerCase() === "h") {
+			patMine();
 		} else if (!typing() && !panel.open && e.key.toLowerCase() === "t") {
 			throwHeld();
 		} else if (!typing() && !panel.open && e.key.toLowerCase() === "g") {
@@ -1178,6 +1201,36 @@ async function startCity(
 		const id = nearestThing();
 		if (id) pickUp(id);
 	}
+	/**
+	 * Your own AI to pat: the one chosen, if it is yours, else the closest of yours within BODY_CALL_REACH
+	 * (the host brings it up to you).
+	 */
+	function myAiToPat(): AvatarView | null {
+		const mine = myId ? avatars.get(myId) : undefined;
+		if (!mine) return null;
+		const ours = [...avatars.values()].filter((a) => a.state.kind === "ai" && a.state.ownerId === myId);
+		const near = (a: AvatarView) => a.root.position.distanceTo(mine.root.position);
+		const chosen = ours.find((a) => a.state.id === talkTo);
+		if (chosen && near(chosen) <= BODY_CALL_REACH) return chosen;
+		return ours.filter((a) => near(a) <= BODY_CALL_REACH).sort((a, b) => near(a) - near(b))[0] ?? null;
+	}
+	/** Stops where it is, and pats your AI's head: the hand on top, gently from side to side. */
+	function patMine(): void {
+		const ai = myAiToPat();
+		const mine = myId ? avatars.get(myId) : undefined;
+		if (!ai || !mine) {
+			showToast("自分のAIのそばで押してください");
+			return;
+		}
+		stopGoing();
+		const now = conn.hostNow();
+		const { pos, moving } = poseAt(mine.state.move, now);
+		if (moving) {
+			mine.setMove({ kind: "idle", pos, at: now });
+			conn.send({ t: "MOVE_VEL", pos, dir: [0, 0], speed: 0, seq: ++seq });
+		}
+		conn.send({ t: "BODY", keys: PAT, to: ai.state.id });
+	}
 	/** Throws what is in hand the way the avatar faces. */
 	function throwHeld(): void {
 		const mine = myId ? avatars.get(myId) : undefined;
@@ -1321,6 +1374,7 @@ async function startCity(
 		}
 		items.update(now);
 		pickButton.hidden = nearestThing() === null;
+		patButton.hidden = myAiToPat() === null;
 		const withAi = [...avatars.values()].some((a) => a.state.kind === "ai" && a.state.ownerId === myId);
 		companionButton.hidden = !withAi;
 		const mine = myId ? avatars.get(myId) : undefined;

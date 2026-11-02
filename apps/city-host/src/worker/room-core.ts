@@ -7,6 +7,8 @@ import {
 	type AvatarId,
 	type AvatarKind,
 	type AvatarState,
+	BODY_CALL_REACH,
+	BODY_CALLED_TO,
 	BODY_INTERVAL_MS,
 	BODY_LOOK_REACH,
 	BODY_REACH,
@@ -837,8 +839,10 @@ export class RoomCore<C> {
 	// ---- an AI moving its own body (docs/prd.md 3.4.11) ----------------------
 
 	/**
-	 * Everyone close sees the member move its body by the script from a moment on. A hand may touch only the
-	 * member's own owner, close by, and only some parts of them; looking at someone needs them in the area.
+	 * Everyone close sees the member move its body by the script from a moment on. A hand may touch only some
+	 * parts, and only between an AI and its owner: the AI touching its owner close by, or the owner touching
+	 * their own AI, which the host first brings up to them if it is a little way off (as for a handshake).
+	 * Looking at someone needs them in the area.
 	 */
 	private body(
 		m: Member,
@@ -850,20 +854,32 @@ export class RoomCore<C> {
 		const to = msg.to ? this.memberById(msg.to) : undefined;
 		if (msg.to && (!to || to.id === m.id)) return "その人はいません";
 		if (!to && bodyNeedsPartner(msg.keys)) return "of: you を使うときは to に相手を入れてください";
+		let at = now + 100;
 		if (to) {
 			if (this.blockedBetween(m.id, to.id)) return "その人には向けられません";
-			const d = dist(this.positionOf(m, now), this.positionOf(to, now));
+			const here = this.positionOf(m, now);
+			const there = this.positionOf(to, now);
+			const d = dist(here, there);
 			if (bodyTouches(msg.keys)) {
-				if (m.kind !== "ai" || m.ownerId !== to.id) return "手で触れられるのは自分のオーナーだけです";
+				const ownAi = m.kind === "human" && to.kind === "ai" && to.ownerId === m.id;
+				if (m.kind === "ai" && m.ownerId !== to.id) return "手で触れられるのは自分のオーナーだけです";
+				if (m.kind === "human" && !ownAi) return "手で触れられるのは自分のAIだけです";
 				const part = bodyUntouchable(msg.keys);
 				if (part) return `${part} には触れられません`;
-				if (d > BODY_REACH) return `もっと近くに行ってください（いま${Math.round(d * 10) / 10}m）`;
+				if (ownAi && d > BODY_REACH) {
+					if (d > BODY_CALL_REACH) return "自分のAIのそばへ行ってください";
+					const u: Vec2 = [(there[0] - here[0]) / d, (there[1] - here[1]) / d];
+					const spot: Vec2 = [here[0] + u[0] * BODY_CALLED_TO, here[1] + u[1] * BODY_CALLED_TO];
+					const ac = this.byId.get(to.id);
+					if (ac === undefined || !this.walk.isWalkable(spot)) return "そこには来られません";
+					at = now + this.stepTo(ac, to, there, spot, now) + 200;
+				} else if (d > BODY_REACH) return `もっと近くに行ってください（いま${Math.round(d * 10) / 10}m）`;
 			} else if (d > BODY_LOOK_REACH) return "その人は遠すぎます";
 		}
 		v.lastBodyAt = now;
 		this.broadcastAbout(
 			m,
-			{ t: "BODIED", id: m.id, keys: msg.keys, ...(to ? { to: to.id } : {}), at: now + 100 },
+			{ t: "BODIED", id: m.id, keys: msg.keys, ...(to ? { to: to.id } : {}), at },
 			undefined,
 			to?.id,
 			true,

@@ -2,7 +2,7 @@ import type { AvatarState, ClientToHost, HostToClient } from "@rojibura/protocol
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { Mirror, Move, MoveBook, RehearseRequest } from "./body.ts";
 import { FALLBACK_REPLIES } from "./prompt.ts";
-import { type Mind, parseKeysText, Resident } from "./resident.ts";
+import { type Mind, parseKeysText, Resident, touchedParts } from "./resident.ts";
 import type { Memory } from "./types.ts";
 
 type Call = [tool: string, args: Record<string, unknown>];
@@ -582,3 +582,23 @@ test("a script written as text: plain JSON, in a code fence, or with keys left u
 	expect(parseKeysText('[{at:1,look:"ahead"}]')).toEqual(keys);
 	expect(parseKeysText("なでる")).toBeNull();
 });
+
+test("being patted by its owner is told in its own words, and answered soon", async () => {
+	const s = setup([{ calls: [["say", { text: "えへへ", to: "h_saki" }]] }]);
+	current = s.resident;
+	s.resident.handle({
+		t: "BODIED",
+		id: "h_saki",
+		to: "a_haru",
+		at: Date.now(),
+		keys: [{ at: 1, right: { part: "head", of: "you", wiggle: { dir: "side", size: 0.04, hz: 1 } } }],
+	});
+	// a turn comes in a second and a half, not at the next tick
+	for (let i = 0; i < 50 && s.prompts.length === 0; i++) await new Promise((r) => setTimeout(r, 50));
+	expect(s.prompts[0]).toMatch(/オーナーのサキ（id h_saki）が、あなたの頭をなでた。/);
+	expect(touchedParts([{ at: 1, left: { part: "shoulder_r", of: "you" } }])).toEqual({
+		parts: "右の肩",
+		stroked: false,
+	});
+	expect(touchedParts([{ at: 1, look: { part: "face", of: "you" } }])).toBeNull();
+}, 5000);
