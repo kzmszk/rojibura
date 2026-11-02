@@ -84,10 +84,10 @@ export interface BuildStore {
  */
 const COMPANION_WALKING: Vec2 = [2, 0.8];
 /**
- * Where they stand when you stop: half a metre away, 25° to one side, so its face is still in view from your
- * eyes and a second one on the other side does not stand in the first.
+ * Where they stand when you stop: a metre away, 25° to one side, so its face is in view from your eyes and a
+ * second one on the other side does not stand in the first.
  */
-const COMPANION_STANDING: Vec2 = [0.45, 0.21];
+const COMPANION_STANDING: Vec2 = [0.91, 0.42];
 /** How long after arriving an AI that took its owner somewhere waits for them before walking with them again. */
 const LEAD_GRACE_MS = 2 * 60_000;
 /**

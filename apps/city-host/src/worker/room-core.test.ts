@@ -652,15 +652,15 @@ describe("walking with your AIs", () => {
 		})();
 		expect(w.avatars.find((x) => x.id === "a_bot")?.ownerId).toBe("h_alice");
 		ctx.room.handle(a, { t: "COMPANION", on: true });
-		// standing, facing +z (nothing walked yet): half a metre off, in front to the right (-x)
+		// standing, facing +z (nothing walked yet): a metre off, in front to the right (-x)
 		const first = last(a);
 		expect(first).toMatchObject({ t: "MOVED", id: "a_bot", move: { kind: "path" } });
 		const end = (m: HostToClient | undefined) =>
 			m?.t === "MOVED" && m.move.kind === "path" ? m.move.path.at(-1) : null;
 		const near = end(first) ?? [0, 0];
-		expect(near[0]).toBeCloseTo(-10.21, 3);
-		expect(near[1]).toBeCloseTo(-9.55, 3);
-		expect(Math.hypot(near[0] + 10, near[1] + 10)).toBeCloseTo(0.5, 2);
+		expect(near[0]).toBeCloseTo(-10.42, 3);
+		expect(near[1]).toBeCloseTo(-9.09, 3);
+		expect(Math.hypot(near[0] + 10, near[1] + 10)).toBeCloseTo(1, 2);
 		// alice walks 10 m along +z; the AI goes along, ending ahead to her right, and takes as long
 		ctx.room.handle(a, {
 			t: "MOVE_PATH",
@@ -678,8 +678,8 @@ describe("walking with your AIs", () => {
 		ctx.clock.advance((10 / 1.4) * 1000 + 100);
 		ctx.room.handle(a, { t: "MOVE_VEL", pos: [-10, 0], dir: [0, 0], speed: 0, seq: 2 });
 		const close = last(a);
-		expect(end(close)?.[0]).toBeCloseTo(-10.21, 3);
-		expect(end(close)?.[1]).toBeCloseTo(0.45, 3);
+		expect(end(close)?.[0]).toBeCloseTo(-10.42, 3);
+		expect(end(close)?.[1]).toBeCloseTo(0.91, 3);
 		// its own steps are not taken meanwhile
 		bot.inbox.length = 0;
 		ctx.room.handle(bot, {
