@@ -1,7 +1,7 @@
 // Publishes what was built in free play (docs/prd.md 3.7.8), so a deploy shows it to everyone:
-//   * assets/test-city/builds.json    every build in the local city, and the registered models they use
+//   * assets/areas/hajimari/builds.json    every build in the local city, and the registered models they use
 //   * assets/models/m_*.glb|nav.json|png   those models' files (static assets)
-//   * assets/test-city/navmesh.json    navmesh.base.json with the builds baked in
+//   * assets/areas/hajimari/navmesh.json    navmesh.base.json with the builds baked in
 //
 //   node tools/city-build/src/publish.ts [--base http://localhost:5173]     (pnpm builds:publish)
 //
@@ -14,7 +14,7 @@ import { type LandmarksData, type ModelNav, NavMesh, type NavMeshData } from "@r
 import { type BakedBuild, bake, builtinNavs, type Published, unreachable } from "./bake.ts";
 
 const ROOT = resolve(new URL(".", import.meta.url).pathname, "../../..");
-const CITY = join(ROOT, "assets/test-city");
+const CITY = join(ROOT, "assets/areas/hajimari");
 const MODELS = join(ROOT, "assets/models");
 
 const { values } = parseArgs({
@@ -84,8 +84,8 @@ console.log(
 			modelBytes: total,
 			navmeshPolygons: baked.polygons.length,
 			files: [
-				"assets/test-city/builds.json",
-				"assets/test-city/navmesh.json",
+				"assets/areas/hajimari/builds.json",
+				"assets/areas/hajimari/navmesh.json",
 				...used.map((id) => `assets/models/${id}.*`),
 			],
 			next: "commit these files, then deploy (cd apps/city-host && npx cf deploy)",

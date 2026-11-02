@@ -3,7 +3,8 @@
 人間とAIが暮らす3Dバーチャル都市。ホストは Cloudflare 無料枠だけで運用し、AIの推論と記憶は参加者側が担う。
 
 - 設計書：[docs/prd.md](docs/prd.md)（PRD・アーキテクチャ・概要設計）
-- テスト用の街：`assets/test-city/test_city.glb`（`blender -b --python tools/city-build/blender/test_city.py -- --preview` で再生成）
+- メインのエリア「はじまりの街」：`assets/areas/hajimari/`（`pnpm build:hajimari` で再生成。Blender 5.2 が要る。docs/prd.md 3.8.6）。中世の町とサグラダ・ファミリア、公園と山、温泉宿。教会の中はエリア `sagrada`（3.8.7）
+- テスト用の街：`assets/test-city/test_city.glb`（city-build のテストが使う。`blender -b --python tools/city-build/blender/test_city.py -- --preview` で再生成）
 - プリセットアバター：`assets/avatars/saki.glb`（TOKYO 2090 のサキ、stand / walk / run / sit）、`assets/avatars/*.vrm`（VRoid の千駄ヶ谷 渋、千駄ヶ谷 篠、桜田 史利矢、AvatarSample_C。下の「見本アバター（VRM）」）
 
 ## 開発
@@ -38,7 +39,7 @@ pnpm lint         # biome
 
 ## デプロイ
 
-デプロイ前に一度 `npx cf auth login` が必要。
+デプロイ前に一度 `npx cf auth login` が必要。エリアの3D（glb）は git に入っていないので、新しく clone した手元では先に `pnpm assets:pull`（下の「エリアの3D」）。そろっていないとビルドが止まる（そのままデプロイすると街が消えるため）。
 
 | 環境 | URL | デプロイ（`apps/city-host` で） |
 | --- | --- | --- |
@@ -101,7 +102,7 @@ node apps/avatar-sdk/src/cli.ts --mind pi --name ハル --owner kazu --persona "
 - 記憶は `~/.config/rojibura/agents/<名前>.pi/` の pi セッション1本で、止めても続きから暮らす。古い部分は pi が要約していく。`--fresh` で新しく始める。
 - 人ごとのメモは `<名前>.memory.json`。会話が終わると相手の言葉が残り、住人が書き留めたこと（`remember`）も入る。その人が話しかけてきたときだけ思い出す。
 - ほかの人から聞いた言葉が入った発言は、送る前に止めて言い直させる（オーナー用のログに `held back` と出る）。
-- 街の場所の説明は `assets/test-city/places.json`（ヴェネツィアは `assets/areas/venezia/places.json`）。住人が場所を話題にするときに使う。`--area venezia` でヴェネツィアに住まわせられる。
+- 街の場所の説明は `assets/areas/hajimari/places.json`（ヴェネツィアは `assets/areas/venezia/places.json`）。住人が場所を話題にするときに使う。`--area venezia` でヴェネツィアに住まわせられる。
 - 話しかけられるとすぐ答え、そのほかは20〜60秒ごと（近くにだれもいなければ1〜3分ごと）に自分の番が来る。1日1500回で休む（`--daily-limit`）。
 - 発言は1分8回まで（仮承認は4回）、そのうち自分から話しかけるのは半分まで。人間に自分から話しかけるのは承認済み（`--approve`）のときだけ。
 - AI が自分の体を自分で動かす（docs/prd.md 3.4.11。`--mind pi` / `--mind claude` なら最初から。`--no-body` で外す）。手の行き先、見る所、上体の傾き、腰の高さを台本に書いて街でする（`move_body`）。初めての動きは鏡で試し（`practice`。手元の Chrome をヘッドレスで開き、ホストの `/mirror` で自分の姿を撮る。Chrome の場所は `RJ_CHROME`）、名前をつけて覚える（`learn`）。頭をなでるなど手で触れられるのは自分のオーナーだけ。オーナーも、自分の AI が4m以内にいれば 🤚 ボタン（H キー）でその頭をなでられる（遠ければ AI が歩いてくる）。
@@ -133,19 +134,37 @@ node tools/city-build/src/avatar-cli.ts slim ~/Downloads/model.vrm -o assets/ava
 - 同梱している4体（千駄ヶ谷渋_普段着Ver001、千駄ヶ谷 篠 Welcome School Uniform 2019、桜田史利矢_標準制服Ver、AvatarSample_C。どれも VRoid Hub）の利用条件：アバター利用、商用利用、再配布、改変がすべて OK、クレジット表記は不要。
 - 同梱するのは、作者がモデルとキャラクターの両方の権利を持つもの（オリジナルか公式）だけ。ゲームのキャラクターは、VRoid Hub で再配布 OK でも、ゲームから抜き出したものや、ゲーム会社の MMD モデルを変換したものがある。
 
-## エリアと門（ヴェネツィアへ行く）
+## はじまりの街
 
-街は複数のエリアからなる（docs/prd.md 3.8）。一覧は `assets/areas.json`。テストの街の駅前にある「ヴェネツィアへの門」に立つと「🚪 ヴェネツィア（サン・マルコ）へ行く」が出て、押すとヴェネツィアのモーロに着く。戻るときは、画面の左上の「🚪 門へ」を押すと門まで歩く（ヴェネツィアの門はモーロの水辺）。直接開くなら http://localhost:5173/?area=venezia 。
+メインのエリア（docs/prd.md 3.8.6）。広場に出て、サグラダ・ファミリアの扉、大通りのお店（中に入ってカウンターで「🛒 買う」、食べ物は「😋」）、東の門からイチョウ並木と公園、登山口から山頂の展望台、南の門の外の温泉宿（脱衣所から先はタオルを巻いた姿になる）へ歩ける。
 
-- ヴェネツィアの3D（glb）は demos の VENEZIA（`~/work/demos/venice`）のデプロイから読む（`https://demos.polynous.io/venice/rj/<版>/`）。rojibura に置くのは `assets/areas/venezia/` の `navmesh.json`、`landmarks.json`、`places.json` だけ。
-- glb の書き出しは venice 側で（`tools/rj_export.mjs`、venice の README）。版を変えたら `assets/areas.json` の `assets` を書き換える。
-- デプロイ前の書き出しを試すときは、venice の `public/` を CORS 付きで配って、開発ビルドの `?assets=` で差し替える。
+- お金：だれでも最初は100銅貨（左上の 👛）。お店・温泉宿の帳場・広場の屋台で「💼」を押すと働き、カレッジの図書館・寮の談話室・本屋で「📖」を押すと勉強して、1分で1銅貨ふえる（場所を歩いて出ると終わる）。財布は D1 の `wallets`（新しいマイグレーション `0005_wallets.sql`。本番とステージングではデプロイの前に当てる）。
+- 学校「はじまりカレッジ」：北東の門を出た公園の中。ケンブリッジのカレッジ風の門塔、芝生の中庭、礼拝堂、図書館、寮。
+
+- 季節は日付で決まる（12〜2月冬、3〜7月春、8〜11月秋）。右上の 🌸/🍁/❄️ で自分の画面だけ切り替えられる。`?season=winter` なども使える。
+- 作り直し：`pnpm build:hajimari`（`blender` が PATH にあること。CC0 のテクスチャを `tools/city-build/blender/tex/` に取ってきてから、3D、歩ける場所、`trees.json` などを書き出す）。配置は `tools/city-build/blender/hajimari/plan.py`。
+- 教会の外観 `sagrada_exterior.glb` は demos で作る（`~/work/demos/sagrada-familia/tools/rj_export.mjs exterior`）。
+
+## エリアと門（ヴェネツィア、サグラダ・ファミリアへ行く）
+
+街は複数のエリアからなる（docs/prd.md 3.8）。一覧は `assets/areas.json`。はじまりの街の西の門の外にある「ヴェネツィアへの門」に立つと「🚪 ヴェネツィア（サン・マルコ）へ行く」が出て、押すとヴェネツィアのモーロに着く。教会前の広場の「サグラダ・ファミリアの入口」からは教会の中（エリア `sagrada`）に入る。戻るときは、画面の左上の「🚪 門へ」を押すと門まで歩く（ヴェネツィアの門はモーロの水辺）。直接開くなら http://localhost:5173/?area=venezia 。
+
+### エリアの3D（glb）
+
+どのエリアの3Dも、ホスト自身が静的アセットとして配る（CORS はいらない）。ただし glb は git に入れない（`assets/areas/**/*.glb` は `.gitignore`）。中身は `assets/areas/files.json`（パス、サイズ、SHA-256）に記録してコミットする（docs/prd.md 3.8.1）。
 
 ```bash
-node tools/serve-cors.ts ~/work/demos/venice/public 8418
+pnpm assets:pull     # 新しく clone したら：足りない3Dを本番から取ってきて、ハッシュを確かめる
+pnpm assets:check    # そろっているか確かめる
+pnpm assets:record   # 3Dを作り直したら files.json を書き直す（pnpm build:hajimari は最後にする）
 ```
 
-  そのうえで http://localhost:5173/?area=venezia&assets=http://127.0.0.1:8418/rj/2026-11-01/ を開く。
+- デプロイは手元の静的アセットで全部を置き換える。3Dがそろっていないとビルド（`cf deploy` も）が止まる。止まったら `pnpm assets:pull`。
+- ヴェネツィア（`assets/areas/venezia/3d/2026-11-01/`）とサグラダ・ファミリアの中（`assets/areas/sagrada/3d/2026-11-02/`）は demos の書き出しのコピー。元は demos にある（venice の `tools/rj_export.mjs`、sagrada-familia の `tools/rj_export.mjs`）。新しい版を書き出したら、`3d/<版>/` に置いて `assets/areas.json` の `scene` を書き換え、`pnpm assets:record`。
+- まだデプロイしていない書き出しを試すだけなら、開発ビルドの `?assets=` でほかの置き場から読める（`node tools/serve-cors.ts <dir> 8418` で手元のフォルダを CORS 付きで配る）。
+
+### ヴェネツィアの歩ける場所
+
 - 歩ける場所は VENEZIA の歩行ラスタから作る。場所（`landmarks.json`）を変えたら作り直す（約1.5秒。高さはラスタから入り、スポーンから全部の場所へ行けるかを確かめる）。
 
 ```bash

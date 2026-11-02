@@ -38,7 +38,9 @@ const AIS = Number(values.ais);
 const SECONDS = Number(values.seconds);
 const INTERVAL = Number(values.interval);
 const run = Date.now().toString(36);
-const mesh = NavMesh.fromJSON((await (await fetch(`${BASE}/test-city/navmesh.json`)).json()) as NavMeshData);
+const mesh = NavMesh.fromJSON(
+	(await (await fetch(`${BASE}/areas/hajimari/navmesh.json`)).json()) as NavMeshData,
+);
 
 async function devLogin(name: string): Promise<string> {
 	const r = await fetch(`${BASE}/auth/dev/login?name=${encodeURIComponent(name)}`, {

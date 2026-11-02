@@ -11,3 +11,8 @@ dist/
 .DS_Store
 .claude/worktrees/
 apps/avatar-sdk/eval-results/
+tools/city-build/blender/tex/
+tools/city-build/blender/out/
+# The areas' 3D files: deployed, not kept in git (assets/areas/files.json records them; node tools/assets.ts pull)
+assets/areas/**/*.glb
+__pycache__/

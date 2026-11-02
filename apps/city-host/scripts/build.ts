@@ -139,7 +139,7 @@ const everything = builder.inbox
 	.filter((m): m is Extract<typeof m, { t: "BUILT" }> => m.t === "BUILT")
 	.map((m) => m.build);
 // free play builds on the city alone (navmesh.json has the published builds baked in)
-const base = (await (await fetch(`${BASE}/test-city/navmesh.base.json`)).json()) as NavMeshData;
+const base = (await (await fetch(`${BASE}/areas/hajimari/navmesh.base.json`)).json()) as NavMeshData;
 const mesh = NavMesh.fromJSON(applyBuilds(base, await Promise.all(everything.map(placedOf))));
 
 const walkerCookie = await devLogin("あるく人");

@@ -21,7 +21,71 @@ interface Drawn {
 	thrower: AvatarId | null;
 }
 
+/** What was bought, shaped after what it is (docs/prd.md 3.8.6): a cup, a bottle, a rice ball, a book... */
+function goodsMesh(goods: NonNullable<Item["goods"]>): { mesh: THREE.Object3D; lift: number } {
+	const color = new THREE.Color(goods.color);
+	const mat = (c: THREE.ColorRepresentation, rough = 0.7) =>
+		new THREE.MeshStandardMaterial({ color: c, roughness: rough });
+	const g = new THREE.Group();
+	const add = (geo: THREE.BufferGeometry, m: THREE.Material, y = 0, rx = 0) => {
+		const o = new THREE.Mesh(geo, m);
+		o.position.y = y;
+		o.rotation.x = rx;
+		o.castShadow = true;
+		g.add(o);
+		return o;
+	};
+	switch (goods.id) {
+		case "coffee":
+			add(new THREE.CylinderGeometry(0.045, 0.036, 0.11, 16), mat(0xf4efe6), 0);
+			add(new THREE.CylinderGeometry(0.047, 0.047, 0.03, 16), mat(color), 0.035);
+			return { mesh: g, lift: 0.055 };
+		case "tea":
+			add(new THREE.CylinderGeometry(0.035, 0.035, 0.18, 14), mat(0xcfe6ef, 0.2), 0);
+			add(new THREE.CylinderGeometry(0.036, 0.036, 0.06, 14), mat(color), 0.01);
+			add(new THREE.CylinderGeometry(0.015, 0.015, 0.03, 10), mat(0xffffff), 0.105);
+			return { mesh: g, lift: 0.09 };
+		case "onigiri": {
+			const tri = new THREE.CylinderGeometry(0.06, 0.06, 0.035, 3);
+			add(tri, mat(color, 0.9), 0, Math.PI / 2);
+			add(new THREE.BoxGeometry(0.05, 0.05, 0.037), mat(0x1d2a1d), -0.03);
+			return { mesh: g, lift: 0.06 };
+		}
+		case "nikuman":
+		case "anpan":
+		case "bread":
+		case "croissant":
+		case "pretzel": {
+			const bun = add(new THREE.SphereGeometry(0.065, 16, 10), mat(color, 0.8), 0);
+			bun.scale.set(goods.id === "croissant" ? 1.5 : 1, 0.65, 1);
+			return { mesh: g, lift: 0.04 };
+		}
+		case "baguette":
+			add(new THREE.CapsuleGeometry(0.035, 0.42, 4, 10), mat(color, 0.8), 0, Math.PI / 2.4);
+			return { mesh: g, lift: 0.05 };
+		case "icecream":
+			add(new THREE.ConeGeometry(0.035, 0.11, 12), mat(0xd9a45b), -0.03, Math.PI);
+			add(new THREE.SphereGeometry(0.042, 12, 10), mat(color, 0.6), 0.04);
+			return { mesh: g, lift: 0.085 };
+		case "umbrella":
+			add(new THREE.CylinderGeometry(0.03, 0.012, 0.75, 10), mat(color, 0.3), 0, Math.PI / 2);
+			return { mesh: g, lift: 0.03 };
+		case "sandwich":
+			add(new THREE.CylinderGeometry(0.07, 0.07, 0.04, 3), mat(color, 0.85), 0, Math.PI / 2);
+			return { mesh: g, lift: 0.06 };
+		case "map":
+			add(new THREE.BoxGeometry(0.18, 0.012, 0.12), mat(color, 0.9), 0);
+			return { mesh: g, lift: 0.01 };
+		default:
+			// books and notebooks: covers in the goods' colour, pale page edges
+			add(new THREE.BoxGeometry(0.15, 0.035, 0.21), mat(color, 0.6), 0);
+			add(new THREE.BoxGeometry(0.14, 0.028, 0.2), mat(0xf3eedf, 0.9), 0).position.x = 0.006;
+			return { mesh: g, lift: 0.018 };
+	}
+}
+
 function meshFor(item: Item): { mesh: THREE.Object3D; lift: number } {
+	if (item.kind === "goods" && item.goods) return goodsMesh(item.goods);
 	if (item.kind === "box") {
 		const mesh = new THREE.Mesh(
 			new THREE.BoxGeometry(0.28, 0.22, 0.28),
@@ -80,6 +144,21 @@ export class ItemsView {
 		for (const d of this.drawn.values()) d.mesh.removeFromParent();
 		this.drawn.clear();
 		for (const item of items) this.set(item, 0);
+	}
+
+	/** A thing is gone (eaten, or tidied away). */
+	remove(id: ItemId): void {
+		const d = this.drawn.get(id);
+		if (!d) return;
+		d.mesh.removeFromParent();
+		d.mesh.traverse((o) => {
+			const m = o as THREE.Mesh;
+			if (m.isMesh) {
+				m.geometry.dispose();
+				for (const mat of [m.material].flat()) mat.dispose();
+			}
+		});
+		this.drawn.delete(id);
 	}
 
 	/** The thing an avatar holds. */

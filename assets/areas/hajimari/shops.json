@@ -1,0 +1,222 @@
+{
+	"shops": [
+		{
+			"id": "seven",
+			"name": "セブンイレブン",
+			"currency": "銅貨",
+			"counter": [
+				-25.15,
+				8.2
+			],
+			"door": [
+				-27.0,
+				5.0
+			],
+			"inside": [
+				[
+					-37.0,
+					19.0
+				],
+				[
+					-23.0,
+					19.0
+				],
+				[
+					-23.0,
+					5.0
+				],
+				[
+					-37.0,
+					5.0
+				]
+			],
+			"goods": [
+				{
+					"id": "onigiri",
+					"name": "おにぎり（鮭）",
+					"price": 3,
+					"color": "#f4f1e8",
+					"food": true
+				},
+				{
+					"id": "sandwich",
+					"name": "たまごサンド",
+					"price": 4,
+					"color": "#f3d77a",
+					"food": true
+				},
+				{
+					"id": "coffee",
+					"name": "ホットコーヒー",
+					"price": 2,
+					"color": "#6b4a33",
+					"food": true
+				},
+				{
+					"id": "tea",
+					"name": "お茶のペットボトル",
+					"price": 2,
+					"color": "#7fb069",
+					"food": true
+				},
+				{
+					"id": "nikuman",
+					"name": "肉まん",
+					"price": 3,
+					"color": "#f6efe2",
+					"food": true
+				},
+				{
+					"id": "icecream",
+					"name": "アイスクリーム",
+					"price": 3,
+					"color": "#f7c8d8",
+					"food": true
+				},
+				{
+					"id": "bread",
+					"name": "メロンパン",
+					"price": 2,
+					"color": "#e9c46a",
+					"food": true
+				},
+				{
+					"id": "umbrella",
+					"name": "ビニール傘",
+					"price": 6,
+					"color": "#d9e6ee"
+				}
+			]
+		},
+		{
+			"id": "books",
+			"name": "本屋「ひなた書房」",
+			"currency": "銅貨",
+			"counter": [
+				-28.65,
+				-8.2
+			],
+			"door": [
+				-32.0,
+				-5.0
+			],
+			"inside": [
+				[
+					-38.0,
+					-5.0
+				],
+				[
+					-26.5,
+					-5.0
+				],
+				[
+					-26.5,
+					-18.0
+				],
+				[
+					-38.0,
+					-18.0
+				]
+			],
+			"goods": [
+				{
+					"id": "novel",
+					"name": "小説『はじまりの街』",
+					"price": 8,
+					"color": "#2a6f97"
+				},
+				{
+					"id": "poems",
+					"name": "詩集『春の路地』",
+					"price": 6,
+					"color": "#c44536"
+				},
+				{
+					"id": "map",
+					"name": "街の地図",
+					"price": 3,
+					"color": "#e9d8a6"
+				},
+				{
+					"id": "picturebook",
+					"name": "絵本『くまの温泉』",
+					"price": 7,
+					"color": "#f4a261"
+				},
+				{
+					"id": "notebook",
+					"name": "ノートと鉛筆",
+					"price": 3,
+					"color": "#8ab17d"
+				},
+				{
+					"id": "cookbook",
+					"name": "料理の本",
+					"price": 9,
+					"color": "#e76f51"
+				}
+			]
+		},
+		{
+			"id": "bakery",
+			"name": "パン屋「こむぎ」",
+			"currency": "銅貨",
+			"counter": [
+				-12.15,
+				-8.2
+			],
+			"door": [
+				-15.5,
+				-5.0
+			],
+			"inside": [
+				[
+					-21.0,
+					-5.0
+				],
+				[
+					-10.0,
+					-5.0
+				],
+				[
+					-10.0,
+					-15.0
+				],
+				[
+					-21.0,
+					-15.0
+				]
+			],
+			"goods": [
+				{
+					"id": "baguette",
+					"name": "バゲット",
+					"price": 3,
+					"color": "#d4a056",
+					"food": true
+				},
+				{
+					"id": "croissant",
+					"name": "クロワッサン",
+					"price": 2,
+					"color": "#e0a84f",
+					"food": true
+				},
+				{
+					"id": "pretzel",
+					"name": "プレッツェル",
+					"price": 2,
+					"color": "#9c5b2e",
+					"food": true
+				},
+				{
+					"id": "anpan",
+					"name": "あんぱん",
+					"price": 2,
+					"color": "#b5733a",
+					"food": true
+				}
+			]
+		}
+	]
+}

@@ -13,11 +13,21 @@ import type {
 	AreaId,
 	AreaInfo,
 	AreasData,
+	JobZone,
 	ModelId,
 	ModelInfo,
 	PublishedBuilds,
+	ShopsData,
 	Vec2,
 } from "@rojibura/protocol";
+import publishedJson from "../../../../assets/areas/hajimari/builds.json";
+import landmarksJson from "../../../../assets/areas/hajimari/landmarks.json";
+import baseNavmeshJson from "../../../../assets/areas/hajimari/navmesh.base.json";
+import navmeshJson from "../../../../assets/areas/hajimari/navmesh.json";
+import shopsJson from "../../../../assets/areas/hajimari/shops.json";
+import zonesJson from "../../../../assets/areas/hajimari/zones.json";
+import sagradaLandmarksJson from "../../../../assets/areas/sagrada/landmarks.json";
+import sagradaNavmeshJson from "../../../../assets/areas/sagrada/navmesh.json";
 import veneziaLandmarksJson from "../../../../assets/areas/venezia/landmarks.json";
 import veneziaNavmeshJson from "../../../../assets/areas/venezia/navmesh.json";
 import areasJson from "../../../../assets/areas.json";
@@ -29,10 +39,6 @@ import modelIndex from "../../../../assets/models/index.json";
 import lampNav from "../../../../assets/models/lamp.nav.json";
 import towerNav from "../../../../assets/models/tower.nav.json";
 import treeNav from "../../../../assets/models/tree.nav.json";
-import publishedJson from "../../../../assets/test-city/builds.json";
-import landmarksJson from "../../../../assets/test-city/landmarks.json";
-import baseNavmeshJson from "../../../../assets/test-city/navmesh.base.json";
-import navmeshJson from "../../../../assets/test-city/navmesh.json";
 import type { BuildWorld, Walkable, World } from "./room-core.ts";
 
 /** Segments are sampled this densely so a long segment cannot cut across an obstacle. */
@@ -43,8 +49,12 @@ export const AREAS = areasJson as unknown as AreasData;
 export const AREA_IDS = Object.keys(AREAS.areas);
 export const MAIN_AREA: AreaId = AREA_IDS[0] ?? "main";
 
-/** What the host has of each area besides areas.json (the main area's are the test city's, below). */
+/** What the host has of each area besides areas.json (the main area's, はじまりの街, are below). */
 const AREA_FILES: Record<AreaId, { navmesh: NavMeshData; landmarks: LandmarksData }> = {
+	sagrada: {
+		navmesh: sagradaNavmeshJson as NavMeshData,
+		landmarks: sagradaLandmarksJson as LandmarksData,
+	},
 	venezia: {
 		navmesh: veneziaNavmeshJson as NavMeshData,
 		landmarks: veneziaLandmarksJson as LandmarksData,
@@ -121,6 +131,11 @@ export const world: World = {
 		{ kind: "ball", pos: [sx - 2.5, sz + 1] },
 		{ kind: "box", pos: [sx + 1, sz - 2.5] },
 	],
+	// the shops on the main street, and where one works or studies to earn coins (docs/prd.md 3.8.6)
+	shops: (shopsJson as unknown as ShopsData).shops,
+	jobZones: (zonesJson as unknown as { zones: JobZone[] }).zones.filter(
+		(z) => z.kind === "work" || z.kind === "study",
+	),
 };
 
 const worlds = new Map<AreaId, World>([[MAIN_AREA, world]]);

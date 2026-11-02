@@ -20,7 +20,7 @@ import {
 	randomToken,
 	verifyAuth,
 } from "@rojibura/protocol";
-import { relationsOf } from "./db.ts";
+import { addToWallet, relationsOf, walletOf } from "./db.ts";
 import { GUIDE_NAME, Guide, type GuideSaved } from "./guide.ts";
 import { GuideMemory, type Kv } from "./guide-memory.ts";
 import { CLOSING_NOTICE_MS, closingTime, describeHours, type Hours, isOpen, parseHours } from "./hours.ts";
@@ -91,6 +91,9 @@ const MESSAGE_LABELS: Record<ClientToHost["t"], string> = {
 	PICK: "物を拾う",
 	THROW: "物を投げる",
 	DROP: "物を置く",
+	BUY: "お店で買う",
+	USE: "食べる・飲む",
+	JOB: "働く・勉強する",
 	COMPANION: "自分のAIを連れて歩く",
 	LEAD: "AIがオーナーを連れて行く",
 	BODY: "AIが体を動かす",
@@ -174,6 +177,13 @@ export class CityRoomDO extends DurableObject<Env> {
 			{
 				// the small things are saved whenever one changes, so they stay put while the room sleeps
 				items: { save: (items) => kv.put("items", items) },
+				// each change of a wallet is added to it in D1 as it happens (docs/prd.md 3.8.6)
+				wallets: {
+					add: (id, delta) =>
+						this.ctx.waitUntil(
+							addToWallet(this.db, id, delta).catch((e) => console.error(`wallet ${id} ${delta}: ${e}`)),
+						),
+				},
 				...(freePlay
 					? {
 							rules: FREE_PLAY_RULES,
@@ -294,6 +304,7 @@ export class CityRoomDO extends DurableObject<Env> {
 			safeSend(server, { t: "CHALLENGE", nonce });
 		} else {
 			await this.loadRelations(join.info.id);
+			await this.loadWallet(join.info);
 			this.guide.ensurePresent();
 			this.core.join(server, join.info, join.arrive);
 		}
@@ -332,6 +343,7 @@ export class CityRoomDO extends DurableObject<Env> {
 			}
 			// the nonce is consumed: the attachment is replaced by the member state
 			await this.loadRelations(p.info.id);
+			await this.loadWallet(p.info);
 			this.guide.ensurePresent();
 			this.core.join(ws, p.info, p.arrive);
 			return;
@@ -453,6 +465,15 @@ export class CityRoomDO extends DurableObject<Env> {
 		const rows = cursor.toArray();
 		this.meter.add({ sqlRowsRead: cursor.rowsRead, sqlRowsWritten: cursor.rowsWritten });
 		return rows;
+	}
+
+	/** The coins in their wallet (D1), or none if D1 cannot be read (they cannot buy or earn then). */
+	private async loadWallet(info: JoinInfo): Promise<void> {
+		try {
+			info.coins = await walletOf(this.db, info.id);
+		} catch {
+			delete info.coins;
+		}
 	}
 
 	private async loadRelations(id: string): Promise<void> {

@@ -155,7 +155,7 @@ if (args.mind === "pi" || args.mind === "claude") {
 	if (moves) log.info(`わざ帳: ${shortPath(moves.page, homedir())}`);
 	const act = (tool: string, params: Record<string, unknown>) =>
 		resident ? resident.act(tool, params) : Promise.resolve("まだ街にいない。");
-	const system = residentSystemPrompt(persona, city.landmarks, body);
+	const system = residentSystemPrompt(persona, city.landmarks, body, city.shops);
 	const mind = claude
 		? await createClaudeMind({
 				model: args.model,
@@ -184,6 +184,8 @@ if (args.mind === "pi" || args.mind === "claude") {
 		memory: new FileMemory(join(dir, `${encodeURIComponent(name)}.memory.json`)),
 		nav: city.nav,
 		landmarks: city.landmarks,
+		shops: city.shops,
+		jobZones: city.jobZones,
 		logger: log,
 		send,
 		dailyTurnLimit: dailyLimit,
