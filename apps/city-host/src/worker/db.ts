@@ -1,13 +1,14 @@
 // D1 access for accounts and agents (docs/prd.md 3.6).
 
-import { MAX_NAME_LENGTH, randomToken, sanitizeText, textLength } from "@rojibura/protocol";
+import { MAX_NAME_LENGTH, randomToken, START_COINS, sanitizeText, textLength } from "@rojibura/protocol";
 import init from "../../migrations/0001_init.sql?raw";
 import moderation from "../../migrations/0002_moderation.sql?raw";
 import onboarding from "../../migrations/0003_onboarding.sql?raw";
 import pc from "../../migrations/0004_pc.sql?raw";
+import wallets from "../../migrations/0005_wallets.sql?raw";
 import { newPairCode, PAIR_CODE_TTL_MS } from "./pairing.ts";
 
-const MIGRATIONS = [init, moderation, onboarding, pc];
+const MIGRATIONS = [init, moderation, onboarding, pc, wallets];
 
 export const AGENTS_PER_OWNER = 5;
 
@@ -235,6 +236,27 @@ export async function setRelation(
 				.prepare("DELETE FROM relations WHERE account_id = ? AND target_id = ? AND kind = ?")
 				.bind(accountId, targetId, kind)
 	).run();
+}
+
+/** The coins in someone's wallet (docs/prd.md 3.8.6); a new wallet is made with START_COINS. */
+export async function walletOf(db: D1Database, avatarId: string): Promise<number> {
+	await db
+		.prepare("INSERT INTO wallets (id, coins, updated_at) VALUES (?, ?, ?) ON CONFLICT (id) DO NOTHING")
+		.bind(avatarId, START_COINS, Date.now())
+		.run();
+	const row = await db
+		.prepare("SELECT coins FROM wallets WHERE id = ?")
+		.bind(avatarId)
+		.first<{ coins: number }>();
+	return row?.coins ?? START_COINS;
+}
+
+/** Adds to (or takes from) a wallet. */
+export async function addToWallet(db: D1Database, avatarId: string, delta: number): Promise<void> {
+	await db
+		.prepare("UPDATE wallets SET coins = coins + ?, updated_at = ? WHERE id = ?")
+		.bind(delta, Date.now(), avatarId)
+		.run();
 }
 
 /** Relations that matter for one avatar: its own mutes/blocks (if it is a human) and who blocked it. */

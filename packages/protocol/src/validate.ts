@@ -49,6 +49,8 @@ export const MOTIONS: readonly Motion[] = [
 export const POSTURES: readonly Posture[] = ["sit", "lie"];
 export const TOGETHERS: readonly Together[] = ["handshake", "hug"];
 const ITEM_RE = /^i_[A-Za-z0-9_-]{1,32}$/;
+/** Shop and goods IDs (shops.json). */
+const NAME_ID_RE = /^[a-z][a-z0-9_]{0,31}$/;
 export const isPosture = (m: Motion): m is Posture => (POSTURES as readonly Motion[]).includes(m);
 const STATUSES: readonly Status[] = ["active", "busy", "resting"];
 const COORD_LIMIT = 10_000;
@@ -206,6 +208,15 @@ export function parseClientMessage(raw: string | ArrayBuffer): Parsed<ClientToHo
 		}
 		case "DROP":
 			return { ok: true, msg: { t: "DROP" } };
+		case "BUY":
+			if (typeof v.shop !== "string" || !NAME_ID_RE.test(v.shop)) return fail("bad shop");
+			if (typeof v.goods !== "string" || !NAME_ID_RE.test(v.goods)) return fail("bad goods");
+			return { ok: true, msg: { t: "BUY", shop: v.shop, goods: v.goods } };
+		case "USE":
+			return { ok: true, msg: { t: "USE" } };
+		case "JOB":
+			if (v.kind !== null && v.kind !== "work" && v.kind !== "study") return fail("bad kind");
+			return { ok: true, msg: { t: "JOB", kind: v.kind } };
 		case "COMPANION":
 			if (typeof v.on !== "boolean") return fail("bad on");
 			return { ok: true, msg: { t: "COMPANION", on: v.on } };

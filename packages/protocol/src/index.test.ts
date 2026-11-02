@@ -74,6 +74,16 @@ describe("parseClientMessage", () => {
 		expect(parseClientMessage('{"t":"MOVE_PATH","path":[[0,0],[1,null]],"speed":1,"seq":1}').ok).toBe(false);
 	});
 
+	test("BUY takes shop and goods IDs only; USE takes nothing", () => {
+		expect(parseClientMessage('{"t":"BUY","shop":"seven","goods":"onigiri"}')).toEqual({
+			ok: true,
+			msg: { t: "BUY", shop: "seven", goods: "onigiri" },
+		});
+		expect(parseClientMessage('{"t":"BUY","shop":"Seven!","goods":"onigiri"}').ok).toBe(false);
+		expect(parseClientMessage('{"t":"BUY","shop":"seven"}').ok).toBe(false);
+		expect(parseClientMessage('{"t":"USE"}')).toEqual({ ok: true, msg: { t: "USE" } });
+	});
+
 	test("normalizes MOVE_VEL direction", () => {
 		const r = parseClientMessage(
 			JSON.stringify({ t: "MOVE_VEL", pos: [1, 2], dir: [3, 4], speed: 2, seq: 5 }),

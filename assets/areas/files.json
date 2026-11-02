@@ -1,0 +1,17 @@
+{
+	"version": 1,
+	"source": "https://rojibura.kazumasa.workers.dev",
+	"files": {
+		"areas/hajimari/hajimari.glb": {"size":16570288,"sha256":"d83921d7635738f1fed6c92652601c96bd8343821d761f4b1c34cad2223d4a61"},
+		"areas/hajimari/hajimari_snow.glb": {"size":938520,"sha256":"2adc26691a2820c77f5c8eb6bf9d9f311945fd1d86ba2adaa78900f1ac6f35d6"},
+		"areas/hajimari/sagrada_exterior.glb": {"size":6513400,"sha256":"2ed604753cdc28192a56d064d2ee2024cc1c3225240ab080424290f023362f50"},
+		"areas/sagrada/3d/2026-11-02/sagrada_00.glb": {"size":14368156,"sha256":"3bcf53d762b18d7330620bb51f3ee0f0c87814f1ce935b38a3a784d9ed5c2b35"},
+		"areas/sagrada/3d/2026-11-02/sagrada_01.glb": {"size":11684692,"sha256":"a2b47ab2090c8a617adb15ab354d1e7b71dcf2d60ce8da37a45c332d4d60a0c9"},
+		"areas/sagrada/3d/2026-11-02/sagrada_02.glb": {"size":13494796,"sha256":"75ed4526a4a89fa5eaa8f503bd7e2a1fc83d79788f3aa2ece1bcfbd377a1bee0"},
+		"areas/sagrada/3d/2026-11-02/sagrada_03.glb": {"size":13157120,"sha256":"4c19410894dcfcd371dd3f9d197be3529c7c85b0cef6a5af4f60d176d184f2a7"},
+		"areas/venezia/3d/2026-11-01/t_16_7.glb": {"size":12791748,"sha256":"a2fb027a6bbb6e3fe9dd17aab96a53fa5ddf0879cb00e3a9a570974167d81057"},
+		"areas/venezia/3d/2026-11-01/t_16_8.glb": {"size":17807568,"sha256":"e527c10d34b4df332a7bd198074e192618c2d63bbe6ed632426b59f81acdb3c6"},
+		"areas/venezia/3d/2026-11-01/t_17_7.glb": {"size":9894632,"sha256":"9bf1eef679dc8bc0baae9183001816a73863b377b98f02711d4d0e0cf8a575cd"},
+		"areas/venezia/3d/2026-11-01/t_17_8.glb": {"size":16453636,"sha256":"389ef6f066b04eaaaacbb680cf770083fe014bcaf677976c184d0da3c93ab0ee"}
+	}
+}

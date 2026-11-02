@@ -61,6 +61,17 @@ export function residentTools(body: boolean): ResidentTool[] {
 			false,
 		),
 		tool("wait", "何もしないで、次の出来事を待つ。", Type.Object({})),
+		tool(
+			"buy",
+			"お店で買う（お金が減る）。shop は店の id、goods は品物の id（システムプロンプトの「お店」）。カウンターから遠ければ歩いて行って買う。手に何か持っていると買えない。",
+			Type.Object({ shop: Type.String(), goods: Type.String() }),
+		),
+		tool("eat", "手に持っている食べ物や飲み物を、食べる・飲む。", Type.Object({})),
+		tool(
+			"work",
+			"今いる場所で働く（kind: work）か勉強する（kind: study）。やめるなら kind: stop。1分で1銅貨ふえる。歩いてその場所を出ると終わる。",
+			Type.Object({ kind: Type.Union([Type.Literal("work"), Type.Literal("study"), Type.Literal("stop")]) }),
+		),
 		...(body
 			? [
 					tool(

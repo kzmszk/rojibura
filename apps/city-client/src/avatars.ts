@@ -7,6 +7,7 @@ import {
 	type BodyKey,
 	type BodyPart,
 	isPosture,
+	type JobKind,
 	type Motion,
 	type MoveState,
 	poseAt,
@@ -20,6 +21,7 @@ import { type BodyParts, BodyRig, BodyScript, type Bones, frameOf, roughSpot, sp
 import { groundSpeed, legLength, MOVES, type MoveName, REFERENCE_LEG, referenceRig } from "./moves.ts";
 import { retarget } from "./retarget.ts";
 import type { CityScene } from "./scene.ts";
+import { Bath, rigifyBones } from "./towel.ts";
 
 /** The city's motions on one skeleton, and how fast walk and run cover the ground at normal speed. */
 interface Motions {
@@ -290,6 +292,10 @@ export class AvatarView {
 	private y = 0;
 	private facing = 0;
 	private readonly isMe: boolean;
+	/** In the bath: clothes off and a towel on (made the first time). */
+	private bathing = false;
+	private bath: Bath | null = null;
+	private readonly modelUrl: string;
 
 	constructor(state: AvatarState, isMe: boolean) {
 		this.state = state;
@@ -316,6 +322,7 @@ export class AvatarView {
 		this.updateLabel();
 
 		const url = state.assets.lod || state.assets.vrm;
+		this.modelUrl = url;
 		this.ready = url
 			? /\.vrm$/i.test(new URL(url, location.href).pathname)
 				? this.loadVrm(url)
@@ -349,6 +356,7 @@ export class AvatarView {
 		if (this.inside) this.seenFromInside(true);
 		this.setClips(new THREE.AnimationMixer(vrm.scene), moves.clips);
 		this.pace = moves.pace;
+		if (this.bathing) this.setBathing(true);
 	}
 
 	/** The bones a body script moves, and the head's top and the body's size, at rest. */
@@ -385,6 +393,7 @@ export class AvatarView {
 		this.root.add(holder);
 		// glTF avatars (Saki) play their own clips; the city's motions are for VRMs
 		this.setClips(new THREE.AnimationMixer(m), t.clips);
+		if (this.bathing) this.setBathing(true);
 	}
 
 	private setClips(mixer: THREE.AnimationMixer, clips: THREE.AnimationClip[]): void {
@@ -408,6 +417,13 @@ export class AvatarView {
 
 	setStatus(status: Status): void {
 		this.state.status = status;
+		this.updateLabel();
+	}
+
+	/** Working or studying now, or not (null): a mark by the name. */
+	setJob(job: JobKind | null): void {
+		if (job) this.state.job = job;
+		else delete this.state.job;
 		this.updateLabel();
 	}
 
@@ -606,7 +622,9 @@ export class AvatarView {
 	private updateLabel(): void {
 		const s = this.state;
 		const suffix = s.kind === "ai" ? (s.status === "resting" ? " 💤" : " · AI") : "";
-		this.label.textContent = `${s.name}${suffix}`;
+		// working or studying (docs/prd.md 3.8.6)
+		const job = s.job === "work" ? " 💼" : s.job === "study" ? " 📖" : "";
+		this.label.textContent = `${s.name}${suffix}${job}`;
 		this.label.classList.toggle("me", this.isMe);
 		this.label.classList.toggle("ai", s.kind === "ai");
 		this.label.title = s.owner ? `オーナー: ${s.owner}` : "";
@@ -723,6 +741,40 @@ export class AvatarView {
 	}
 
 	/**
+	 * In the bath or its changing room (or not): clothes off and a bath towel wrapped round from the armpits
+	 * to mid-thigh. Cheap to switch any time, also while walking; the towel is made the first time.
+	 */
+	setBathing(on: boolean): void {
+		this.bathing = on;
+		if (on && !this.bath) this.bath = this.bathFor();
+		this.bath?.set(on);
+	}
+
+	/**
+	 * Gets the towel ready without going in (the first time for a model takes some hundreds of milliseconds):
+	 * e.g. when the avatar comes near the bath, or in idle time. Does nothing until the model has loaded.
+	 */
+	prepareBath(): void {
+		if (!this.bath) this.bath = this.bathFor();
+		this.bath?.prepare();
+	}
+
+	/** The bath for the model drawn (null until it has loaded). */
+	private bathFor(): Bath | null {
+		const vrm = this.vrm;
+		if (vrm) {
+			const bones: Partial<Record<string, THREE.Object3D>> = {};
+			for (const name of Object.keys(vrm.humanoid.humanBones)) {
+				const node = vrm.humanoid.getRawBoneNode(name as VRMHumanBoneName);
+				if (node) bones[name] = node;
+			}
+			return new Bath({ root: vrm.scene, bones, key: this.modelUrl, materials: vrm.materials, vroid: true });
+		}
+		if (!this.mixer) return null;
+		return new Bath({ root: this.model, bones: rigifyBones(this.model), key: this.modelUrl, vroid: false });
+	}
+
+	/**
 	 * Seen from its own eyes or not (docs/prd.md 3.4.8). A VRM hides its head with three-vrm's first-person
 	 * layers (the camera picks the layer); other models hide altogether.
 	 */
@@ -733,6 +785,8 @@ export class AvatarView {
 			if (on && !this.firstPersonReady) {
 				this.vrm.firstPerson?.setup();
 				this.firstPersonReady = true;
+				// (the first-person copies of the meshes are made dressed)
+				if (this.bathing) this.bath?.set(true);
 			}
 			this.model.visible = true;
 		} else {
@@ -797,6 +851,7 @@ export class AvatarView {
 		this.root.traverse((o) => {
 			if (o instanceof CSS2DObject) o.element.remove();
 		});
+		this.bath?.dispose();
 		if (this.vrm) disposeVrm(this.vrm);
 	}
 }

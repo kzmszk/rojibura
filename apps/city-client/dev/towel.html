@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="ja">
+	<head>
+		<meta charset="utf-8" />
+		<title>towel</title>
+		<style>
+			html, body { margin: 0; height: 100%; overflow: hidden; background: #dfe7ee; }
+		</style>
+	</head>
+	<body>
+		<!--
+			Dev harness for bathing (AvatarView.setBathing): the preset avatars side by side, in a towel or dressed.
+			Serve the worktree root with vite (e.g. apps/city-host/node_modules/.bin/vite --port 5184) and open
+			/apps/city-client/dev/towel.html?bath=1&pose=walk&yaw=180&t=2.3 (see towel-dev.ts for the options).
+		-->
+		<script type="module" src="./towel-dev.ts"></script>
+	</body>
+</html>

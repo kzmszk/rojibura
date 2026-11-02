@@ -183,7 +183,7 @@ interface Run {
 }
 
 async function landmarks(): Promise<Landmark[]> {
-	const dir = join(import.meta.dirname, "..", "..", "..", "assets", "test-city");
+	const dir = join(import.meta.dirname, "..", "..", "..", "assets", "areas", "hajimari");
 	const read = (f: string) => readFile(join(dir, f), "utf8").then((t) => JSON.parse(t));
 	return landmarksOf(await read("landmarks.json"), await read("places.json").catch(() => null));
 }

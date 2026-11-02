@@ -1,0 +1,1 @@
+{"x0": -240.0, "z0": -160.0, "step": 2.0, "nx": 241, "nz": 161, "scale": 0.001, "offset": -2.0, "format": "uint16 little-endian, row-major (z, x)"}
