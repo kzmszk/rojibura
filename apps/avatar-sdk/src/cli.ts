@@ -2,8 +2,9 @@
 //   node apps/avatar-sdk/src/cli.ts --name ミナ --persona "好奇心旺盛でカフェ好き" [--owner kazu] [--llm claude-code|pi|echo]
 //     [--avatar shino]   (the look, when it is registered: one of the host's /api/presets)
 //   node apps/avatar-sdk/src/cli.ts --name ハル --mind pi [--model llama/<id>] [--llama-url URL] [--fresh]
-//     [--body] [--vision]   (moves its own body, rehearsing in a mirror; --vision: and sees the pictures)
-//   node apps/avatar-sdk/src/cli.ts --name ハル --mind claude [--model claude-haiku-5-5] [--fresh] [--body]
+//     [--no-body] [--vision]   (it moves its own body, rehearsing in a mirror, unless --no-body; --vision: and
+//     sees the pictures)
+//   node apps/avatar-sdk/src/cli.ts --name ハル --mind claude [--model claude-haiku-5-5] [--fresh] [--no-body]
 //     (the same resident with Claude Code as its mind: your subscription, for your own testing only)
 //   node apps/avatar-sdk/src/cli.ts --base https://… --pair ABCD2345 --persona '…' [--mind pi]
 //     (runs on this PC an AI registered in the city's 🤖 自分のAI, with the code shown there; docs/prd.md 3.5.1;
@@ -38,6 +39,7 @@ import { Resident, residentSystemPrompt } from "./core/resident.ts";
 import type { LLM, Logger } from "./core/types.ts";
 
 const { values: args } = parseArgs({
+	allowNegative: true,
 	options: {
 		base: { type: "string", default: "http://localhost:5173" },
 		area: { type: "string", default: "main" },
@@ -55,8 +57,9 @@ const { values: args } = parseArgs({
 		model: { type: "string" },
 		"llama-url": { type: "string", default: DEFAULT_LLAMA_URL },
 		fresh: { type: "boolean", default: false },
-		// --mind pi: moves its own body, rehearsing in a mirror (headless Chrome) on this PC (docs/prd.md 3.4.11)
-		body: { type: "boolean", default: false },
+		// --mind pi / claude: moves its own body, rehearsing in a mirror (headless Chrome) on this PC
+		// (docs/prd.md 3.4.11); on unless --no-body
+		body: { type: "boolean" },
 		// ...and sees the mirror's pictures (llama-server started with the model's --mmproj)
 		vision: { type: "boolean", default: false },
 		identity: { type: "string" },
@@ -135,7 +138,7 @@ let stopMind: () => void;
 if (args.mind === "pi" || args.mind === "claude") {
 	const claude = args.mind === "claude";
 	let resident: Resident | null = null;
-	const body = args.body || args.vision;
+	const body = (args.body ?? true) || args.vision;
 	const moves = body
 		? new FileMoveBook(
 				join(dir, `${encodeURIComponent(name)}.moves.json`),

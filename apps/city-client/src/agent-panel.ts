@@ -15,6 +15,44 @@ const PRESETS = [
  * the PC taking over clears it, so a tab never pushes out the AI on the PC by itself.
  */
 const ON_KEY = "rj.agent.on";
+/** The mind and body chosen for running it on your PC (docs/prd.md 3.5.1). */
+const PC_KEY = "rj.agent.pc";
+
+/** Minds a PC can give the AI: the CLI's --mind, and how the panel names them. */
+const MINDS: [mind: string, label: string][] = [
+	["claude", "Claude Code（自分のサブスクリプション）"],
+	["pi", "pi（手元の llama.cpp など）"],
+	["rules", "ルールで動いて、返事だけ Claude Code"],
+];
+
+interface PcChoice {
+	mind: string;
+	body: boolean;
+}
+
+function pcChoice(): PcChoice {
+	try {
+		const v = JSON.parse(localStorage.getItem(PC_KEY) ?? "null") as Partial<PcChoice> | null;
+		if (v && MINDS.some(([m]) => m === v.mind)) return { mind: v.mind as string, body: v.body !== false };
+	} catch {
+		// private mode, or nothing kept: the default
+	}
+	return { mind: "claude", body: true };
+}
+
+function keepPcChoice(c: PcChoice): void {
+	try {
+		localStorage.setItem(PC_KEY, JSON.stringify(c));
+	} catch {
+		// private mode: chosen again next time
+	}
+}
+
+/** The CLI options for a choice: a resident's body is on unless --no-body; the rule-based AI has none. */
+export function pcFlags(c: PcChoice): string {
+	if (c.mind === "rules") return "";
+	return ` --mind ${c.mind}${c.body ? "" : " --no-body"}`;
+}
 
 function el<K extends keyof HTMLElementTagNameMap>(
 	tag: K,
@@ -73,6 +111,13 @@ export class AgentPanel {
 	private readonly pcState = el("div", "rj-note");
 	private readonly pcCode = el("div", "rj-excerpt");
 	private readonly unpair = el("button", "rj-secondary", "PCとのつながりを解く");
+	private readonly pcMind = el("select", "");
+	private readonly pcBody = el("input", "");
+	private pc = pcChoice();
+	/** The last one-time code, while its command is shown. */
+	private pairCode: { code: string; expiresAt: number; issuedAt: number } | null = null;
+	/** Paired with a PC since then, when it is. */
+	private pairedAt: number | null = null;
 	private readonly log = el("div", "rj-excerpt rj-agent-log");
 
 	/** `onRunning`: whether the AI is running in this tab, for the HUD button. */
@@ -249,13 +294,33 @@ export class AgentPanel {
 		const actions = el("div", "rj-agent-row");
 		actions.append(pair, this.unpair);
 		this.pcCode.hidden = true;
+		for (const [mind, label] of MINDS) {
+			const o = el("option", "", label);
+			o.value = mind;
+			this.pcMind.append(o);
+		}
+		this.pcMind.value = this.pc.mind;
+		this.pcBody.type = "checkbox";
+		this.pcBody.checked = this.pc.body;
+		const bodyLabel = el("label", "rj-note");
+		bodyLabel.append(this.pcBody, " 体を自分で動かす（鏡で練習して、覚えた動きが増えていく）");
+		const choose = () => {
+			this.pc = { mind: this.pcMind.value, body: this.pcBody.checked };
+			keepPcChoice(this.pc);
+			this.renderPc();
+		};
+		this.pcMind.onchange = choose;
+		this.pcBody.onchange = choose;
 		box.append(
 			el("summary", "", "自分のPCで動かす"),
 			el(
 				"span",
 				"rj-note",
-				"rojibura のリポジトリがあるPCで、出てきたコマンドを実行すると、このAIがPCから街に入ります（pi で動かすなら --mind pi を足します）。PCで動いているあいだ、このタブはAIを入れません。記憶はPCとブラウザで別々です。",
+				"rojibura のリポジトリがあるPCで、出てきたコマンドを実行すると、このAIがPCから街に入ります。頭は、そのPCの Claude Code（あなたのサブスクリプション）か、pi（手元のモデル）から選べます。PCで動いているあいだ、このタブはAIを入れません。記憶はPCとブラウザで別々です。",
 			),
+			el("span", "rj-note", "頭："),
+			this.pcMind,
+			bodyLabel,
 			this.pcState,
 			actions,
 			this.pcCode,
@@ -267,21 +332,48 @@ export class AgentPanel {
 				this.pcState.textContent = "コードを出せませんでした。";
 				return;
 			}
-			const { code, expiresAt } = (await r.json()) as { code: string; expiresAt: number };
-			const command = `node apps/avatar-sdk/src/cli.ts --base ${location.origin} --pair ${code} --persona ${quoted(this.personality.value.trim())}`;
-			this.pcCode.replaceChildren(
-				el("div", "", `コード：${code}（${new Date(expiresAt).toLocaleTimeString()} まで、1回だけ使えます）`),
-				...this.command(command),
-			);
-			this.pcCode.hidden = false;
+			this.pairCode = { ...((await r.json()) as { code: string; expiresAt: number }), issuedAt: Date.now() };
+			this.renderPc();
 		};
 		this.unpair.onclick = async () => {
 			if (!this.agentId || !confirm("PCの鍵を消します。PCからは入れなくなります。よろしいですか？")) return;
 			await fetch(`/api/agents/${this.agentId}/pc`, { method: "DELETE" });
-			this.pcCode.hidden = true;
+			this.pairCode = null;
 			await this.refresh();
 		};
+		this.renderPc();
 		return box;
+	}
+
+	/** The commands to run on the PC, with the mind and body chosen. */
+	private renderPc(): void {
+		this.pcBody.disabled = this.pc.mind === "rules";
+		const flags = pcFlags(this.pc);
+		const base = `node apps/avatar-sdk/src/cli.ts --base ${location.origin}`;
+		const code = this.pairCode;
+		if (code) {
+			this.pcCode.replaceChildren(
+				el(
+					"div",
+					"",
+					`コード：${code.code}（${new Date(code.expiresAt).toLocaleTimeString()} まで、1回だけ使えます）`,
+				),
+				...this.command(
+					`${base} --pair ${code.code} --persona ${quoted(this.personality.value.trim())}${flags}`,
+				),
+			);
+		}
+		this.pcCode.hidden = !code;
+		if (this.pairedAt !== null)
+			this.pcState.replaceChildren(
+				el(
+					"div",
+					"",
+					`PCと結びついています（${new Date(this.pairedAt).toLocaleString()}から）。2回目からはコードなしで：`,
+				),
+				...this.command(`${base} --name ${quoted(this.name.value)}${flags}`),
+			);
+		else this.pcState.textContent = "まだPCと結びついていません。";
 	}
 
 	/** A command to run on the PC, with a copy button. */
@@ -305,17 +397,11 @@ export class AgentPanel {
 		if (!s) return;
 		this.here = s.inCity === true;
 		this.unpair.hidden = !s.paired;
-		if (s.paired) {
-			const name = this.name.value;
-			this.pcState.replaceChildren(
-				el(
-					"div",
-					"",
-					`PCと結びついています（${new Date(s.pairedAt ?? 0).toLocaleString()}から）。2回目からはコードなしで：`,
-				),
-				...this.command(`node apps/avatar-sdk/src/cli.ts --base ${location.origin} --name ${quoted(name)}`),
-			);
-		} else this.pcState.textContent = "まだPCと結びついていません。";
+		this.pairedAt = s.paired ? (s.pairedAt ?? 0) : null;
+		// paired with the code since it was shown: it is spent
+		if (this.pairedAt !== null && this.pairCode && this.pairedAt >= this.pairCode.issuedAt)
+			this.pairCode = null;
+		this.renderPc();
 		this.render();
 	}
 
