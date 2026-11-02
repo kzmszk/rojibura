@@ -1,7 +1,16 @@
 // Loads the city's landmarks and navmesh from the host's static assets.
 
 import { type LandmarksData, NavMesh, type NavMeshData } from "@rojibura/nav";
-import type { ActivitiesData, Activity, AreasData, JobZone, Shop, ShopsData, Vec2 } from "@rojibura/protocol";
+import type {
+	ActivitiesData,
+	Activity,
+	AreasData,
+	Food,
+	JobZone,
+	Shop,
+	ShopsData,
+	Vec2,
+} from "@rojibura/protocol";
 import type { Landmark, Navigator } from "./types.ts";
 
 export interface City {
@@ -13,6 +22,8 @@ export interface City {
 	hasNavmesh: boolean;
 	/** What can be done where (activities.json next to the landmarks, docs/life.md 3); empty without one. */
 	activities: Activity[];
+	/** What eating the shops' food does (activities.json `foods`). */
+	foods: Record<string, Food>;
 	/** The area's shops and where one works or studies (docs/prd.md 3.8.6); empty where there are none. */
 	shops: Shop[];
 	jobZones: JobZone[];
@@ -65,6 +76,7 @@ export async function loadCity(baseUrl: string, area?: string): Promise<City> {
 	let hasNavmesh = false;
 	let name = "街";
 	let activities: Activity[] = [];
+	let foods: Record<string, Food> = {};
 	let shops: Shop[] = [];
 	let jobZones: JobZone[] = [];
 	try {
@@ -81,10 +93,11 @@ export async function loadCity(baseUrl: string, area?: string): Promise<City> {
 			spawn = [data.spawn.pos[0], data.spawn.pos[1]];
 		}
 		// optional, like places.json
-		activities = await fetch(`${baseUrl}${cityPath}/activities.json`)
+		const life = await fetch(`${baseUrl}${cityPath}/activities.json`)
 			.then((a) => (a.ok ? (a.json() as Promise<ActivitiesData>) : null))
-			.then((a) => (Array.isArray(a?.activities) ? a.activities : []))
-			.catch(() => []);
+			.catch(() => null);
+		activities = Array.isArray(life?.activities) ? life.activities : [];
+		foods = life?.foods ?? {};
 		// optional too: an area without shops or places to work
 		const optional = <T>(file: string) =>
 			fetch(`${baseUrl}${cityPath}/${file}`)
@@ -102,5 +115,5 @@ export async function loadCity(baseUrl: string, area?: string): Promise<City> {
 	} catch {
 		// keep the fallbacks
 	}
-	return { name, landmarks, spawn, nav, hasNavmesh, activities, shops, jobZones };
+	return { name, landmarks, spawn, nav, hasNavmesh, activities, foods, shops, jobZones };
 }

@@ -169,7 +169,7 @@ if (args.mind === "pi" || args.mind === "claude") {
 	const life = city.activities.length > 0;
 	const journal = life ? new FileJournal(join(dir, `${encodeURIComponent(name)}.life`)) : undefined;
 	if (journal) log.info(`日記: ${shortPath(journal.dir, homedir())}`);
-	const system = residentSystemPrompt(persona, city.landmarks, body, city.shops, city.activities);
+	const system = residentSystemPrompt(persona, city.landmarks, body, city.shops, city.activities, city.foods);
 	const mind = claude
 		? await createClaudeMind({
 				model: args.model,
@@ -200,7 +200,7 @@ if (args.mind === "pi" || args.mind === "claude") {
 		memory: new FileMemory(join(dir, `${encodeURIComponent(name)}.memory.json`)),
 		nav: city.nav,
 		landmarks: city.landmarks,
-		...(journal ? { journal, activities: city.activities } : {}),
+		...(journal ? { journal, activities: city.activities, foods: city.foods } : {}),
 		shops: city.shops,
 		jobZones: city.jobZones,
 		logger: log,
@@ -212,7 +212,7 @@ if (args.mind === "pi" || args.mind === "claude") {
 		...(moves ? { moves, mirror: new ChromeMirror({ base, logger: log }), sees: claude || args.vision } : {}),
 	});
 	handle = (m) => resident?.handle(m);
-	enter = (next) => resident?.setCity(next.nav, next.landmarks, next.name, next.activities);
+	enter = (next) => resident?.setCity(next.nav, next.landmarks, next.name, next);
 	stopMind = () => resident?.stop();
 	log.info(
 		`mind ${mind.name}; ${city.landmarks.length} landmarks; navmesh ${city.hasNavmesh ? "yes" : "no"}`,
@@ -228,12 +228,15 @@ if (args.mind === "pi" || args.mind === "claude") {
 		nav: city.nav,
 		landmarks: city.landmarks,
 		activities: city.activities,
+		shops: city.shops,
+		foods: city.foods,
+		jobZones: city.jobZones,
 		logger: log,
 		send,
 		dailyLlmLimit: dailyLimit,
 	});
 	handle = (m) => agent.handle(m);
-	enter = (next) => agent.setCity(next.nav, next.landmarks, next.activities);
+	enter = (next) => agent.setCity(next.nav, next.landmarks, next);
 	stopMind = () => agent.stop();
 	log.info(
 		`LLM ${llm.name}; ${city.landmarks.length} landmarks; navmesh ${city.hasNavmesh ? "yes" : "no (straight lines)"}`,

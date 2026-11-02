@@ -359,7 +359,7 @@ async function startCity(
 		return { emoji: a?.emoji ?? "⏳", name: a?.name ?? d.activity };
 	};
 	/** An AI's life in a few lines, for its owner's panel. */
-	const lifeText = (life: LifeState, doing?: Doing) => {
+	const lifeText = (life: LifeState, doing?: Doing, coins?: number) => {
 		const skills = Object.entries(life.skills)
 			.filter(([, v]) => v > 0)
 			.map(([k, v]) => `${SKILL_NAMES[k] ?? k} ${Math.round(v)}`)
@@ -367,7 +367,7 @@ async function startCity(
 		const badge = badgeOf(doing);
 		return [
 			`暮らして${life.days}日目`,
-			`エネルギー ${Math.round(life.energy)}（${energyWord(life.energy)}）・体力 ${Math.round(life.fitness)}・こころ ${Math.round(life.mood)}・コイン ${life.coins}`,
+			`エネルギー ${Math.round(life.energy)}（${energyWord(life.energy)}）・体力 ${Math.round(life.fitness)}・こころ ${Math.round(life.mood)}${coins !== undefined ? `・👛 ${coins} 銅貨` : ""}`,
 			`今日：ごはん ${life.duties.meals}/${MEALS_PER_DAY}・仕事か勉強 ${life.duties.work ? "✓" : "まだ"}・運動 ${life.duties.exercise ? "✓" : "まだ"}`,
 			...(skills ? [`腕前：${skills}`] : []),
 			...(badge ? [`いま：${badge.emoji} ${badge.name}`] : []),
@@ -958,15 +958,17 @@ async function startCity(
 				}
 				case "ACT_DONE": {
 					const a = activities.find((x) => x.id === m.activity);
-					const name = a?.name ?? m.activity;
 					const change = m.delta ? deltaText(m.delta) : "";
+					// an activity of the area, or (an AI's page) work done or something eaten
 					showToast(
-						`${a?.emoji ?? ""} ${name}を${m.share >= 0.999 ? "終えました" : "やめました"}${change ? `（${change}）` : ""}`,
+						a
+							? `${a.emoji} ${a.name}を${m.share >= 0.999 ? "終えました" : "やめました"}${change ? `（${change}）` : ""}`
+							: `${m.name ?? m.activity}${change ? `（${change}）` : ""}`,
 					);
 					break;
 				}
 				case "LIFE":
-					agentPanel.life(m.id, lifeText(m.life, avatars.get(m.id)?.state.doing));
+					agentPanel.life(m.id, lifeText(m.life, avatars.get(m.id)?.state.doing, m.coins));
 					break;
 				case "NOTICE":
 					showToast(m.message);
@@ -1643,7 +1645,7 @@ async function startCity(
 			b.type = "button";
 			const open = activityOpen(a, minutes);
 			b.disabled = !open;
-			b.title = `街の${a.minutes}分${a.cost ? `、${a.cost}コイン（AIだけ）` : ""}。${hoursText(a)}${a.about ? `\n${a.about}` : ""}`;
+			b.title = `街の${a.minutes}分${a.cost ? `、${a.cost}銅貨` : ""}。${hoursText(a)}${a.about ? `\n${a.about}` : ""}`;
 			b.onclick = () => conn.send({ t: "ACT", activity: a.id });
 			actsBar.append(b);
 		}

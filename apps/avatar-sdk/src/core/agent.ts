@@ -14,11 +14,18 @@ import {
 	clockText,
 	dist,
 	energyWord,
+	type Food,
 	type HostToClient,
+	HUNGRY,
+	insidePolygon,
+	type JobKind,
+	type JobZone,
 	LEAD_PLACE_MAX,
 	LEAD_TEXT_MAX,
-	MAX_PATH_POINTS,
+	pathLeg,
 	poseAt,
+	SHOP_REACH,
+	type Shop,
 	type SpatialContext,
 	type Vec2,
 	WALK_SPEED,
@@ -53,6 +60,10 @@ export interface AgentOptions {
 	wanderMs?: [number, number];
 	/** What can be done in the area (docs/life.md 3): with it, it eats, works and plays by what it needs. */
 	activities?: Activity[];
+	/** The area's shops, what their food does, and where one works or studies (docs/prd.md 3.8.6). */
+	shops?: Shop[];
+	foods?: Record<string, Food>;
+	jobZones?: JobZone[];
 	random?: () => number;
 }
 
@@ -91,6 +102,20 @@ const LEAD_CHANCE = 0.35;
 const SELF = "self";
 /** Days before today shown with its replies. */
 const DAYS_SHOWN = 2;
+/** Fewer coins than this, and it works more. */
+const POOR = 30;
+
+/** Where it is walking to (`to`, a leg at a time: `legs` so far), and what for. */
+type Errand = (
+	| { kind: "act"; id: string }
+	| { kind: "buy"; shop: string; goods: string }
+	| { kind: "job"; job: JobKind; zone: string }
+) & { to?: Vec2; legs?: number };
+/** Legs of a long way before it gives up (one leg is up to MAX_PATH_LENGTH m). */
+const MAX_LEGS = 8;
+
+/** The area's life, for an agent that moved to another area. */
+export type AreaLife = Pick<AgentOptions, "activities" | "shops" | "foods" | "jobZones">;
 const LEAD_LINES = [
 	"{place}に行ってみたいな。いっしょに来る？",
 	"ねえ、{place}のほうに行ってみない？",
@@ -112,17 +137,20 @@ export class Agent {
 	private leadAskedAt = 0;
 	private leadNoAt = 0;
 	private seq = 0;
-	/** What it did today ("07:30 カフェで食事"), and the activity it is walking to. */
+	/** What it did today ("07:30 原っぱで体操"), and where it is walking to. */
 	private doneToday: string[] = [];
-	private goingTo: string | null = null;
+	private going: Errand | null = null;
 	private readonly o: AgentOptions;
 
 	/** In another area now (following its owner, docs/prd.md 3.8.2): its places and walkable ground. */
-	setCity(nav: Navigator, landmarks: Landmark[], activities?: Activity[]): void {
+	setCity(nav: Navigator, landmarks: Landmark[], life: AreaLife = {}): void {
 		this.o.nav = nav;
 		this.o.landmarks = landmarks;
-		if (activities) this.o.activities = activities;
-		this.goingTo = null;
+		this.o.activities = life.activities ?? [];
+		this.o.shops = life.shops ?? [];
+		this.o.foods = life.foods ?? {};
+		this.o.jobZones = life.jobZones ?? [];
+		this.going = null;
 	}
 	private readonly random: () => number;
 
@@ -202,12 +230,22 @@ export class Agent {
 				return;
 			case "NOTICE":
 				this.o.logger.warn(`notice ${msg.kind}: ${msg.message}`);
-				this.goingTo = null;
+				// refused (closed, full, too far...): it thinks again; a reply sent too soon is nothing to do with it
+				if (msg.kind === "rejected") this.going = null;
 				return;
+			case "ITEM": {
+				// what it bought to eat: it eats it
+				const g = msg.item.goods;
+				if (g?.food && msg.item.holder === this.world.me && this.world.life)
+					setTimeout(() => this.o.send({ t: "USE" }), 1500);
+				return;
+			}
 			case "ACT_DONE": {
 				const a = this.o.activities?.find((x) => x.id === msg.activity);
 				if (msg.share >= 0.5)
-					this.doneToday.push(`${clockText(cityTime(this.hostNow()).minutes)} ${a?.name ?? msg.activity}`);
+					this.doneToday.push(
+						`${clockText(cityTime(this.hostNow()).minutes)} ${a?.name ?? msg.name ?? msg.activity}`,
+					);
 				this.o.logger.info(`done ${msg.activity} (${Math.round(msg.share * 100)}%)`);
 				this.scheduleWander(3000);
 				return;
@@ -229,67 +267,152 @@ export class Agent {
 		if (!life) return undefined;
 		const before = (await this.o.memory.recall(SELF).catch(() => [])).slice(-DAYS_SHOWN);
 		return [
-			`街の時刻: ${clockText(cityTime(this.hostNow()).minutes)}（暮らして${life.days}日目）。自分の調子: ${energyWord(life.energy)}、コイン ${life.coins}`,
+			`街の時刻: ${clockText(cityTime(this.hostNow()).minutes)}（暮らして${life.days}日目）。自分の調子: ${energyWord(life.energy)}${this.world.coins !== null ? `、財布 ${this.world.coins}銅貨` : ""}`,
 			`今日したこと: ${this.doneToday.join("、") || "まだ特になし"}`,
 			...(before.length > 0 ? [`前の日にしたこと: ${before.join(" / ")}`] : []),
 		];
 	}
 
 	/**
-	 * Its life (docs/life.md 5.3), by what it needs most: food when hungry or at mealtimes, work or study
-	 * once a day (and when short of coins), exercise every other day, now and then something to enjoy.
-	 * Walks to the place first. True if it is busy with that.
+	 * Its life (docs/life.md 5.3), by what it needs most: food from a shop when hungry or at mealtimes, work or
+	 * study once a day (and when short of coins), exercise every other day, now and then something to enjoy.
+	 * Walks there first. True if it is busy with that.
 	 */
 	private live(here: Vec2): boolean {
-		const acts = this.o.activities ?? [];
 		const life = this.world.lifeNow();
-		if (acts.length === 0 || !life) return false;
+		if (!life) return false;
 		const t = cityTime(this.hostNow());
+		const coins = this.world.coins;
 		// arrived where it was going
-		const going = this.goingTo ? acts.find((a) => a.id === this.goingTo) : undefined;
-		this.goingTo = null;
-		const placeOf = (a: Activity) => this.o.landmarks.find((l) => l.id === a.place);
-		if (going) {
-			const place = placeOf(going);
-			if (place && dist(here, place.pos) <= ACTIVITY_REACH - 0.5) {
-				this.o.send({ t: "ACT", activity: going.id });
-				this.o.logger.info(`doing ${going.id}`);
-				return true;
-			}
+		const going = this.going;
+		this.going = null;
+		if (going && this.arrive(going, here)) return true;
+		// a long way: on with the next leg
+		if (
+			going?.to &&
+			(going.legs ?? 0) < MAX_LEGS &&
+			dist(here, going.to) > 1.5 &&
+			this.goFor(going, going.to, "on")
+		)
+			return true;
+		// working or studying: on until the day's work is done and the wallet is fine, or it gets hungry
+		const job = this.world.self?.job;
+		if (job) {
+			const enough = life.duties.work && (coins === null || coins >= POOR);
+			if (!enough && life.energy >= HUNGRY + 5 && !t.night) return true;
+			this.o.send({ t: "JOB", kind: null });
+			this.o.logger.info(`stops ${job === "work" ? "working" : "studying"}`);
+			return true;
 		}
 		if (t.night) return false;
-		const open = acts.filter((a) => activityOpen(a, t.minutes) && !cannotStart(life, a) && placeOf(a));
-		const one = (...kinds: Activity["kind"][]) => {
-			const can = open.filter((a) => kinds.includes(a.kind));
-			return can[Math.floor(this.random() * can.length)];
-		};
 		const mealtime =
 			(life.duties.meals < 1 && t.minutes >= 7 * 60) || (life.duties.meals < 2 && t.minutes >= 18 * 60);
+		if ((life.energy < 45 || (mealtime && life.energy < 90)) && this.goEat(here, life.energy < HUNGRY))
+			return true;
+		if (
+			life.energy >= 30 &&
+			(!life.duties.work || (coins !== null && coins < POOR)) &&
+			t.minutes >= 8 * 60 &&
+			this.goWork(here)
+		)
+			return true;
+		const acts = (this.o.activities ?? []).filter(
+			(a) =>
+				activityOpen(a, t.minutes) &&
+				!cannotStart(life, a) &&
+				(coins === null || (a.cost ?? 0) <= coins) &&
+				this.placeOf(a),
+		);
+		const one = (...kinds: Activity["kind"][]) => {
+			const can = acts.filter((a) => kinds.includes(a.kind));
+			return can[Math.floor(this.random() * can.length)];
+		};
 		let a: Activity | undefined;
-		if (life.energy < 45 || (mealtime && life.energy < 90)) a = one("eat");
-		if (!a && life.energy >= 30 && (!life.duties.work || life.coins < 30) && t.minutes >= 8 * 60)
-			a = one("work", "study");
-		if (!a && !life.duties.exercise && life.days - life.exercisedDay >= 1 && life.energy >= 35)
-			a = one("exercise");
+		if (!life.duties.exercise && life.days - life.exercisedDay >= 1 && life.energy >= 35) a = one("exercise");
 		if (!a && this.random() < 0.25) a = one("play", "rest");
-		if (!a) return false;
-		const place = placeOf(a);
-		if (!place) return false;
-		if (dist(here, place.pos) <= ACTIVITY_REACH - 0.5) {
+		return a ? this.goDo(a, here) : false;
+	}
+
+	private placeOf(a: Activity): Landmark | undefined {
+		return this.o.landmarks.find((l) => l.id === a.place);
+	}
+
+	/** There: does what it went for. False if it is not there after all. */
+	private arrive(e: Errand, here: Vec2): boolean {
+		if (e.kind === "act") {
+			const a = this.o.activities?.find((x) => x.id === e.id);
+			const place = a ? this.placeOf(a) : undefined;
+			if (!a || !place || dist(here, place.pos) > ACTIVITY_REACH - 0.5) return false;
 			this.o.send({ t: "ACT", activity: a.id });
 			this.o.logger.info(`doing ${a.id}`);
 			return true;
 		}
-		const angle = this.random() * Math.PI * 2;
-		const near: Vec2 = [place.pos[0] + Math.cos(angle) * 1.2, place.pos[1] + Math.sin(angle) * 1.2];
-		if (!this.walkTo(near) && !this.walkTo(place.pos)) return false;
-		this.goingTo = a.id;
-		this.o.logger.info(`going to ${place.name} for ${a.name}`);
-		// look again once there
+		if (e.kind === "buy") {
+			const shop = this.o.shops?.find((s) => s.id === e.shop);
+			if (!shop || dist(here, shop.counter) > SHOP_REACH - 0.5) return false;
+			this.o.send({ t: "BUY", shop: shop.id, goods: e.goods });
+			this.o.logger.info(`buying ${e.goods} at ${shop.name}`);
+			return true;
+		}
+		const zone = this.o.jobZones?.find((z) => z.id === e.zone);
+		if (!zone || !insidePolygon(here, zone.poly)) return false;
+		this.o.send({ t: "JOB", kind: e.job });
+		this.o.logger.info(`${e.job === "work" ? "working" : "studying"} at ${zone.name}`);
+		return true;
+	}
+
+	/** Walks to `to` for an errand, and looks again about when it is there. */
+	private goFor(e: Errand, to: Vec2, what: string): boolean {
 		const from = this.world.me ? this.positionOf(this.world.me) : null;
-		const eta = from ? (dist(from, place.pos) / WALK_SPEED) * 1000 : 10_000;
+		if (!this.walkTo(to)) return false;
+		this.going = { ...e, to, legs: (e.legs ?? 0) + 1 };
+		this.o.logger.info(`going ${what}`);
+		const eta = from ? (dist(from, to) / WALK_SPEED) * 1000 : 10_000;
 		this.scheduleWander(eta * 1.4 + 2000);
 		return true;
+	}
+
+	private goDo(a: Activity, here: Vec2): boolean {
+		const place = this.placeOf(a);
+		if (!place) return false;
+		const e: Errand = { kind: "act", id: a.id };
+		if (dist(here, place.pos) <= ACTIVITY_REACH - 0.5) return this.arrive(e, here);
+		const angle = this.random() * Math.PI * 2;
+		const near: Vec2 = [place.pos[0] + Math.cos(angle) * 1.2, place.pos[1] + Math.sin(angle) * 1.2];
+		const what = `to ${place.name} for ${a.name}`;
+		return this.goFor(e, near, what) || this.goFor(e, place.pos, what);
+	}
+
+	/** To a shop for something to eat it can pay for: a meal, or anything when very hungry. */
+	private goEat(here: Vec2, anything: boolean): boolean {
+		const coins = this.world.coins;
+		const food = (this.o.shops ?? []).flatMap((s) =>
+			s.goods
+				.filter((g) => g.food && (coins === null || g.price <= coins))
+				.map((g) => ({ s, g, meal: this.o.foods?.[g.id]?.meal === true })),
+		);
+		const meals = food.filter((f) => f.meal);
+		const choice = meals.length > 0 ? meals : anything ? food : [];
+		const pick = choice[Math.floor(this.random() * choice.length)];
+		if (!pick) return false;
+		const e: Errand = { kind: "buy", shop: pick.s.id, goods: pick.g.id };
+		if (dist(here, pick.s.counter) <= SHOP_REACH - 0.5) return this.arrive(e, here);
+		return this.goFor(e, pick.s.counter, `to ${pick.s.name} for ${pick.g.name}`);
+	}
+
+	/** To a place to work or study (the middle of it). */
+	private goWork(here: Vec2): boolean {
+		const zones = this.o.jobZones ?? [];
+		const zone = zones[Math.floor(this.random() * zones.length)];
+		if (!zone) return false;
+		const e: Errand = { kind: "job", job: zone.kind, zone: zone.id };
+		if (insidePolygon(here, zone.poly)) return this.arrive(e, here);
+		const n = zone.poly.length;
+		const mid: Vec2 = [
+			zone.poly.reduce((s, p) => s + p[0], 0) / n,
+			zone.poly.reduce((s, p) => s + p[1], 0) / n,
+		];
+		return this.goFor(e, mid, `to ${zone.name} to ${zone.kind}`);
 	}
 
 	// ---- conversation -------------------------------------------------------
@@ -502,7 +625,8 @@ export class Agent {
 		if (!from) return false;
 		const path = this.o.nav.findPath(from, to);
 		if (!path || path.length < 2) return false;
-		this.o.send({ t: "MOVE_PATH", path: path.slice(0, MAX_PATH_POINTS), speed: WALK_SPEED, seq: ++this.seq });
+		// as far as one MOVE_PATH goes: a long way is walked a leg at a time (live)
+		this.o.send({ t: "MOVE_PATH", path: pathLeg(path), speed: WALK_SPEED, seq: ++this.seq });
 		return true;
 	}
 

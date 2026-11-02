@@ -115,6 +115,9 @@ async function start(
 		landmarks: city.landmarks,
 		// it eats, works and plays by what it needs (docs/life.md 5.3)
 		activities: city.activities,
+		shops: city.shops,
+		foods: city.foods,
+		jobZones: city.jobZones,
 		logger: log,
 		send: (m) => conn?.send(m),
 		dailyLlmLimit: quota?.remaining ?? 0,

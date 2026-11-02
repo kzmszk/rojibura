@@ -3,17 +3,21 @@ import {
 	type Activity,
 	activityOpen,
 	CITY_DAY_MS,
+	cannotJob,
 	cannotStart,
 	canRun,
 	cityTime,
 	clockText,
 	decay,
 	deltaText,
+	eatFood,
 	finishActivity,
+	finishJob,
 	MORNING_ENERGY,
 	newDay,
 	newLife,
 	realMs,
+	WORK_MINUTES,
 } from "./life.ts";
 
 /** JST 20:00 on 2026-11-02, the opening. */
@@ -35,7 +39,6 @@ const work: Activity = {
 	name: "仕事",
 	place: "cafe",
 	minutes: 120,
-	pay: 40,
 	effects: { energy: -10 },
 	skill: { id: "cooking", gain: 4 },
 	emoji: "🍳",
@@ -89,22 +92,47 @@ describe("the meters", () => {
 		// full is full: the delta says what it really gave
 		expect(finishActivity({ ...life, energy: 90 }, meal, 1).delta).toEqual({ energy: 10 });
 		const half = finishActivity(life, work, 0.5);
-		expect(half.life.coins).toBe(life.coins + 20);
 		expect(half.life.skills.cooking).toBe(2);
 		expect(half.life.duties.work).toBe(true);
 		const little = finishActivity(life, work, 0.2);
 		expect(little.life.duties.work).toBe(false);
-		expect(deltaText(half.delta)).toBe("エネルギー −5、コイン +20");
+		expect(deltaText(half.delta)).toBe("エネルギー −5");
+		expect(deltaText({ energy: -4, coins: 13 })).toBe("エネルギー −4、銅貨 +13");
 	});
 
 	test("what stops one from starting", () => {
 		const life = newLife(OPENING);
-		expect(cannotStart({ ...life, coins: 10 }, meal)).toMatch(/コイン/);
 		expect(cannotStart({ ...life, energy: 10 }, work)).toMatch(/食べて/);
 		expect(cannotStart({ ...life, energy: 0 }, meal)).toBeNull();
 		expect(canRun({ ...life, energy: 10 })).toBe(false);
 		expect(canRun({ ...life, fitness: 20 })).toBe(false);
 		expect(canRun(life)).toBe(true);
+	});
+
+	test("working or studying uses energy, trains a skill, and is the day's work after an hour in all", () => {
+		const life = newLife(OPENING);
+		const first = finishJob(life, "work", 40, { skill: "baking" });
+		expect(first.life.energy).toBe(MORNING_ENERGY - 4);
+		expect(first.delta).toEqual({ energy: -4 });
+		expect(first.life.skills.baking).toBeCloseTo(0.7);
+		expect(first.life.duties).toMatchObject({ worked: 40, work: false });
+		const more = finishJob(first.life, "study", 20);
+		expect(more.life.duties).toMatchObject({ worked: WORK_MINUTES, work: true });
+		expect(more.life.skills.study).toBeCloseTo(0.3);
+		expect(cannotJob({ ...life, energy: 10 })).toMatch(/食べて/);
+		expect(cannotJob(life)).toBeNull();
+	});
+
+	test("food bought gives energy; a proper one is a meal", () => {
+		const life = { ...newLife(OPENING), energy: 40 };
+		const rice = eatFood(life, { energy: 25, meal: true });
+		expect(rice.life.energy).toBe(65);
+		expect(rice.life.duties.meals).toBe(1);
+		const coffee = eatFood(life, { energy: 3, mood: 5, drink: true });
+		expect(coffee.delta).toEqual({ energy: 3, mood: 5 });
+		expect(coffee.life.duties.meals).toBe(0);
+		// something the area does not know is a snack
+		expect(eatFood(life).delta).toEqual({ energy: 5 });
 	});
 
 	test("a new morning scores the day: what was left undone costs energy and mood", () => {
@@ -115,7 +143,7 @@ describe("the meters", () => {
 		expect(lazy.life.energy).toBe(MORNING_ENERGY - 30);
 		expect(lazy.life.mood).toBe(life.mood - 15);
 		expect(lazy.life.fitness).toBe(life.fitness - 2);
-		expect(lazy.life.duties).toEqual({ meals: 0, work: false, exercise: false });
+		expect(lazy.life.duties).toEqual({ meals: 0, work: false, exercise: false, worked: 0 });
 		const good = newDay(
 			{ ...life, duties: { meals: 2, work: true, exercise: true }, exercisedDay: 3 },
 			OPENING + CITY_DAY_MS,

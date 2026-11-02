@@ -1,4 +1,11 @@
-import type { ClientToHost, HostToClient } from "@rojibura/protocol";
+import {
+	type ClientToHost,
+	type HostToClient,
+	MAX_PATH_LENGTH,
+	newLife,
+	polylineLength,
+	realMs,
+} from "@rojibura/protocol";
 import { describe, expect, test, vi } from "vitest";
 import { Agent } from "./agent.ts";
 import { decisionSchema, parseDecision, userPrompt } from "./prompt.ts";
@@ -429,4 +436,191 @@ describe("walking with its owner", () => {
 			vi.useRealTimers();
 		}
 	});
+});
+
+describe("living by what it needs (docs/life.md 5.3)", () => {
+	test("hungry, it buys a meal and eats it; then it works until the day's work is done", async () => {
+		// city 09:00
+		const nine = Date.UTC(2026, 10, 2, 11) + realMs(180);
+		vi.useFakeTimers({ now: nine });
+		try {
+			const sent: ClientToHost[] = [];
+			const agent = new Agent({
+				persona: { name: "ミナ", personality: "" },
+				llm: { name: "fake", complete: async () => null },
+				memory: memory(),
+				nav: { findPath: (a, b) => [a, b] },
+				landmarks: [],
+				logger: { info: () => {}, warn: () => {} },
+				send: (m) => sent.push(m),
+				wanderMs: [1000, 1000],
+				random: () => 0,
+				shops: [
+					{
+						id: "seven",
+						name: "セブンイレブン",
+						currency: "銅貨",
+						counter: [10, 0],
+						goods: [
+							{ id: "coffee", name: "コーヒー", price: 2, color: "#000", food: true },
+							{ id: "onigiri", name: "おにぎり", price: 3, color: "#fff", food: true },
+						],
+					},
+				],
+				foods: { onigiri: { energy: 25, meal: true }, coffee: { energy: 3 } },
+				jobZones: [
+					{
+						id: "work_bakery",
+						kind: "work",
+						name: "パン屋",
+						poly: [
+							[-12, -2],
+							[-8, -2],
+							[-8, 2],
+							[-12, 2],
+						],
+					},
+				],
+			});
+			const me = {
+				id: "a_mina",
+				kind: "ai" as const,
+				name: "ミナ",
+				status: "active" as const,
+				assets: { thumb: "", lod: "", vrm: "" },
+				move: { kind: "idle" as const, pos: [0, 0] as [number, number], at: 0 },
+			};
+			const life = newLife(nine);
+			agent.handle({
+				t: "WELCOME",
+				you: "a_mina",
+				serverTime: nine,
+				budget: 0,
+				avatars: [me],
+				life: { ...life, energy: 30 },
+			});
+			agent.handle({ t: "WALLET", coins: 100 });
+			const at = (pos: [number, number]) =>
+				agent.handle({ t: "MOVED", id: "a_mina", move: { kind: "idle", pos, at: Date.now() } });
+
+			// hungry: off to the shop for a meal (not the coffee)
+			await vi.advanceTimersByTimeAsync(3100);
+			expect(sent.at(-1)).toMatchObject({ t: "MOVE_PATH" });
+			at([10, 0]);
+			await vi.advanceTimersByTimeAsync(20_000);
+			expect(sent).toContainEqual({ t: "BUY", shop: "seven", goods: "onigiri" });
+			agent.handle({
+				t: "ITEM",
+				item: {
+					id: "i_1",
+					kind: "goods",
+					goods: { id: "onigiri", name: "おにぎり", color: "#fff", food: true },
+					pos: [10, 0],
+					holder: "a_mina",
+				},
+			});
+			await vi.advanceTimersByTimeAsync(1600);
+			expect(sent.at(-1)).toEqual({ t: "USE" });
+			agent.handle({
+				t: "LIFE",
+				id: "a_mina",
+				life: { ...life, at: Date.now(), energy: 55, duties: { ...life.duties, meals: 1 } },
+			});
+
+			// fed: off to work
+			const before = sent.length;
+			await vi.advanceTimersByTimeAsync(1100);
+			expect(sent.slice(before).at(-1)).toMatchObject({ t: "MOVE_PATH" });
+			at([-10, 0]);
+			await vi.advanceTimersByTimeAsync(30_000);
+			expect(sent).toContainEqual({ t: "JOB", kind: "work" });
+			agent.handle({ t: "JOBBED", id: "a_mina", job: "work" });
+			// working: it carries on
+			const working = sent.length;
+			await vi.advanceTimersByTimeAsync(5000);
+			expect(sent.slice(working).some((m) => m.t === "JOB" || m.t === "MOVE_PATH")).toBe(false);
+			// the day's work done, and coins enough: it stops
+			agent.handle({
+				t: "LIFE",
+				id: "a_mina",
+				life: {
+					...life,
+					at: Date.now(),
+					energy: 50,
+					duties: { ...life.duties, meals: 1, work: true, worked: 60 },
+				},
+			});
+			await vi.advanceTimersByTimeAsync(1100);
+			expect(sent).toContainEqual({ t: "JOB", kind: null });
+			agent.stop();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+});
+
+test("a place farther than one walk carries: it goes a leg at a time, then does what it went for", async () => {
+	const nine = Date.UTC(2026, 10, 2, 11) + realMs(180);
+	vi.useFakeTimers({ now: nine });
+	try {
+		const sent: ClientToHost[] = [];
+		const agent = new Agent({
+			persona: { name: "ミナ", personality: "" },
+			llm: { name: "fake", complete: async () => null },
+			memory: memory(),
+			nav: { findPath: (a, b) => [a, b] },
+			landmarks: [{ id: "summit", name: "山頂", pos: [300, 0] }],
+			logger: { info: () => {}, warn: () => {} },
+			send: (m) => sent.push(m),
+			wanderMs: [1000, 1000],
+			// pick the first; never "now and then"
+			random: () => 0.99,
+			activities: [
+				{
+					id: "summit_exercise",
+					kind: "exercise",
+					name: "山頂で体操",
+					place: "summit",
+					minutes: 45,
+					effects: { fitness: 5 },
+					emoji: "🏔️",
+				},
+			],
+		});
+		const life = { ...newLife(nine), days: 2 };
+		agent.handle({
+			t: "WELCOME",
+			you: "a_mina",
+			serverTime: nine,
+			budget: 0,
+			avatars: [
+				{
+					id: "a_mina",
+					kind: "ai",
+					name: "ミナ",
+					status: "active",
+					assets: { thumb: "", lod: "", vrm: "" },
+					move: { kind: "idle", pos: [0, 0], at: 0 },
+				},
+			],
+			life: { ...life, duties: { meals: 2, work: true, exercise: false } },
+		});
+		const walks = () =>
+			sent.filter((m): m is Extract<ClientToHost, { t: "MOVE_PATH" }> => m.t === "MOVE_PATH");
+		await vi.advanceTimersByTimeAsync(3100);
+		const first = walks()[0];
+		expect(first && polylineLength(first.path)).toBeLessThan(MAX_PATH_LENGTH);
+		const end = first?.path.at(-1) as [number, number];
+		agent.handle({ t: "MOVED", id: "a_mina", move: { kind: "idle", pos: end, at: Date.now() } });
+		await vi.advanceTimersByTimeAsync(400_000);
+		expect(walks().length).toBe(2);
+		const second = walks()[1];
+		expect(second?.path[0]).toEqual(end);
+		agent.handle({ t: "MOVED", id: "a_mina", move: { kind: "idle", pos: [299, 0], at: Date.now() } });
+		await vi.advanceTimersByTimeAsync(400_000);
+		expect(sent).toContainEqual({ t: "ACT", activity: "summit_exercise" });
+		agent.stop();
+	} finally {
+		vi.useRealTimers();
+	}
 });

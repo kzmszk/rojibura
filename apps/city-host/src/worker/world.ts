@@ -21,6 +21,7 @@ import type {
 	ShopsData,
 	Vec2,
 } from "@rojibura/protocol";
+import activitiesJson from "../../../../assets/areas/hajimari/activities.json";
 import publishedJson from "../../../../assets/areas/hajimari/builds.json";
 import landmarksJson from "../../../../assets/areas/hajimari/landmarks.json";
 import baseNavmeshJson from "../../../../assets/areas/hajimari/navmesh.base.json";
@@ -40,7 +41,6 @@ import modelIndex from "../../../../assets/models/index.json";
 import lampNav from "../../../../assets/models/lamp.nav.json";
 import towerNav from "../../../../assets/models/tower.nav.json";
 import treeNav from "../../../../assets/models/tree.nav.json";
-import activitiesJson from "../../../../assets/test-city/activities.json";
 import type { BuildWorld, Walkable, World } from "./room-core.ts";
 
 /** Segments are sampled this densely so a long segment cannot cut across an obstacle. */
@@ -127,7 +127,10 @@ export const world: World = {
 	spawn: [sx, sz],
 	areaName: areaOf(MAIN_AREA).name,
 	fixedBuilds: PUBLISHED.builds,
+	// how AIs live here besides the shops and job zones (docs/life.md 3)
 	activities: (activitiesJson as ActivitiesData).activities,
+	foods: (activitiesJson as ActivitiesData).foods ?? {},
+	jobs: (activitiesJson as ActivitiesData).jobs ?? {},
 	// two balls and a box near where people arrive (docs/prd.md 3.4.7)
 	items: [
 		{ kind: "ball", pos: [sx + 2, sz + 1.5] },

@@ -214,16 +214,16 @@ describe("a resident's life", () => {
 			activity: "cafe_meal",
 			share: 1,
 			delta: { energy: 35, coins: -15 },
-			life: { ...newLife(SEVEN), energy: 75, coins: 85, duties: { meals: 1, work: false, exercise: false } },
+			life: { ...newLife(SEVEN), energy: 75, duties: { meals: 1, work: false, exercise: false } },
 		};
 		resident.handle(msg);
 		await new Promise((r) => setTimeout(r, 0));
 		const today = (await journal.read(jstDate())) ?? "";
 		expect(today).toMatch(/## 07:0\d カフェで食事（オープンカフェ）/);
 		expect(today).toMatch(/朝はパンとスープ。/);
-		expect(today).toMatch(/エネルギー \+35、コイン −15/);
+		expect(today).toMatch(/エネルギー \+35、銅貨 −15/);
 		await resident.turnNow();
-		expect(prompts[0]).toMatch(/カフェで食事を終えた。エネルギー \+35、コイン −15/);
+		expect(prompts[0]).toMatch(/カフェで食事を終えた。エネルギー \+35、銅貨 −15/);
 		await resident.turnNow();
 		expect(results[1]).toMatch(/見つかったこと:\n\[\d{4}-\d\d-\d\d\] ## 07:0\d カフェで食事/);
 		expect(results[2]).toMatch(/の日記:\n/);
@@ -272,10 +272,56 @@ describe("a resident's life", () => {
 		expect(prompts[0]).toMatch(/今日の予定をまだ決めていません/);
 	});
 
-	test("the system prompt explains how to live, and lists what can be done", () => {
-		const p = residentSystemPrompt({ name: "ハル", personality: "のんびり" }, [], false, [], ACTIVITIES);
+	test("work done and food eaten go into the diary too, in the host's words", async () => {
+		const { resident, journal, prompts } = setup([[["wait", {}]]]);
+		resident.handle({
+			t: "ACT_DONE",
+			activity: "work_bakery",
+			share: 1,
+			name: "パン屋「こむぎ」で働いた",
+			about: "石窯でパンを焼くのを手伝う。",
+			minutes: 45,
+			delta: { energy: -4.5, coins: 10 },
+			life: { ...newLife(SEVEN), duties: { meals: 0, work: false, exercise: false, worked: 45 } },
+		});
+		resident.handle({
+			t: "ACT_DONE",
+			activity: "onigiri",
+			share: 1,
+			name: "おにぎりを食べた（ごはん）",
+			delta: { energy: 25 },
+		});
+		await new Promise((r) => setTimeout(r, 0));
+		const today = (await journal.read(jstDate())) ?? "";
+		expect(today).toMatch(/## 07:0\d パン屋「こむぎ」で働いた（街の45分）\n石窯でパンを焼くのを手伝う。/);
+		expect(today).toMatch(/エネルギー −4.5、銅貨 \+10。/);
+		expect(today).toMatch(/仕事か勉強 まだ（街の45\/60分）/);
+		expect(today).toMatch(/## 07:0\d おにぎりを食べた（ごはん）\nエネルギー \+25。/);
+		await resident.turnNow();
+		expect(prompts[0]).toMatch(/パン屋「こむぎ」で働いた（街の45分）。エネルギー −4.5、銅貨 \+10。（石窯で/);
+	});
+
+	test("the system prompt explains how to live, and lists what can be done and what food does", () => {
+		const shops = [
+			{
+				id: "seven",
+				name: "セブンイレブン",
+				currency: "銅貨",
+				counter: [0, 0] as [number, number],
+				goods: [
+					{ id: "onigiri", name: "おにぎり", price: 3, color: "#fff", food: true },
+					{ id: "umbrella", name: "傘", price: 6, color: "#fff" },
+				],
+			},
+		];
+		const p = residentSystemPrompt({ name: "ハル", personality: "のんびり" }, [], false, shops, ACTIVITIES, {
+			onigiri: { energy: 25, meal: true },
+		});
 		expect(p).toMatch(/活動をする: do/);
-		expect(p).toMatch(/- cafe_meal: カフェで食事（cafe。街の30分、15コイン。6〜10時。エネルギー \+35）/);
+		expect(p).toMatch(/買う: buy、食べる: eat、働く・勉強する: work/);
+		expect(p).toMatch(/- cafe_meal: カフェで食事（cafe。街の30分、15銅貨。6〜10時。エネルギー \+35）/);
+		expect(p).toMatch(/食べ物と飲み物（名前（店。どうなるか））: おにぎり（seven。ごはん。エネルギー \+25）/);
+		expect(p).toMatch(/合わせて街の60分/);
 		expect(residentSystemPrompt({ name: "ハル", personality: "のんびり" })).not.toMatch(/do、/);
 	});
 });

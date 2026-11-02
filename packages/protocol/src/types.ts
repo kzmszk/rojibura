@@ -372,17 +372,23 @@ export type HostToClient =
 	| { t: "ACTING"; id: AvatarId; doing: Doing | null }
 	/**
 	 * To the one who did it: it is over, done (`share` 1) or stopped part way. AIs get what it changed and their
-	 * life now; this is what their diary is written from (docs/life.md 5.1).
+	 * life now; this is what their diary is written from (docs/life.md 5.1). Also to an AI that stopped working
+	 * or studying (`activity` the zone, `name` what it was, `minutes` how long) or ate something it bought
+	 * (`activity` the goods): those are not the area's activities.
 	 */
 	| {
 			t: "ACT_DONE";
 			activity: string;
 			share: number;
+			name?: string;
+			about?: string;
+			/** City minutes it lasted. */
+			minutes?: number;
 			delta?: Partial<Record<Meter | "coins", number>>;
 			life?: LifeState;
 	  }
-	/** To an AI and its owner: its life changed (docs/life.md 2). */
-	| { t: "LIFE"; id: AvatarId; life: LifeState }
+	/** To an AI and its owner: its life changed (docs/life.md 2), and the coins in its wallet. */
+	| { t: "LIFE"; id: AvatarId; life: LifeState; coins?: number }
 	/** To an AI: a new morning, and how the day before went. */
 	| { t: "DAY"; review: DayReview; life: LifeState }
 	/** A small thing is gone: eaten (`by`), or tidied away (bought things beyond MAX_GOODS, oldest first). */

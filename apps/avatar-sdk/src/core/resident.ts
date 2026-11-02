@@ -24,17 +24,20 @@ import {
 	cityTime,
 	clockText,
 	dist,
+	type Food,
 	type HostToClient,
 	hoursText,
+	insidePolygon,
 	type JobKind,
 	type JobZone,
 	LEAD_MIN_DISTANCE,
 	LEAD_PLACE_MAX,
-	MAX_PATH_POINTS,
 	MAX_SAY_LENGTH,
 	MOTIONS,
 	type Motion,
 	parseBodyKeys,
+	pathLeg,
+	polylineLength,
 	SHOP_REACH,
 	type Shop,
 	sanitizeText,
@@ -88,8 +91,9 @@ export interface ResidentOptions {
 	sees?: boolean;
 	/** Its diary and long-term memory (docs/life.md 5). With it, it lives: eats, works, plays, looks back. */
 	journal?: Journal;
-	/** What can be done in the area (activities.json). */
+	/** What can be done in the area (activities.json), and what the shops' food does. */
 	activities?: Activity[];
+	foods?: Record<string, Food>;
 	/** The area's shops, and where one works or studies to earn coins (docs/prd.md 3.8.6). */
 	shops?: Shop[];
 	jobZones?: JobZone[];
@@ -147,6 +151,8 @@ const ARM_REACH = 0.6;
 /** How near it steps up to touch its owner (m), unless told otherwise. */
 const TOUCH_DISTANCE = 0.4;
 const MAX_EVENTS = 12;
+/** Legs of a long walk before it gives up (one MOVE_PATH goes up to MAX_PATH_LENGTH m). */
+const MAX_LEGS = 8;
 /** More people waiting than this are not answered. */
 const MAX_WAITING = 3;
 /** Own texts remembered to drop repeats. */
@@ -204,10 +210,9 @@ export class Resident {
 	private reflectedBlock: number | null = null;
 	/** Asked to look back on a day: that day's diary goes with the next turn. */
 	private reflectDue: string | null = null;
-	/** Coins in its wallet (the host tells, WALLET), what it is doing to earn more, a purchase on its way. */
+	/** Coins in its wallet (the host tells, WALLET), and what it is doing to earn more. */
 	private coins: number | null = null;
 	private job: JobKind | null = null;
-	private buyTimer: ReturnType<typeof setTimeout> | null = null;
 	private seq = 0;
 	private readonly o: ResidentOptions;
 	private readonly random: () => number;
@@ -230,10 +235,19 @@ export class Resident {
 	 * In another area now, having followed its owner through a portal (docs/prd.md 3.8.2): its places and
 	 * walkable ground, and what it is told about where it is.
 	 */
-	setCity(nav: Navigator, landmarks: Landmark[], areaName: string, activities?: Activity[]): void {
+	setCity(
+		nav: Navigator,
+		landmarks: Landmark[],
+		areaName: string,
+		life: Pick<ResidentOptions, "activities" | "foods" | "shops" | "jobZones"> = {},
+	): void {
 		this.o.nav = nav;
 		this.o.landmarks = landmarks;
-		if (activities) this.o.activities = activities;
+		// what the new area has to live on (its shops, its places to work, what can be done there)
+		this.o.activities = life.activities ?? [];
+		this.o.foods = life.foods ?? {};
+		this.o.shops = life.shops ?? [];
+		this.o.jobZones = life.jobZones ?? [];
 		this.place = { name: "", since: Date.now() };
 		this.push(
 			`オーナーについて、門を通って${clean(areaName, 24)}に来た。前の街とは別の場所。ここの場所: ${
@@ -254,8 +268,7 @@ export class Resident {
 		if (this.tickTimer) clearTimeout(this.tickTimer);
 		if (this.arrivalTimer) clearTimeout(this.arrivalTimer);
 		if (this.bodyTimer) clearTimeout(this.bodyTimer);
-		if (this.buyTimer) clearTimeout(this.buyTimer);
-		this.tickTimer = this.arrivalTimer = this.bodyTimer = this.buyTimer = null;
+		this.tickTimer = this.arrivalTimer = this.bodyTimer = null;
 		if (this.turn) this.o.mind.abort();
 		this.o.mirror?.close?.();
 	}
@@ -377,7 +390,8 @@ export class Resident {
 				return;
 			case "JOBBED":
 				if (msg.id !== this.world.me) return;
-				if (msg.job === null && this.job)
+				// an AI that lives here hears what it did when it stops (ACT_DONE), with its diary
+				if (msg.job === null && this.job && !this.o.journal)
 					this.push(
 						`${this.job === "work" ? "働く" : "勉強する"}のをやめた。財布は${this.coins ?? "?"}銅貨。`,
 					);
@@ -386,8 +400,11 @@ export class Resident {
 			case "ITEM": {
 				// what it just bought is in its hand
 				const g = msg.item.goods;
-				if (g && msg.item.holder === this.world.me && !msg.item.flight)
+				if (g && msg.item.holder === this.world.me && !msg.item.flight) {
 					this.push(`${clean(g.name, 24)}を手に持っている${g.food ? "（eat で食べられる）" : ""}。`);
+					// bought to eat: it eats soon, not on its next quiet tick minutes later
+					if (g.food && !this.turn) this.scheduleTick(3000);
+				}
 				return;
 			}
 			case "NOTICE":
@@ -754,19 +771,8 @@ export class Resident {
 			this.o.send({ t: "BUY", shop: shop.id, goods: goods.id });
 			return `${name}を買った（${goods.price}銅貨）。`;
 		}
-		const path = this.path(here, shop.counter);
-		if (!path) throw new Error("お店のカウンターまで歩いて行けない。");
-		this.o.send({ t: "MOVE_PATH", path, speed: WALK_SPEED, seq: ++this.seq });
-		let length = 0;
-		for (let i = 1; i < path.length; i++) length += dist(path[i - 1] as Vec2, path[i] as Vec2);
-		if (this.buyTimer) clearTimeout(this.buyTimer);
-		this.buyTimer = setTimeout(
-			() => {
-				this.buyTimer = null;
-				this.o.send({ t: "BUY", shop: shop.id, goods: goods.id });
-			},
-			(length / WALK_SPEED) * 1000 + 600,
-		);
+		const went = this.walkLegs(shop.counter, () => this.o.send({ t: "BUY", shop: shop.id, goods: goods.id }));
+		if (!went) throw new Error("お店のカウンターまで歩いて行けない。");
 		return `${clean(shop.name, 24)}のカウンターへ歩いて、着いたら${name}を買う（${goods.price}銅貨）。`;
 	}
 
@@ -884,46 +890,36 @@ export class Resident {
 			return `${owner}に、${place}へいっしょに行くか聞いた。返事を待つ。`;
 		}
 
-		let path: Vec2[] | null = null;
+		const name = landmark ? clean(landmark.name, 24) : clean(person?.name ?? "", 24);
+		const arrived = () => {
+			if (then) {
+				then();
+				return;
+			}
+			this.push(
+				`${name}${person ? "のそば" : ""}に着いた。${landmark?.description ? clean(landmark.description, 120) : ""}`,
+			);
+			// arriving next to someone is a moment to act; a place can wait for the next tick
+			if (person && !this.turn) this.scheduleTick(1000);
+		};
+		let went = false;
 		if (landmark) {
 			const a = this.random() * Math.PI * 2;
-			path =
-				this.path(here, [landmark.pos[0] + Math.cos(a) * 1.5, landmark.pos[1] + Math.sin(a) * 1.5]) ??
-				this.path(here, landmark.pos);
+			went =
+				this.walkLegs([landmark.pos[0] + Math.cos(a) * 1.5, landmark.pos[1] + Math.sin(a) * 1.5], arrived) ||
+				this.walkLegs(landmark.pos, arrived);
 		} else if (person) {
 			const there = this.world.positionOf(person.id);
 			if (!there) throw new Error("その人の居場所が分からない。");
 			const d = dist(here, there);
 			if (d <= 2) return "もうそばにいる。";
 			// stop about 1.2 m before them
-			path = this.path(here, [
-				there[0] + ((here[0] - there[0]) / d) * 1.2,
-				there[1] + ((here[1] - there[1]) / d) * 1.2,
-			]);
+			went = this.walkLegs(
+				[there[0] + ((here[0] - there[0]) / d) * 1.2, there[1] + ((here[1] - there[1]) / d) * 1.2],
+				arrived,
+			);
 		}
-		if (!path) throw new Error("そこへは歩いて行けない。");
-		this.o.send({ t: "MOVE_PATH", path, speed: WALK_SPEED, seq: ++this.seq });
-
-		const name = landmark ? clean(landmark.name, 24) : clean(person?.name ?? "", 24);
-		let length = 0;
-		for (let i = 1; i < path.length; i++) length += dist(path[i - 1] as Vec2, path[i] as Vec2);
-		if (this.arrivalTimer) clearTimeout(this.arrivalTimer);
-		this.arrivalTimer = setTimeout(
-			() => {
-				this.arrivalTimer = null;
-				if (this.world.moving()) return;
-				if (then) {
-					then();
-					return;
-				}
-				this.push(
-					`${name}${person ? "のそば" : ""}に着いた。${landmark?.description ? clean(landmark.description, 120) : ""}`,
-				);
-				// arriving next to someone is a moment to act; a place can wait for the next tick
-				if (person && !this.turn) this.scheduleTick(1000);
-			},
-			(length / WALK_SPEED) * 1000 + 500,
-		);
+		if (!went) throw new Error("そこへは歩いて行けない。");
 		this.o.logger.info(`walking to ${name}`);
 		return `${name}${person ? "のそば" : ""}へ歩きはじめた。着いたら知らせる。`;
 	}
@@ -972,6 +968,9 @@ export class Resident {
 		const o = {
 			activity,
 			id: msg.activity,
+			...(msg.name ? { name: msg.name } : {}),
+			...(msg.about ? { about: msg.about } : {}),
+			...(msg.minutes ? { minutes: msg.minutes } : {}),
 			share: msg.share,
 			landmarks: this.o.landmarks,
 			hostNow: this.world.hostNow(),
@@ -1426,9 +1425,34 @@ export class Resident {
 
 	// ---- helpers --------------------------------------------------------------
 
+	/** The way from `from` to `to`, as far as one MOVE_PATH may go (for short ways, all of it). */
 	private path(from: Vec2, to: Vec2): Vec2[] | null {
 		const p = this.o.nav.findPath(from, to);
-		return p && p.length >= 2 ? p.slice(0, MAX_PATH_POINTS) : null;
+		return p && p.length >= 2 ? pathLeg(p) : null;
+	}
+
+	/**
+	 * Walks to `to` a leg at a time (one MOVE_PATH carries at most MAX_PATH_POINTS points and MAX_PATH_LENGTH
+	 * metres; はじまりの街 is bigger than that), then `done`. False if there is no way there.
+	 */
+	private walkLegs(to: Vec2, done: () => void, legs = 0): boolean {
+		const here = this.world.me ? this.world.positionOf(this.world.me) : null;
+		const full = here ? this.o.nav.findPath(here, to) : null;
+		if (!full || full.length < 2) return false;
+		const leg = pathLeg(full);
+		const last = dist(leg[leg.length - 1] as Vec2, full[full.length - 1] as Vec2) < 0.5;
+		this.o.send({ t: "MOVE_PATH", path: leg, speed: WALK_SPEED, seq: ++this.seq });
+		if (this.arrivalTimer) clearTimeout(this.arrivalTimer);
+		this.arrivalTimer = setTimeout(
+			() => {
+				this.arrivalTimer = null;
+				if (this.world.moving()) return;
+				if (!last && legs < MAX_LEGS && this.walkLegs(to, done, legs + 1)) return;
+				done();
+			},
+			(polylineLength(leg) / WALK_SPEED) * 1000 + 500,
+		);
+		return true;
 	}
 
 	/** An avatar by ID or, since models sometimes use it, by exact name. */
@@ -1583,6 +1607,7 @@ export function residentSystemPrompt(
 	body = false,
 	shops: Shop[] = [],
 	activities: Activity[] = [],
+	foods: Record<string, Food> = {},
 ): string {
 	const life = activities.length > 0;
 	return [
@@ -1624,18 +1649,7 @@ export function residentSystemPrompt(
 		"- ある人と話した内容を、別の人に話さない。覚えていることは、その本人とだけ話題にする。",
 		"- 同じ内容や言い回しを繰り返さない。話が一巡したら、話題を変えるか、自然に会話を締める。",
 		"- ツールを使い終えたら、地の文は書かずに番を終えてください。",
-		...(life ? ["", lifeGuide(activities, landmarks)] : []),
+		...(life ? ["", lifeGuide(activities, landmarks, foods, shops)] : []),
 		...(body ? ["", bodyGuide()] : []),
 	].join("\n");
-}
-
-/** Whether `p` is inside the polygon (even-odd rule). */
-function insidePolygon(p: Vec2, poly: Vec2[]): boolean {
-	let inside = false;
-	for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-		const [xi, zi] = poly[i] as Vec2;
-		const [xj, zj] = poly[j] as Vec2;
-		if (zi > p[1] !== zj > p[1] && p[0] < ((xj - xi) * (p[1] - zi)) / (zj - zi) + xi) inside = !inside;
-	}
-	return inside;
 }

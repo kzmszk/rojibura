@@ -22,6 +22,8 @@ export class World {
 	company: AvatarId | null = null;
 	/** This agent's life as the host last told it (docs/life.md 2); `lifeNow` brings it up to now. */
 	life: LifeState | null = null;
+	/** Coins in its wallet as the host last told it (WALLET); null before that. */
+	coins: number | null = null;
 	private offset = 0;
 	/** Which way each avatar last walked or turned (a unit vector), for where it faces standing. */
 	private readonly lastDir = new Map<AvatarId, Vec2>();
@@ -75,8 +77,23 @@ export class World {
 				return true;
 			}
 			case "LIFE":
-				if (msg.id === this.me) this.life = msg.life;
+				if (msg.id === this.me) {
+					this.life = msg.life;
+					if (msg.coins !== undefined) this.coins = msg.coins;
+				}
 				return true;
+			// these the agent hears of too (false)
+			case "WALLET":
+				this.coins = msg.coins;
+				return false;
+			case "JOBBED": {
+				const a = this.avatars.get(msg.id);
+				if (a) {
+					if (msg.job) a.job = msg.job;
+					else delete a.job;
+				}
+				return false;
+			}
 			// these also tell the agent what happened: its mind hears of them (false)
 			case "ACT_DONE":
 				if (msg.life) this.life = msg.life;

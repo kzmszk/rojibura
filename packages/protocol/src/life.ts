@@ -1,7 +1,7 @@
 // An AI's life in the city (docs/life.md): the city's clock, the meters, the activities and their rules.
 // Pure functions shared by the host (which decides), the SDK (which plans) and the browser (which shows).
 
-import { START_COINS } from "./limits.ts";
+import type { JobKind } from "./types.ts";
 
 // ---- the city's clock (docs/life.md 1) ----
 
@@ -64,9 +64,8 @@ export interface Activity {
 	minutes: number;
 	/** City hours when it can be started: "06-10,11-14". Always, if omitted. */
 	hours?: string;
-	/** Coins it costs (paid on starting) or pays (on finishing, in proportion to the time spent). */
+	/** Coins (the area's currency) it costs, paid from the wallet on starting. Earning is working (JOB). */
 	cost?: number;
-	pay?: number;
 	/** Added when it is done: in proportion if stopped half way. */
 	effects: Partial<Record<Meter, number>>;
 	/** A skill it trains, and by how much. */
@@ -80,10 +79,30 @@ export interface Activity {
 	about?: string;
 }
 
-/** assets/<area>/activities.json */
+/** What eating or drinking something bought does (shops.json goods id → this). */
+export interface Food {
+	energy: number;
+	mood?: number;
+	/** Counts as one of the day's meals. */
+	meal?: boolean;
+	/** Drunk rather than eaten (for the words). */
+	drink?: boolean;
+}
+
+/** What working or studying at a place is like (zones.json id → this). */
+export interface JobInfo {
+	/** The skill it trains. */
+	skill?: string;
+	/** A line about it, for the diary and for talking about it. */
+	about?: string;
+}
+
+/** assets/<area>/activities.json: the area's life besides its shops and job zones (docs/life.md 3). */
 export interface ActivitiesData {
 	version: 1;
 	activities: Activity[];
+	foods?: Record<string, Food>;
+	jobs?: Record<string, JobInfo>;
 }
 
 /** How close to the place one must be to start (m). */
@@ -98,6 +117,13 @@ export const HUNGRY = 20;
 export const UNFIT = 30;
 /** Meals a day; done activities count only if at least this share was done. */
 export const MEALS_PER_DAY = 2;
+/** City minutes of work or study in a day that count as the day's work (about 13 real minutes). */
+export const WORK_MINUTES = 60;
+/** Energy used per city hour of working or studying, besides being about; skill gained per city hour. */
+const JOB_ENERGY: Record<JobKind, number> = { work: 6, study: 4 };
+const JOB_SKILL_PER_HOUR = 1;
+/** Something eaten that is not in the area's foods. */
+const SNACK: Food = { energy: 5 };
 const COUNTS_FROM = 0.5;
 
 /** Whether the activity is open at `minutes` of the city day. */
@@ -140,7 +166,6 @@ export interface LifeState {
 	energy: number;
 	fitness: number;
 	mood: number;
-	coins: number;
 	skills: Record<string, number>;
 	/** Today's must-dos so far. */
 	duties: Duties;
@@ -154,9 +179,11 @@ export interface LifeState {
 
 export interface Duties {
 	meals: number;
-	/** Worked or studied. */
+	/** Worked or studied enough (WORK_MINUTES). */
 	work: boolean;
 	exercise: boolean;
+	/** City minutes worked or studied today (absent in lives saved before it). */
+	worked?: number;
 }
 
 /** How yesterday went, told on a new morning. */
@@ -178,9 +205,8 @@ export function newLife(hostNow: number): LifeState {
 		energy: MORNING_ENERGY,
 		fitness: 50,
 		mood: 60,
-		coins: START_COINS,
 		skills: {},
-		duties: { meals: 0, work: false, exercise: false },
+		duties: { meals: 0, work: false, exercise: false, worked: 0 },
 		exercisedDay: 1,
 		slack: 0,
 		at: hostNow,
@@ -224,7 +250,7 @@ export function newDay(life: LifeState, hostNow: number): { life: LifeState; rev
 			energy: clamp(MORNING_ENERGY - 10 * missed.length, 30),
 			fitness: round(clamp(fitness)),
 			mood: round(clamp(life.mood - 5 * missed.length)),
-			duties: { meals: 0, work: false, exercise: false },
+			duties: { meals: 0, work: false, exercise: false, worked: 0 },
 			slack: slack >= 3 ? 0 : slack,
 			at: hostNow,
 		},
@@ -232,22 +258,16 @@ export function newDay(life: LifeState, hostNow: number): { life: LifeState; rev
 }
 
 /** Why `life` cannot start `a` now; null if it can. Place, hours and room are the host's to check. */
-export function cannotStart(life: LifeState, a: Activity): string | null {
-	if ((a.cost ?? 0) > life.coins) return `コインが足りません（${a.cost}いる。いまは${life.coins}）`;
+export function cannotStart(life: LifeState, a: Pick<Activity, "kind">): string | null {
 	if (life.energy <= 0 && a.kind !== "eat") return "おなかがすいて動けません。まず何か食べてください";
 	if (life.energy < HUNGRY && (a.kind === "work" || a.kind === "exercise"))
 		return "おなかがすいていて、いまはできません。先に食べてください";
 	return null;
 }
 
-/** Paying for it on starting. */
-export function startActivity(life: LifeState, a: Activity): LifeState {
-	return { ...life, coins: life.coins - (a.cost ?? 0) };
-}
-
 /**
- * What doing `a` for `share` (0..1) of its time gives: its effects, pay and skill in proportion; it counts
- * for today's must-dos from half way.
+ * What doing `a` for `share` (0..1) of its time gives: its effects and skill in proportion; it counts for
+ * today's must-dos from half way.
  */
 export function finishActivity(
 	life: LifeState,
@@ -262,11 +282,6 @@ export function finishActivity(
 		next[k] = round(clamp(before + v * s));
 		delta[k] = round(next[k] - before);
 	}
-	if (a.pay) {
-		const pay = Math.round(a.pay * s);
-		next.coins += pay;
-		delta.coins = pay;
-	}
 	if (a.skill) next.skills[a.skill.id] = round(clamp((next.skills[a.skill.id] ?? 0) + a.skill.gain * s));
 	if (s >= COUNTS_FROM) {
 		if (a.kind === "eat") next.duties.meals++;
@@ -276,6 +291,50 @@ export function finishActivity(
 			next.exercisedDay = next.days;
 		}
 	}
+	return { life: next, delta };
+}
+
+/** Why `life` cannot work or study now; null if it can. */
+export function cannotJob(life: LifeState): string | null {
+	return life.energy < HUNGRY ? "おなかがすいていて、いまは働けません。先に何か食べてください" : null;
+}
+
+/**
+ * Working or studying for `cityMinutes`: energy used and the skill trained by the hour; it counts as the
+ * day's work once WORK_MINUTES are done in all.
+ */
+export function finishJob(
+	life: LifeState,
+	kind: JobKind,
+	cityMinutes: number,
+	info: JobInfo = {},
+): { life: LifeState; delta: Partial<Record<Meter, number>> } {
+	const hours = Math.max(0, cityMinutes) / 60;
+	const next: LifeState = { ...life, duties: { ...life.duties }, skills: { ...life.skills } };
+	const before = next.energy;
+	next.energy = round(clamp(before - JOB_ENERGY[kind] * hours));
+	const skill = info.skill ?? kind;
+	next.skills[skill] = round(clamp((next.skills[skill] ?? 0) + JOB_SKILL_PER_HOUR * hours));
+	next.duties.worked = Math.round((next.duties.worked ?? 0) + Math.max(0, cityMinutes));
+	if (next.duties.worked >= WORK_MINUTES) next.duties.work = true;
+	return { life: next, delta: { energy: round(next.energy - before) } };
+}
+
+/** Eating or drinking something bought: the area's foods say how much it gives, and whether it is a meal. */
+export function eatFood(
+	life: LifeState,
+	food: Food = SNACK,
+): { life: LifeState; delta: Partial<Record<Meter, number>> } {
+	const next: LifeState = { ...life, duties: { ...life.duties } };
+	const delta: Partial<Record<Meter, number>> = {};
+	for (const k of ["energy", "mood"] as const) {
+		const v = food[k];
+		if (!v) continue;
+		const before = next[k];
+		next[k] = round(clamp(before + v));
+		delta[k] = round(next[k] - before);
+	}
+	if (food.meal) next.duties.meals++;
 	return { life: next, delta };
 }
 
@@ -299,7 +358,7 @@ export function deltaText(delta: Partial<Record<Meter | "coins", number>>): stri
 		energy: "エネルギー",
 		fitness: "体力",
 		mood: "こころ",
-		coins: "コイン",
+		coins: "銅貨",
 	};
 	return Object.entries(delta)
 		.filter(([, v]) => v !== 0 && v !== undefined)
@@ -309,8 +368,14 @@ export function deltaText(delta: Partial<Record<Meter | "coins", number>>): stri
 
 /** Skill names shown to people. */
 export const SKILL_NAMES: Record<string, string> = {
-	piano: "ピアノ",
-	cooking: "料理",
+	work: "仕事",
 	study: "勉強",
+	service: "接客",
+	baking: "パン作り",
+	selling: "商い",
+	books: "本の知識",
+	reading: "読書",
+	drawing: "スケッチ",
+	cooking: "料理",
 	strength: "力仕事",
 };

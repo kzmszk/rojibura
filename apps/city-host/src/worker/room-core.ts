@@ -29,16 +29,21 @@ import {
 	CONTEXT_LANDMARK_RADIUS,
 	CONTEXT_MAX_ITEMS,
 	CONV_TIMEOUT_MS,
+	cannotJob,
 	cannotStart,
 	canRun,
+	cityMinutesOf,
 	cityTime,
 	type DayReview,
 	type Doing,
 	decay,
 	dist,
 	EARN_MS,
+	eatFood,
+	type Food,
 	facing,
 	finishActivity,
+	finishJob,
 	type HostToClient,
 	hoursText,
 	INTEREST_RADIUS_DEFAULT,
@@ -46,7 +51,9 @@ import {
 	type Item,
 	type ItemId,
 	type ItemKind,
+	insidePolygon,
 	isPosture,
+	type JobInfo,
 	type JobKind,
 	type JobZone,
 	LEAD_INTERVAL_MS,
@@ -74,7 +81,6 @@ import {
 	type Shop,
 	type SpatialContext,
 	type Status,
-	startActivity,
 	THROW_MS,
 	THROW_RANGE,
 	THROW_RELEASE_MS,
@@ -177,6 +183,9 @@ export interface World {
 	jobZones?: JobZone[];
 	/** What can be done where (assets/<area>/activities.json, docs/life.md 3). */
 	activities?: Activity[];
+	/** What eating the shops' goods does, and what working or studying at each job zone is like. */
+	foods?: Record<string, Food>;
+	jobs?: Record<string, JobInfo>;
 }
 
 /** Saves an AI's life (D1 agent_life) when it changes: an activity ends, a morning, leaving. */
@@ -231,7 +240,8 @@ export interface Member extends JoinInfo {
 	/** What it is doing now (docs/life.md 3). */
 	doing?: Doing;
 	/** Working or studying in a zone since host time `since`; `paid` coins of it are in the wallet already. */
-	job?: { kind: JobKind; zone: string; since: number; paid: number };
+	/** `settled`: host time its life was brought up to; `used`: the energy it has used so far. */
+	job?: { kind: JobKind; zone: string; since: number; paid: number; settled?: number; used?: number };
 }
 
 /** Personal mutes and blocks that concern one avatar (docs/prd.md 4.2). */
@@ -858,7 +868,7 @@ export class RoomCore<C> {
 								: msg.t === "BUY"
 									? this.buy(m, msg.shop, msg.goods, now)
 									: msg.t === "USE"
-										? this.use(m)
+										? this.use(m, now)
 										: this.drop(m, now);
 				if (err) this.notice(conn, "rejected", err);
 				return;
@@ -1266,8 +1276,16 @@ export class RoomCore<C> {
 			const err = cannotStart(decay(m.life, now), a);
 			if (err) return err;
 		}
+		// it costs coins from the wallet, like a shop (the host's guide pays nothing)
+		const cost = m.system ? 0 : (a.cost ?? 0);
+		if (cost > 0) {
+			if (m.coins === undefined) return "お財布が見つかりません（入り直してください）";
+			if (m.coins < cost) return `銅貨が${cost - m.coins}枚足りません（働くか勉強すると増えます）`;
+		}
 		this.stopDoing(conn, m, now);
-		if (m.life) m.life = startActivity(decay(m.life, now), a);
+		if (m.job) this.stopJob(m, now);
+		if (cost > 0) this.spend(m, -cost, "buy");
+		if (m.life) m.life = decay(m.life, now);
 		m.doing = { activity: a.id, since: now, until: now + Math.round(realMs(a.minutes)) };
 		const face = m.move.kind === "idle" ? m.move.face : undefined;
 		m.move = {
@@ -1320,6 +1338,8 @@ export class RoomCore<C> {
 			if (this.away.has(conn)) continue;
 			if (m.doing && m.doing.until <= now) this.stopDoing(conn, m, now);
 			if (m.life && m.life.block !== block) {
+				// the work done so far belongs to the day that ends
+				if (m.job) this.settleJob(m, now, false);
 				const { life, review } = newDay(decay(m.life, now), now);
 				m.life = life;
 				this.transport.persist(conn, m);
@@ -1327,13 +1347,27 @@ export class RoomCore<C> {
 				this.transport.send(conn, { t: "DAY", review, life });
 				this.sendLife(m, false);
 			}
+			// too hungry to go on working or studying
+			if (m.job && m.life) {
+				const from = m.job.settled ?? m.job.since;
+				const left = finishJob(decay(m.life, now), m.job.kind, cityMinutesOf(now - from)).life.energy;
+				if (left <= 0) {
+					this.stopJob(m, now);
+					this.notice(conn, "rejected", "おなかがすいて、もう働けません。何か食べてください");
+				}
+			}
 		}
 	}
 
 	/** Tells an AI (`self`) and its owner here what its life is now. */
 	private sendLife(m: Member, self = true): void {
 		if (!m.life) return;
-		const msg: HostToClient = { t: "LIFE", id: m.id, life: m.life };
+		const msg: HostToClient = {
+			t: "LIFE",
+			id: m.id,
+			life: m.life,
+			...(m.coins !== undefined ? { coins: m.coins } : {}),
+		};
 		const own = this.byId.get(m.id);
 		if (self && own !== undefined) this.transport.send(own, msg);
 		const owner = m.kind === "ai" ? this.byId.get(m.ownerId) : undefined;
@@ -1425,12 +1459,32 @@ export class RoomCore<C> {
 		return null;
 	}
 
-	/** Eats or drinks what the member holds. */
-	private use(m: Member): string | null {
+	/** Eats or drinks what the member holds; for an AI that lives here, it is food (docs/life.md 2). */
+	private use(m: Member, now: number): string | null {
 		const item = this.holding(m.id);
 		if (!item) return "何も持っていません";
-		if (!item.goods?.food) return "それは食べられません";
+		const goods = item.goods;
+		if (!goods?.food) return "それは食べられません";
 		this.itemGone(item, m.id);
+		if (m.life) {
+			const food = this.world.foods?.[goods.id];
+			const r = eatFood(decay(m.life, now), food);
+			m.life = r.life;
+			this.lifeStore?.save(m.id, r.life);
+			const conn = this.byId.get(m.id);
+			if (conn !== undefined) {
+				this.transport.persist(conn, m);
+				this.transport.send(conn, {
+					t: "ACT_DONE",
+					activity: goods.id,
+					share: 1,
+					name: `${goods.name}を${food?.drink ? "飲んだ" : "食べた"}${food?.meal ? "（ごはん）" : ""}`,
+					delta: r.delta,
+					life: r.life,
+				});
+			}
+			this.sendLife(m, false);
+		}
 		return null;
 	}
 
@@ -1469,7 +1523,17 @@ export class RoomCore<C> {
 				? "ここでは働けません（お店、温泉宿の帳場、広場の屋台で働けます）"
 				: "ここでは勉強できません（学校と本屋で勉強できます）";
 		if (m.job?.kind === kind && m.job.zone === zone.id) return null;
-		if (m.job) this.payJob(m, now);
+		if (m.life) {
+			const err = cannotJob(decay(m.life, now));
+			if (err) return err;
+		}
+		// one thing at a time: an activity ends
+		const conn = this.byId.get(m.id);
+		if (conn !== undefined && m.doing) this.stopDoing(conn, m, now);
+		if (m.job) {
+			this.payJob(m, now);
+			this.settleJob(m, now, true);
+		}
 		m.job = { kind, zone: zone.id, since: now, paid: 0 };
 		this.jobChanged(m);
 		return null;
@@ -1478,6 +1542,7 @@ export class RoomCore<C> {
 	private stopJob(m: Member, now: number): string | null {
 		if (!m.job) return null;
 		this.payJob(m, now);
+		this.settleJob(m, now, true);
 		delete m.job;
 		this.jobChanged(m);
 		return null;
@@ -1492,6 +1557,36 @@ export class RoomCore<C> {
 		this.spend(m, earned, m.job.kind);
 	}
 
+	/**
+	 * The work or study until `now` goes into an AI's life (energy, skill, the day's work, docs/life.md 2).
+	 * `tell`: it is over, and the AI hears what it did (ACT_DONE, for its diary). `save`: false for the
+	 * minute-by-minute update while it goes on (D1 is written when it ends, on a new morning and on leaving).
+	 */
+	private settleJob(m: Member, now: number, tell: boolean, save = true): void {
+		const job = m.job;
+		if (!job || !m.life) return;
+		const info = this.world.jobs?.[job.zone];
+		const r = finishJob(decay(m.life, now), job.kind, cityMinutesOf(now - (job.settled ?? job.since)), info);
+		m.life = r.life;
+		job.settled = now;
+		job.used = round2((job.used ?? 0) + (r.delta.energy ?? 0));
+		if (save) this.lifeStore?.save(m.id, r.life);
+		const conn = tell ? this.byId.get(m.id) : undefined;
+		if (conn === undefined) return;
+		const zone = this.world.jobZones?.find((z) => z.id === job.zone);
+		this.transport.send(conn, {
+			t: "ACT_DONE",
+			activity: job.zone,
+			share: 1,
+			name: `${zone?.name ?? job.zone}で${job.kind === "work" ? "働いた" : "勉強した"}`,
+			...(info?.about ? { about: info.about } : {}),
+			minutes: Math.round(cityMinutesOf(now - job.since)),
+			delta: { energy: Math.round(job.used * 10) / 10, ...(job.paid > 0 ? { coins: job.paid } : {}) },
+			life: r.life,
+		});
+		this.sendLife(m, false);
+	}
+
 	private jobChanged(m: Member): void {
 		const conn = this.byId.get(m.id);
 		if (conn !== undefined) this.transport.persist(conn, m);
@@ -1503,7 +1598,14 @@ export class RoomCore<C> {
 		for (const m of this.members.values()) {
 			if (!m.job) continue;
 			if (!this.inJobZone(m, m.job.zone, now)) this.stopJob(m, now);
-			else this.payJob(m, now);
+			else {
+				this.payJob(m, now);
+				// an AI hears how its day's work is going (and its owner sees it) as it goes
+				if (m.life) {
+					this.settleJob(m, now, false, false);
+					this.sendLife(m);
+				}
+			}
 		}
 	}
 
@@ -2059,6 +2161,7 @@ export class RoomCore<C> {
 		// what working or studying earned until now goes into the wallet (D1); it is not carried on elsewhere
 		if (m.job) {
 			this.payJob(m, this.clock());
+			this.settleJob(m, this.clock(), false);
 			delete m.job;
 		}
 		this.members.delete(conn);
@@ -2127,17 +2230,6 @@ function pairKey(a: AvatarId, b: AvatarId): string {
 
 function round1(n: number): number {
 	return Math.round(n * 10) / 10;
-}
-
-/** Whether `p` is inside the polygon (even-odd rule). */
-function insidePolygon(p: Vec2, poly: Vec2[]): boolean {
-	let inside = false;
-	for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-		const [xi, zi] = poly[i] as Vec2;
-		const [xj, zj] = poly[j] as Vec2;
-		if (zi > p[1] !== zj > p[1] && p[0] < ((xj - xi) * (p[1] - zi)) / (zj - zi) + xi) inside = !inside;
-	}
-	return inside;
 }
 
 function round2(n: number): number {
