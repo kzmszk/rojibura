@@ -7,10 +7,18 @@ import {
 	type AvatarId,
 	type AvatarKind,
 	type AvatarState,
+	BODY_INTERVAL_MS,
+	BODY_LOOK_REACH,
+	BODY_REACH,
 	type Build,
 	type BuildAt,
 	type BuildId,
+	bodyNeedsPartner,
+	bodyTouches,
+	bodyUntouchable,
 	type ClientToHost,
+	COMPANION_FREE,
+	COMPANION_FREE_STEP,
 	CONTEXT_AVATAR_RADIUS,
 	CONTEXT_LANDMARK_RADIUS,
 	CONTEXT_MAX_ITEMS,
@@ -218,6 +226,8 @@ interface Volatile {
 	aiSays: number[];
 	lastAiReplyAt: number;
 	lastSeen: number;
+	/** When the member last moved its body by a script (docs/prd.md 3.4.11). */
+	lastBodyAt: number;
 }
 
 export interface Conv {
@@ -653,8 +663,8 @@ export class RoomCore<C> {
 					this.violation(conn, v, now);
 					return;
 				}
-				// walking with its owner: the host moves it, its own steps are not taken
-				if (this.accompanying(m)) {
+				// walking with its owner the host moves it; with the owner standing still, it may step about close by
+				if (this.accompanying(m) && !this.freeStep(m, msg, now)) {
 					this.transport.send(conn, { t: "CORRECT", move: m.move });
 					return;
 				}
@@ -699,6 +709,15 @@ export class RoomCore<C> {
 					true,
 				);
 				return;
+			case "BODY": {
+				if (!this.moveToken(v, now)) {
+					this.violation(conn, v, now);
+					return;
+				}
+				const err = this.body(m, v, msg, now);
+				if (err) this.notice(conn, "rejected", err);
+				return;
+			}
 			case "SAY":
 				this.say(conn, m, v, msg, now);
 				return;
@@ -813,6 +832,63 @@ export class RoomCore<C> {
 		this.transport.persist(conn, m);
 		this.broadcastAbout(m, { t: "MOVED", id: m.id, move: m.move });
 		return walk ? (d / WALK_SPEED) * 1000 : 0;
+	}
+
+	// ---- an AI moving its own body (docs/prd.md 3.4.11) ----------------------
+
+	/**
+	 * Everyone close sees the member move its body by the script from a moment on. A hand may touch only the
+	 * member's own owner, close by, and only some parts of them; looking at someone needs them in the area.
+	 */
+	private body(
+		m: Member,
+		v: Volatile,
+		msg: Extract<ClientToHost, { t: "BODY" }>,
+		now: number,
+	): string | null {
+		if (now - v.lastBodyAt < BODY_INTERVAL_MS) return "少し間をあけてください";
+		const to = msg.to ? this.memberById(msg.to) : undefined;
+		if (msg.to && (!to || to.id === m.id)) return "その人はいません";
+		if (!to && bodyNeedsPartner(msg.keys)) return "of: you を使うときは to に相手を入れてください";
+		if (to) {
+			if (this.blockedBetween(m.id, to.id)) return "その人には向けられません";
+			const d = dist(this.positionOf(m, now), this.positionOf(to, now));
+			if (bodyTouches(msg.keys)) {
+				if (m.kind !== "ai" || m.ownerId !== to.id) return "手で触れられるのは自分のオーナーだけです";
+				const part = bodyUntouchable(msg.keys);
+				if (part) return `${part} には触れられません`;
+				if (d > BODY_REACH) return `もっと近くに行ってください（いま${Math.round(d * 10) / 10}m）`;
+			} else if (d > BODY_LOOK_REACH) return "その人は遠すぎます";
+		}
+		v.lastBodyAt = now;
+		this.broadcastAbout(
+			m,
+			{ t: "BODIED", id: m.id, keys: msg.keys, ...(to ? { to: to.id } : {}), at: now + 100 },
+			undefined,
+			to?.id,
+			true,
+		);
+		return null;
+	}
+
+	/**
+	 * An AI walking with its owner may step about on its own while the owner stands still: a short way, to
+	 * somewhere within COMPANION_FREE of them (it chooses how close it stands). It stays there until the
+	 * owner walks on.
+	 */
+	private freeStep(
+		m: Member,
+		msg: Extract<ClientToHost, { t: "MOVE_PATH" | "MOVE_VEL" }>,
+		now: number,
+	): boolean {
+		const owner = this.memberById(m.ownerId);
+		if (!owner || msg.t !== "MOVE_PATH" || poseAt(owner.move, now).moving) return false;
+		if (m.lead && now < m.lead.until) return false;
+		const end = msg.path[msg.path.length - 1] as Vec2;
+		return (
+			polylineLength(msg.path) <= COMPANION_FREE_STEP &&
+			dist(end, this.positionOf(owner, now)) <= COMPANION_FREE
+		);
 	}
 
 	// ---- walking with your AIs (docs/prd.md 3.4.9) ----------------------------
@@ -1637,6 +1713,7 @@ export class RoomCore<C> {
 			aiSays: [],
 			lastAiReplyAt: 0,
 			lastSeen: now,
+			lastBodyAt: 0,
 		};
 	}
 }

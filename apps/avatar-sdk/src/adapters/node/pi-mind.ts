@@ -16,7 +16,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { MOTIONS } from "@rojibura/protocol";
 import { Type } from "typebox";
-import type { Mind } from "../../core/resident.ts";
+import type { Mind, ToolResult } from "../../core/resident.ts";
 import type { Logger } from "../../core/types.ts";
 
 export const DEFAULT_PI_MIND_MODEL = "llama/gemma-4-26B-A4B-it-qat-UD-Q4_K_XL";
@@ -34,8 +34,73 @@ export interface PiMindOptions {
 	/** Start a new session instead of continuing the last one. */
 	fresh?: boolean;
 	/** Carries out a tool call (Resident.act). */
-	act: (tool: string, args: Record<string, unknown>) => Promise<string>;
+	act: (tool: string, args: Record<string, unknown>) => Promise<ToolResult>;
+	/** The body tools (docs/prd.md 3.4.11): move_body, practice, learn and step. */
+	body?: boolean;
+	/** The model takes images (llama-server started with its --mmproj): it sees itself in the mirror. */
+	vision?: boolean;
 	logger: Logger;
+}
+
+/**
+ * A body script's keys as one JSON string (checked by the resident against the protocol): local models write
+ * nested objects in tool arguments badly (Gemma 4's call format mangles their quotes), a string they write well.
+ */
+const KEYS = Type.String({
+	description:
+		'キーの配列を JSON で書いた文字列。例: [{"at":1,"look":"ahead"}]。書き方はシステムプロンプトの「体の動かし方」',
+});
+
+/** The tools for moving its own body (docs/prd.md 3.4.11). Rehearsing and learning do not end the turn. */
+function bodyTools(
+	tool: (
+		name: string,
+		description: string,
+		parameters: Parameters<typeof defineTool>[0]["parameters"],
+		terminate?: boolean,
+	) => ToolDefinition,
+): ToolDefinition[] {
+	return [
+		tool(
+			"move_body",
+			"街で体を動かす。覚えた動きなら move に名前、新しい動きなら keys。to は of: you の相手の id（省くとオーナー）。distance を入れると、その人からその距離（メートル）まで近づいてからする。",
+			Type.Object({
+				move: Type.Optional(Type.String()),
+				keys: Type.Optional(KEYS),
+				to: Type.Optional(Type.String()),
+				distance: Type.Optional(Type.Number()),
+			}),
+		),
+		tool(
+			"practice",
+			"鏡の前で体の動きを試す。自分の姿の画像と、手が狙った所から何cm離れたかが返る。引数は move_body と同じ。name に練習中の動きの名前を付けてもよい。show: true なら、試したあとそのまま街でもする（頼まれた動きはこれ）。false なら鏡の中だけで、だれにも見えない。",
+			Type.Object({
+				move: Type.Optional(Type.String()),
+				keys: Type.Optional(KEYS),
+				to: Type.Optional(Type.String()),
+				distance: Type.Optional(Type.Number()),
+				name: Type.Optional(Type.String()),
+				show: Type.Optional(Type.Boolean()),
+			}),
+			false,
+		),
+		tool(
+			"learn",
+			"体の動きに名前をつけて覚える（keys を省くと、最後に practice したもの）。覚えた動きに note（言われたこと、気づいたこと）だけ書き足すこともできる。",
+			Type.Object({
+				name: Type.String({ description: "24文字まで" }),
+				about: Type.Optional(Type.String({ description: "どんな動きか（60文字まで）" })),
+				keys: Type.Optional(KEYS),
+				note: Type.Optional(Type.String({ description: "80文字まで" })),
+			}),
+			false,
+		),
+		tool(
+			"step",
+			"オーナー（to）のそばで、立つ位置を変える。distance はその人から何メートルのところに立つか（0.3〜2.5）。",
+			Type.Object({ to: Type.Optional(Type.String()), distance: Type.Number() }),
+		),
+	];
 }
 
 type AssistantMessage = {
@@ -64,7 +129,7 @@ export async function createPiMind(opts: PiMindOptions): Promise<Mind> {
 				{
 					id,
 					name: id,
-					input: ["text"],
+					input: opts.vision ? ["text", "image"] : ["text"],
 					reasoning: false,
 					contextWindow: LLAMA_CONTEXT,
 					maxTokens: 1024,
@@ -99,8 +164,19 @@ export async function createPiMind(opts: PiMindOptions): Promise<Mind> {
 			description,
 			parameters,
 			async execute(_id, params) {
-				const text = await opts.act(toolName, params as Record<string, unknown>);
-				return { content: [{ type: "text", text }], details: {}, terminate };
+				const r = await opts.act(toolName, params as Record<string, unknown>);
+				const text = typeof r === "string" ? r : r.text;
+				const image =
+					typeof r !== "string" && r.image
+						? [
+								{
+									type: "image" as const,
+									data: Buffer.from(r.image).toString("base64"),
+									mimeType: "image/jpeg",
+								},
+							]
+						: [];
+				return { content: [{ type: "text", text }, ...image], details: {}, terminate };
 			},
 		}) as ToolDefinition;
 	const tools = [
@@ -108,6 +184,9 @@ export async function createPiMind(opts: PiMindOptions): Promise<Mind> {
 			"say",
 			"声に出して話す。to は話す相手の id（近くのみんなに向けて話すなら省く）。",
 			Type.Object({ text: Type.String({ maxLength: 200 }), to: Type.Optional(Type.String()) }),
+			// with a body, "I'll do it" comes before rehearsing and doing it: saying does not end the turn (the
+			// resident still lets it speak to each one once per turn)
+			!opts.body,
 		),
 		tool(
 			"walk_to",
@@ -123,6 +202,7 @@ export async function createPiMind(opts: PiMindOptions): Promise<Mind> {
 			}),
 		),
 		tool("wait", "何もしないで、次の出来事を待つ。", Type.Object({})),
+		...(opts.body ? bodyTools(tool) : []),
 		tool(
 			"remember",
 			"覚えておきたいことを書き留める。about はその人の id で、次にその人と話すときに見られる。自分のこと（今日やりたいことなど）は about を self にする。self にはほかの人の話を書かない。",
@@ -131,6 +211,7 @@ export async function createPiMind(opts: PiMindOptions): Promise<Mind> {
 		),
 	];
 
+	opts.logger.info(`pi tools: ${tools.map((t) => t.name).join(", ")}${opts.vision ? " (sees images)" : ""}`);
 	const resources: ResourceLoader = {
 		getExtensions: () => ({ extensions: [], errors: [], runtime: createExtensionRuntime() }),
 		getSkills: () => ({ skills: [], diagnostics: [] }),

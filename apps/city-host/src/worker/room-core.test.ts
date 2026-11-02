@@ -786,3 +786,87 @@ describe("an AI taking its owner somewhere", () => {
 		expect(bot.inbox).toContainEqual({ t: "COMPANY", owner: "h_alice", on: false });
 	});
 });
+
+describe("an AI moving its own body", () => {
+	const pat: Extract<ClientToHost, { t: "BODY" }> = {
+		t: "BODY",
+		to: "h_alice",
+		keys: [{ at: 1, right: { part: "head", of: "you" } }],
+	};
+
+	test("with its owner standing still it steps about close by, and pats their head when near", () => {
+		const a = conn("a");
+		const bot = conn("bot");
+		place(a, human("alice"), [-10, -10]);
+		place(bot, ai("bot", "alice"), [-12, -10]);
+		ctx.room.handle(a, { t: "COMPANION", on: true });
+		ctx.clock.advance(3000);
+		// a metre from her: too far to touch
+		ctx.room.handle(bot, pat);
+		expect(last(bot)).toMatchObject({ t: "NOTICE", kind: "rejected" });
+		// it steps up to 40 cm in front of her by itself
+		const here = ctx.room.positionOf(ctx.room.members.get(bot) as never);
+		bot.inbox.length = 0;
+		ctx.room.handle(bot, { t: "MOVE_PATH", path: [here, [-10, -9.6]], speed: 1.4, seq: 1 });
+		expect(bot.inbox.map((m) => m.t)).toEqual(["MOVED"]);
+		ctx.clock.advance(2000);
+		a.inbox.length = 0;
+		ctx.room.handle(bot, pat);
+		expect(last(a)).toEqual({
+			t: "BODIED",
+			id: "a_bot",
+			keys: pat.keys,
+			to: "h_alice",
+			at: ctx.clock.now() + 100,
+		});
+		// not more than one a second
+		bot.inbox.length = 0;
+		ctx.room.handle(bot, pat);
+		expect(last(bot)).toMatchObject({ t: "NOTICE", kind: "rejected" });
+		// it may not wander off more than a few metres from her
+		ctx.clock.advance(1000);
+		bot.inbox.length = 0;
+		ctx.room.handle(bot, {
+			t: "MOVE_PATH",
+			path: [
+				[-10, -9.6],
+				[-10, -6],
+			],
+			speed: 1.4,
+			seq: 2,
+		});
+		expect(bot.inbox.map((m) => m.t)).toEqual(["CORRECT"]);
+	});
+
+	test("a hand touches only its own owner, and only some parts; looking at anyone close is fine", () => {
+		const a = conn("a");
+		const c = conn("c");
+		const bot = conn("bot");
+		place(a, human("alice"), [-10, -10]);
+		place(c, human("carol"), [-10.5, -10]);
+		place(bot, ai("bot", "alice"), [-10, -10.4]);
+		ctx.room.handle(bot, { ...pat, to: "h_carol" });
+		expect(last(bot)).toMatchObject({ t: "NOTICE", message: "手で触れられるのは自分のオーナーだけです" });
+		ctx.clock.advance(1000);
+		ctx.room.handle(bot, { t: "BODY", to: "h_alice", keys: [{ at: 1, left: { part: "face", of: "you" } }] });
+		expect(last(bot)).toMatchObject({ t: "NOTICE", message: "face には触れられません" });
+		ctx.clock.advance(1000);
+		ctx.room.handle(bot, { t: "BODY", keys: [{ at: 1, look: { part: "face", of: "you" } }] });
+		expect(last(bot)).toMatchObject({ t: "NOTICE", kind: "rejected" });
+		ctx.clock.advance(1000);
+		c.inbox.length = 0;
+		const wave: Extract<ClientToHost, { t: "BODY" }> = {
+			t: "BODY",
+			to: "h_carol",
+			keys: [
+				{
+					at: 0.5,
+					look: { part: "face", of: "you" },
+					right: { part: "front", off: [0.2, 0.5, 0], wiggle: { dir: "side", size: 0.1, hz: 2 } },
+				},
+			],
+		};
+		ctx.room.handle(bot, wave);
+		expect(last(c)).toMatchObject({ t: "BODIED", id: "a_bot", to: "h_carol" });
+	});
+});

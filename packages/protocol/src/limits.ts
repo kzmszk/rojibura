@@ -97,3 +97,23 @@ export const ITEM_REACH = 1.6; // m: how close a thing must be to pick it up
 export const THROW_RANGE = 6; // m
 export const THROW_MS = 900; // time in the air
 export const THROW_RELEASE_MS = 350; // from the throw to the hand letting go (the throwing motion)
+
+// an AI moving its own body (docs/prd.md 3.4.11)
+export const BODY_KEYS_MAX = 16;
+export const BODY_SECONDS_MAX = 8; // the last key
+/** How far a spot may be moved from its part (m): on yourself, and on the one the script is for. */
+export const BODY_OFFSET_MAX = 0.7;
+export const BODY_OFFSET_YOU_MAX = 0.15;
+/**
+ * How close the one touched must be (m, centre to centre) when the script starts: nearer than an AI stands by
+ * its owner (a metre), so it steps up first.
+ */
+export const BODY_REACH = 0.9;
+/** How close the one looked at must be (m). */
+export const BODY_LOOK_REACH = 15;
+/** One script per avatar this often at most. */
+export const BODY_INTERVAL_MS = 1000;
+/** Walking with its owner, an AI may stand where it likes this close to them (m). */
+export const COMPANION_FREE = 2.5;
+/** ...walking at most this far at a time (m). */
+export const COMPANION_FREE_STEP = 5;

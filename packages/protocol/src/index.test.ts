@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
 	authPayload,
+	bodyDuration,
 	exportPrivateKey,
 	exportPublicKey,
 	facing,
@@ -11,6 +12,7 @@ import {
 	MAX_SAY_LENGTH,
 	type MoveState,
 	modelUrl,
+	parseBodyKeys,
 	parseClientMessage,
 	pathLeg,
 	polylineLength,
@@ -253,5 +255,46 @@ describe("BUILD and UNBUILD (free play, docs/prd.md 3.7)", () => {
 		expect(facing([0, 0], [0, 5])).toBe(0);
 		expect(facing([0, 0], [5, 0])).toBe(90);
 		expect(facing([0, 0], [-5, 0])).toBe(270);
+	});
+});
+
+describe("body scripts", () => {
+	test("a script is cleaned up, and what is wrong with one is said in words an AI can act on", () => {
+		const ok = parseClientMessage(
+			JSON.stringify({
+				t: "BODY",
+				to: "h_alice",
+				keys: [
+					{
+						at: 0.8,
+						right: { part: "head", of: "you", off: [0, 0.02, 0], palm: "down", extra: 1 },
+						smile: true,
+					},
+					{ at: 2, right: { part: "head", of: "you", wiggle: { dir: "side", size: 0.05, hz: 2 } } },
+					{ at: 3, right: "rest", look: "ahead", lean: 10, height: -0.1 },
+				],
+			}),
+		);
+		expect(ok).toEqual({
+			ok: true,
+			msg: {
+				t: "BODY",
+				to: "h_alice",
+				keys: [
+					{ at: 0.8, right: { part: "head", of: "you", off: [0, 0.02, 0], palm: "down" }, smile: true },
+					{ at: 2, right: { part: "head", of: "you", wiggle: { dir: "side", size: 0.05, hz: 2 } } },
+					{ at: 3, right: "rest", look: "ahead", lean: 10, height: -0.1 },
+				],
+			},
+		});
+		const bad = (keys: unknown) => parseBodyKeys(keys);
+		expect(bad([])).toMatch(/keys/);
+		expect(bad([{ at: 2 }, { at: 1 }])).toMatch(/前のキーより後/);
+		expect(bad([{ at: 1, right: { part: "knee" } }])).toMatch(/part は head/);
+		expect(bad([{ at: 1, right: { part: "head", of: "you", off: [0, -0.5, 0] } }])).toMatch(/0.15/);
+		expect(bad([{ at: 1, left: { part: "front", of: "you" } }])).toMatch(/front は自分の前だけ/);
+		expect(bad([{ at: 9 }])).toMatch(/0〜8秒/);
+		expect(bad([{ at: 1, height: -1 }])).toMatch(/height/);
+		expect(bodyDuration([{ at: 2 }])).toBeCloseTo(2.8);
 	});
 });

@@ -37,6 +37,8 @@ import { CityScene } from "./scene.ts";
 import { STYLES } from "./styles.ts";
 import { UsagePanel } from "./usage-panel.ts";
 
+export { mountMirror } from "./mirror.ts";
+
 export interface Navigator {
 	findPath(from: Vec2, to: Vec2): Vec2[] | null;
 	isWalkable(p: Vec2): boolean;
@@ -677,6 +679,14 @@ async function startCity(
 					const towards = m.target ? avatars.get(m.target)?.root.position : undefined;
 					// shown with the body; an avatar that cannot (a capsule, or walking) shows the emoji
 					if (v && !v.act(m.motion, conn.hostNow(), towards)) v.say(MOTION_EMOJI[m.motion], conn.hostNow());
+					break;
+				}
+				case "BODIED": {
+					if (relations.silenced(m.id)) break;
+					const v = avatars.get(m.id);
+					const partner = m.to ? (avatars.get(m.to) ?? null) : null;
+					// a model without bones to move shows a hand over its head
+					if (v && !v.moveBody(m.keys, m.at, partner, m.to)) v.say("🤲", conn.hostNow());
 					break;
 				}
 				case "SAID": {

@@ -1,6 +1,7 @@
 // Runtime validation of messages from participants (docs/prd.md 3.2.3).
 // Checks shape and protocol limits only; spatial checks (walkable area, position) are the host's job.
 
+import { parseBodyKeys } from "./body.ts";
 import { isBuildId, isModelId, normalizeColor, normalizeRot } from "./build.ts";
 import {
 	BLOCK_HEIGHT_MAX,
@@ -203,6 +204,14 @@ export function parseClientMessage(raw: string | ArrayBuffer): Parsed<ClientToHo
 				if (text.length === 0 || textLength(text) > LEAD_TEXT_MAX) return fail("bad text length");
 				msg.text = text;
 			}
+			return { ok: true, msg };
+		}
+		case "BODY": {
+			const keys = parseBodyKeys(v.keys);
+			if (typeof keys === "string") return fail(`bad keys: ${keys}`);
+			if (v.to !== undefined && !isAvatarId(v.to)) return fail("bad to");
+			const msg: ClientToHost = { t: "BODY", keys };
+			if (v.to !== undefined) msg.to = v.to as string;
 			return { ok: true, msg };
 		}
 		case "BUILD":

@@ -1,5 +1,6 @@
 // Avatar Protocol v2 message types (docs/prd.md 3.2.2).
 
+import type { BodyKey } from "./body.ts";
 import type { Usage, UsageEvent } from "./usage.ts";
 
 /** Host-issued immutable ID: "h_..." for humans, "a_..." for AI agents. */
@@ -229,7 +230,12 @@ export type ClientToHost =
 	 * An AI walking with its owner asks them to come along to `to` (`place`: what it calls it; `text`: a line
 	 * of its own, shown only to the owner). The owner answers with ANSWER (docs/prd.md 3.4.10).
 	 */
-	| { t: "LEAD"; to: Vec2; place: string; text?: string };
+	| { t: "LEAD"; to: Vec2; place: string; text?: string }
+	/**
+	 * Moves your own body by a script (docs/prd.md 3.4.11). `to`: the one the script points at ("you"); a hand
+	 * may touch only your own owner, close by.
+	 */
+	| { t: "BODY"; keys: BodyKey[]; to?: AvatarId };
 
 export type LeaveReason = "quit" | "timeout" | "kicked" | "closing";
 export type ConvEndReason = "max_turns" | "timeout" | "left" | "budget";
@@ -290,6 +296,8 @@ export type HostToClient =
 	| { t: "LEAD_ANSWERED"; by: AvatarId; accept: boolean; place: string; at?: number }
 	/** To the owner, after their yes: their AI walks to `to`, and they follow behind it. */
 	| { t: "LEADING"; by: AvatarId; to: Vec2; place: string }
+	/** Someone moves their body by a script from host time `at` (docs/prd.md 3.4.11). */
+	| { t: "BODIED"; id: AvatarId; keys: BodyKey[]; to?: AvatarId; at: number }
 	/** A small thing changed: picked up, thrown or put down. */
 	| { t: "ITEM"; item: Item }
 	/** To watchers: today's totals (UTC day) and what used them since the last push. */

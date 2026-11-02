@@ -2,6 +2,7 @@
 //   node apps/avatar-sdk/src/cli.ts --name ミナ --persona "好奇心旺盛でカフェ好き" [--owner kazu] [--llm claude-code|pi|echo]
 //     [--avatar shino]   (the look, when it is registered: one of the host's /api/presets)
 //   node apps/avatar-sdk/src/cli.ts --name ハル --mind pi [--model llama/<id>] [--llama-url URL] [--fresh]
+//     [--body] [--vision]   (moves its own body, rehearsing in a mirror; --vision: and sees the pictures)
 //   node apps/avatar-sdk/src/cli.ts --base https://… --pair ABCD2345 --persona '…' [--mind pi]
 //     (runs on this PC an AI registered in the city's 🤖 自分のAI, with the code shown there; docs/prd.md 3.5.1;
 //     next time --base https://… --name <name>: the personality is kept with the identity)
@@ -23,6 +24,8 @@ import {
 	registerWithDevLogin,
 	saveIdentity,
 } from "./adapters/node/identity.ts";
+import { ChromeMirror } from "./adapters/node/mirror.ts";
+import { FileMoveBook, shortPath } from "./adapters/node/move-book.ts";
 import { PiLLM } from "./adapters/node/pi.ts";
 import { createPiMind, DEFAULT_LLAMA_URL } from "./adapters/node/pi-mind.ts";
 import { Agent } from "./core/agent.ts";
@@ -48,6 +51,10 @@ const { values: args } = parseArgs({
 		model: { type: "string" },
 		"llama-url": { type: "string", default: DEFAULT_LLAMA_URL },
 		fresh: { type: "boolean", default: false },
+		// --mind pi: moves its own body, rehearsing in a mirror (headless Chrome) on this PC (docs/prd.md 3.4.11)
+		body: { type: "boolean", default: false },
+		// ...and sees the mirror's pictures (llama-server started with the model's --mmproj)
+		vision: { type: "boolean", default: false },
 		identity: { type: "string" },
 		// a one-time code from /agent: this PC runs that AI (its name and look come from the host)
 		pair: { type: "string" },
@@ -123,10 +130,21 @@ const dailyLimit = args["daily-limit"] ? Number(args["daily-limit"]) : undefined
 let stopMind: () => void;
 if (args.mind === "pi") {
 	let resident: Resident | null = null;
+	const body = args.body || args.vision;
+	const moves = body
+		? new FileMoveBook(
+				join(dir, `${encodeURIComponent(name)}.moves.json`),
+				join(dir, `${encodeURIComponent(name)}.album`),
+				name,
+			)
+		: undefined;
+	if (moves) log.info(`わざ帳: ${shortPath(moves.page, homedir())}`);
 	const mind = await createPiMind({
 		model: args.model,
 		llamaUrl: args["llama-url"],
-		system: residentSystemPrompt(persona, city.landmarks),
+		system: residentSystemPrompt(persona, city.landmarks, body),
+		body,
+		vision: args.vision,
 		sessionDir: join(dir, `${encodeURIComponent(name)}.pi`),
 		fresh: args.fresh,
 		act: (tool, params) => (resident ? resident.act(tool, params) : Promise.resolve("まだ街にいない。")),
@@ -142,6 +160,7 @@ if (args.mind === "pi") {
 		logger: log,
 		send,
 		dailyTurnLimit: dailyLimit,
+		...(moves ? { moves, mirror: new ChromeMirror({ base, logger: log }), sees: args.vision } : {}),
 	});
 	handle = (m) => resident?.handle(m);
 	stopMind = () => resident?.stop();

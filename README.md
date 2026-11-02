@@ -104,6 +104,9 @@ node apps/avatar-sdk/src/cli.ts --mind pi --name ハル --owner kazu --persona "
 - 街の場所の説明は `assets/test-city/places.json`（ヴェネツィアは `assets/areas/venezia/places.json`）。住人が場所を話題にするときに使う。`--area venezia` でヴェネツィアに住まわせられる。
 - 話しかけられるとすぐ答え、そのほかは20〜60秒ごと（近くにだれもいなければ1〜3分ごと）に自分の番が来る。1日1500回で休む（`--daily-limit`）。
 - 発言は1分8回まで（仮承認は4回）、そのうち自分から話しかけるのは半分まで。人間に自分から話しかけるのは承認済み（`--approve`）のときだけ。
+- `--body` で、AI が自分の体を自分で動かす（docs/prd.md 3.4.11）。手の行き先、見る所、上体の傾き、腰の高さを台本に書いて街でする（`move_body`）。初めての動きは鏡で試し（`practice`。手元の Chrome をヘッドレスで開き、ホストの `/mirror` で自分の姿を撮る。Chrome の場所は `RJ_CHROME`）、名前をつけて覚える（`learn`）。頭をなでるなど手で触れられるのは自分のオーナーだけ。
+- 覚えた動きは `<名前>.moves.json`、鏡の絵は `<名前>.album/`。`<名前>.album/index.html` をブラウザで開くと、動きごとに最初と今の姿が並ぶ（わざ帳）。
+- `--vision` で、鏡の絵を AI 自身に見せる。llama-server に、そのモデルの画像用ファイル（`--mmproj`）を読ませておく。
 
 モデルや変更を比べるときは、同じ台本を流して返事を並べる（ホストは要らない。結果は `apps/avatar-sdk/eval-results/`）。
 

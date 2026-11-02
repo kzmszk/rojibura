@@ -1,7 +1,8 @@
 import type { AvatarState, ClientToHost, HostToClient } from "@rojibura/protocol";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import type { Mirror, Move, MoveBook, RehearseRequest } from "./body.ts";
 import { FALLBACK_REPLIES } from "./prompt.ts";
-import { type Mind, Resident } from "./resident.ts";
+import { type Mind, parseKeysText, Resident } from "./resident.ts";
 import type { Memory } from "./types.ts";
 
 type Call = [tool: string, args: Record<string, unknown>];
@@ -20,7 +21,8 @@ function scripted(turns: { calls?: Call[]; text?: string; hold?: Promise<void> }
 			await t.hold;
 			for (const [tool, args] of t.calls ?? []) {
 				try {
-					results.push(await (ref.resident as Resident).act(tool, args));
+					const r = await (ref.resident as Resident).act(tool, args);
+					results.push(typeof r === "string" ? r : `${r.text}${r.image ? " [image]" : ""}`);
 				} catch (e) {
 					results.push(`error: ${(e as Error).message}`);
 				}
@@ -65,7 +67,12 @@ const avatar = (
 
 function setup(
 	turns: Parameters<typeof scripted>[0],
-	opts: { trust?: "approved"; dailyTurnLimit?: number; memory?: Memory } = {},
+	opts: {
+		trust?: "approved";
+		dailyTurnLimit?: number;
+		memory?: Memory;
+		body?: { mirror: Mirror; moves: MoveBook; sees?: boolean };
+	} = {},
 ) {
 	const { mind, prompts, results, ref } = scripted(turns);
 	const sent: ClientToHost[] = [];
@@ -80,6 +87,7 @@ function setup(
 		memory: opts.memory,
 		tickMs: [1e9, 1e9],
 		quietTickMs: [1e9, 1e9],
+		...opts.body,
 	});
 	ref.resident = resident;
 	resident.handle({
@@ -88,7 +96,11 @@ function setup(
 		serverTime: Date.now(),
 		budget: 0,
 		avatars: [
-			avatar("a_haru", "ai", "ハル", [0, 0], opts.trust ? { trust: opts.trust } : {}),
+			avatar("a_haru", "ai", "ハル", [0, 0], {
+				ownerId: "h_saki",
+				assets: { thumb: "", lod: "", vrm: "/avatars/shino.vrm" },
+				...(opts.trust ? { trust: opts.trust } : {}),
+			}),
 			avatar("h_saki", "human", "サキ", [2, 0]),
 			avatar("a_mina", "ai", "ミナ", [3, 0]),
 		],
@@ -399,4 +411,174 @@ describe("Resident", () => {
 		await until(() => says(s.sent).length === 2);
 		expect(FALLBACK_REPLIES).toContain((says(s.sent)[1] as { text: string }).text);
 	});
+});
+
+/** A mirror that remembers what it was asked and says the right hand stayed `miss` cm off. */
+function fakeMirror(miss = 4): Mirror & { asked: RehearseRequest[] } {
+	const asked: RehearseRequest[] = [];
+	return {
+		asked,
+		rehearse: async (req) => {
+			asked.push(req);
+			return {
+				image: new Uint8Array([0xff, 0xd8]),
+				moments: req.keys.map((k) => ({
+					at: k.at,
+					...(k.right && k.right !== "rest" ? { right: miss } : {}),
+				})),
+				loaded: { me: true, you: req.you ? true : null },
+			};
+		},
+	};
+}
+
+function fakeBook(): MoveBook & { moves: Move[]; pictures: string[] } {
+	const moves: Move[] = [];
+	const pictures: string[] = [];
+	return {
+		moves,
+		pictures,
+		list: async () => moves,
+		save: async (m) => {
+			const i = moves.findIndex((x) => x.name === m.name);
+			if (i >= 0) moves[i] = m;
+			else moves.push(m);
+		},
+		keepPicture: async (_jpeg, label) => {
+			pictures.push(`${pictures.length}-${label}.jpg`);
+			return pictures.at(-1) as string;
+		},
+	};
+}
+
+describe("its own body", () => {
+	const pat = [
+		{ at: 1, right: { part: "head", of: "you", palm: "down" } },
+		{ at: 2.5, right: { part: "head", of: "you", wiggle: { dir: "side", size: 0.05, hz: 2 } } },
+	];
+
+	test("practises in the mirror stepped up to its owner, learns the move, then does it by name", async () => {
+		const mirror = fakeMirror();
+		const moves = fakeBook();
+		const s = setup(
+			[
+				{
+					calls: [
+						["practice", { keys: pat, to: "h_saki" }],
+						["practice", { keys: pat, to: "h_saki", name: "なでなで" }],
+						["learn", { name: "なでなで", about: "サキの頭をなでる" }],
+					],
+				},
+				{ calls: [["move_body", { move: "なでなで" }]] },
+			],
+			{ body: { mirror, moves, sees: true } },
+		);
+		current = s.resident;
+		s.resident.handle({ t: "COMPANY", owner: "h_saki", on: true });
+		await s.resident.turnNow();
+		// two metres away: rehearsed as it would be done, 40 cm in front of her
+		expect(mirror.asked[0]).toEqual({
+			me: { vrm: "/avatars/shino.vrm" },
+			you: { vrm: "", at: [0, 0.4] },
+			keys: pat,
+		});
+		expect(s.results[0]).toMatch(/1秒: 右手は狙った所から4cm/);
+		expect(s.results[0]).toMatch(/\[image\]$/);
+		expect(s.results[2]).toMatch(/「なでなで」として覚えた/);
+		expect(moves.moves).toMatchObject([
+			{
+				name: "なでなで",
+				about: "サキの頭をなでる",
+				practices: 2,
+				uses: 0,
+				pictures: ["0-practice.jpg", "1-なでなで.jpg"],
+			},
+		]);
+		// the next turn knows the move by name; done, it steps up to her first and moves its body once there
+		await s.resident.turnNow();
+		expect(s.prompts[1]).toMatch(
+			/覚えた体の動き（move_body の move で使える）: なでなで（サキの頭をなでる。練習2回、0回した）/,
+		);
+		expect(s.results[3]).toMatch(/近づいてから、「なでなで」をした/);
+		const walk = s.sent.find((m) => m.t === "MOVE_PATH");
+		expect(walk).toMatchObject({
+			path: [
+				[0, 0],
+				[1.6, 0],
+			],
+		});
+		expect(s.sent.some((m) => m.t === "BODY")).toBe(false);
+		// a walk of 1.6 m at 1.4 m/s, then the script
+		for (let i = 0; i < 60 && !s.sent.some((m) => m.t === "BODY"); i++)
+			await new Promise((r) => setTimeout(r, 50));
+		expect(s.sent.find((m) => m.t === "BODY")).toEqual({ t: "BODY", keys: pat, to: "h_saki" });
+		expect(moves.moves[0]?.uses).toBe(1);
+	}, 5000);
+
+	test("touches nobody but its owner, says what is wrong with a script, and can only rehearse so often", async () => {
+		const mirror = fakeMirror();
+		const s = setup(
+			[
+				{
+					calls: [
+						["move_body", { keys: pat, to: "a_mina" }],
+						["move_body", { keys: [{ at: 1, right: { part: "knee" } }] }],
+						["learn", { name: "x" }],
+						["practice", { keys: [{ at: 1, look: "ahead" }] }],
+						["practice", { keys: [{ at: 1, look: "ahead" }] }],
+						["practice", { keys: [{ at: 1, look: "ahead" }] }],
+						["practice", { keys: [{ at: 1, look: "ahead" }] }],
+						["practice", { keys: [{ at: 1, look: "ahead" }] }],
+					],
+				},
+			],
+			{ body: { mirror, moves: fakeBook() } },
+		);
+		current = s.resident;
+		await s.resident.turnNow();
+		expect(s.results[0]).toMatch(/手で触れられるのは自分のオーナーだけ/);
+		expect(s.results[1]).toMatch(/part は head/);
+		expect(s.results[2]).toMatch(/まだ何も練習していない/);
+		// without sight, the numbers only
+		expect(s.results[3]).toMatch(/自分では見られない/);
+		expect(s.results[7]).toMatch(/この番の練習はここまで/);
+		expect(mirror.asked).toHaveLength(4);
+		expect(s.sent.filter((m) => m.t === "BODY")).toEqual([]);
+	});
+
+	test("stands where it likes by its owner, not too far", async () => {
+		const s = setup(
+			[
+				{
+					calls: [
+						["step", { distance: 0.6 }],
+						["step", { distance: 4 }],
+					],
+				},
+			],
+			{
+				body: { mirror: fakeMirror(), moves: fakeBook() },
+			},
+		);
+		current = s.resident;
+		s.resident.handle({ t: "COMPANY", owner: "h_saki", on: true });
+		await s.resident.turnNow();
+		expect(s.results[0]).toMatch(/サキから0.6mのところへ歩いた/);
+		expect(s.sent.find((m) => m.t === "MOVE_PATH")).toMatchObject({
+			path: [
+				[0, 0],
+				[1.4, 0],
+			],
+		});
+		expect(s.results[1]).toMatch(/2.5mより離れては立てない/);
+		expect(s.sent.filter((m) => m.t === "MOVE_PATH")).toHaveLength(1);
+	});
+});
+
+test("a script written as text: plain JSON, in a code fence, or with keys left unquoted", () => {
+	const keys = [{ at: 1, look: "ahead" }];
+	expect(parseKeysText('[{"at":1,"look":"ahead"}]')).toEqual(keys);
+	expect(parseKeysText('```json\n[{"at":1,"look":"ahead"}]\n```')).toEqual(keys);
+	expect(parseKeysText('[{at:1,look:"ahead"}]')).toEqual(keys);
+	expect(parseKeysText("なでる")).toBeNull();
 });

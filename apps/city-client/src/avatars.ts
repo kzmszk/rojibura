@@ -4,6 +4,8 @@
 import { type VRM, type VRMHumanBoneName, VRMLoaderPlugin, VRMUtils } from "@pixiv/three-vrm";
 import {
 	type AvatarState,
+	type BodyKey,
+	type BodyPart,
 	isPosture,
 	type Motion,
 	type MoveState,
@@ -14,6 +16,7 @@ import * as THREE from "three";
 import { GLTFLoader, type GLTFParser } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { CSS2DObject } from "three/examples/jsm/renderers/CSS2DRenderer.js";
 import { clone as cloneSkinned } from "three/examples/jsm/utils/SkeletonUtils.js";
+import { type BodyParts, BodyRig, BodyScript, type Bones, frameOf, roughSpot, spotOn } from "./body.ts";
 import { groundSpeed, legLength, MOVES, type MoveName, REFERENCE_LEG, referenceRig } from "./moves.ts";
 import { retarget } from "./retarget.ts";
 import type { CityScene } from "./scene.ts";
@@ -258,6 +261,18 @@ export class AvatarView {
 	private turned = 0;
 	/** What the eyes look at (three-vrm's lookAt follows an object). */
 	private readonly gaze = new THREE.Object3D();
+	/** A body script playing (docs/prd.md 3.4.11), the one it is for, and the rig that lays it on the bones. */
+	private script: BodyScript | null = null;
+	private partner: BodyParts | null = null;
+	private rig: BodyRig | null = null;
+	/** Where the script has the eyes look (last frame's), instead of whoever it attends to. */
+	private bodyLook: THREE.Vector3 | null = null;
+	/** The VRM's normalized bones by humanoid name, how far the top of the head is above the head bone, its size. */
+	private bones: Bones = {};
+	private headTop = 0.22;
+	private size = 1;
+	/** Settles once the model is drawn (a VRM loaded, or the capsule kept). */
+	readonly ready: Promise<void>;
 	/** Seen from its own eyes (the first-person view): the head is not drawn, nor the name over it. */
 	private inside = false;
 	private firstPersonReady = false;
@@ -292,8 +307,11 @@ export class AvatarView {
 		this.updateLabel();
 
 		const url = state.assets.lod || state.assets.vrm;
-		if (url)
-			void (/\.vrm$/i.test(new URL(url, location.href).pathname) ? this.loadVrm(url) : this.loadModel(url));
+		this.ready = url
+			? /\.vrm$/i.test(new URL(url, location.href).pathname)
+				? this.loadVrm(url)
+				: this.loadModel(url)
+			: Promise.resolve();
 	}
 
 	private async loadVrm(url: string): Promise<void> {
@@ -311,6 +329,7 @@ export class AvatarView {
 			o.frustumCulled = false;
 		});
 		relaxFingers(vrm);
+		this.measure(vrm);
 		this.root.remove(this.model);
 		this.model = vrm.scene;
 		this.root.add(vrm.scene);
@@ -321,6 +340,23 @@ export class AvatarView {
 		if (this.inside) this.seenFromInside(true);
 		this.setClips(new THREE.AnimationMixer(vrm.scene), moves.clips);
 		this.pace = moves.pace;
+	}
+
+	/** The bones a body script moves, and the head's top and the body's size, at rest. */
+	private measure(vrm: VRM): void {
+		vrm.scene.updateMatrixWorld(true);
+		for (const name of Object.keys(vrm.humanoid.humanBones)) {
+			const node = vrm.humanoid.getNormalizedBoneNode(name as VRMHumanBoneName);
+			if (node) this.bones[name] = node;
+		}
+		const head = this.bones.head?.getWorldPosition(new THREE.Vector3());
+		if (head) {
+			const box = new THREE.Box3().setFromObject(vrm.scene);
+			this.headTop = Math.max(0.1, box.max.y - head.y);
+			// the reference rig's head bone is 1.5 m up
+			this.size = head.y / 1.5;
+		}
+		this.rig = new BodyRig(this.bones, this.size);
 	}
 
 	private async loadModel(url: string): Promise<void> {
@@ -417,6 +453,41 @@ export class AvatarView {
 		return true;
 	}
 
+	/**
+	 * Moves the body by a script from host time `at` (docs/prd.md 3.4.11), `partner` being the one it points
+	 * at. False if the model cannot (no VRM), so the caller can show it some other way.
+	 */
+	moveBody(keys: readonly BodyKey[], at: number, partner: BodyParts | null, to?: string): boolean {
+		if (!this.rig) return false;
+		this.script = new BodyScript(keys, at, to);
+		this.rig.reset();
+		this.partner = partner;
+		return true;
+	}
+
+	/** Where a part of this body is (world): from a VRM's bones, or about there on others. */
+	spot(part: BodyPart, off?: [number, number, number]): THREE.Vector3 | null {
+		if (this.disposed) return null;
+		if (this.rig) return spotOn(this.bones, this.facing, this.headTop, this.size, part, off);
+		return roughSpot(this.root.position, this.facing, part, off);
+	}
+
+	frame(): ReturnType<typeof frameOf> {
+		return frameOf(this.facing);
+	}
+
+	/** Whether the model has bones a body script can move (a VRM). */
+	get hasBones(): boolean {
+		return this.rig !== null;
+	}
+
+	/** Faces `p` at once (the mirror, where nobody walks). */
+	turnTowards(p: THREE.Vector3): void {
+		const at = this.root.position;
+		this.facing = Math.atan2(p.x - at.x, p.z - at.z);
+		this.faceTo = this.facing;
+	}
+
 	/** Where the right hand is (world), for what it holds: a VRM's hand bone, or about there on others. */
 	handPosition(): THREE.Vector3 {
 		const hand = this.vrm?.humanoid.getRawBoneNode("rightHand");
@@ -464,8 +535,9 @@ export class AvatarView {
 		this.twist(1);
 		const lookAt = vrm.lookAt;
 		if (!lookAt) return;
-		if (this.attention && attends) {
-			this.gaze.position.copy(this.attention);
+		const focus = this.bodyLook ?? this.attention;
+		if (focus && attends) {
+			this.gaze.position.copy(focus);
 			lookAt.target = this.gaze;
 		} else if (lookAt.target) {
 			lookAt.target = null;
@@ -530,7 +602,7 @@ export class AvatarView {
 		this.facing += diff * Math.min(1, rate);
 	}
 
-	update(hostNow: number, dt: number, scene: CityScene): void {
+	update(hostNow: number, dt: number, scene: Pick<CityScene, "heightAt">): void {
 		const move = this.state.move;
 		const pose = poseAt(move, hostNow);
 		const ground = scene.heightAt(pose.pos[0], pose.pos[1]);
@@ -544,9 +616,23 @@ export class AvatarView {
 			this.gesture !== null &&
 			hostNow < this.gesture.until &&
 			!FIDGETS.includes(this.gesture.name as MoveName);
-		// where whoever it attends to is, as a heading
-		const attended = this.attention
-			? Math.atan2(this.attention.x - this.root.position.x, this.attention.z - this.root.position.z)
+		if (this.script && hostNow > this.script.end) {
+			this.script = null;
+			this.partner = null;
+			this.bodyLook = null;
+		}
+		const scripted = this.script !== null && hostNow >= this.script.at;
+		// a script for someone faces them while it plays
+		if (scripted && this.partner && this.script?.forSomeone && !pose.moving) {
+			const there = this.partner.spot("chest");
+			const p = this.root.position;
+			if (there && Math.hypot(there.x - p.x, there.z - p.z) > 0.15)
+				this.faceTo = Math.atan2(there.x - p.x, there.z - p.z);
+		}
+		// where whoever it attends to (or what the script looks at) is, as a heading
+		const focus = this.bodyLook ?? this.attention;
+		const attended = focus
+			? Math.atan2(focus.x - this.root.position.x, focus.z - this.root.position.z)
 			: null;
 		if (pose.moving && !rolling) {
 			this.gesture = null;
@@ -564,6 +650,7 @@ export class AvatarView {
 			pose.moving ||
 				posture0 !== undefined ||
 				this.pending !== null ||
+				this.script !== null ||
 				(this.gesture !== null && hostNow < this.gesture.until),
 		);
 		if (this.pending && hostNow >= this.pending.at && !pose.moving) {
@@ -587,8 +674,15 @@ export class AvatarView {
 		if (pace && action && speed > 0) action.timeScale = Math.min(2.5, Math.max(0.4, speed / pace));
 
 		this.twist(-1);
+		this.rig?.restore();
 		this.mixer?.update(dt);
 		if (this.vrm) {
+			if (this.script && scripted && this.rig) {
+				const s = this.script.sample((hostNow - this.script.at) / 1000);
+				const r = this.rig.apply(s, this, this.partner, dt);
+				this.bodyLook = r.look;
+				if (r.smile) this.smileFor(hostNow + 200, 0.6);
+			}
 			this.look(attended, posture === "lie", pose.moving, dt);
 			this.express(hostNow, dt);
 			if (!this.settled) {

@@ -93,6 +93,7 @@ const MESSAGE_LABELS: Record<ClientToHost["t"], string> = {
 	DROP: "物を置く",
 	COMPANION: "自分のAIを連れて歩く",
 	LEAD: "AIがオーナーを連れて行く",
+	BODY: "AIが体を動かす",
 };
 /** Registered models are stored in pieces: a DO SQLite value may be at most 2 MB. */
 const MODEL_CHUNK = 1024 * 1024;
