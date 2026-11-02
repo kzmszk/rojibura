@@ -37,6 +37,7 @@ import { CityConnection, type ConnState } from "./net.ts";
 import { rememberFirstVisit, reportFirstVisit } from "./onboarding.ts";
 import { PORTAL_REACH, PortalsView } from "./portals.ts";
 import { CityScene } from "./scene.ts";
+import { SettingsPanel } from "./settings.ts";
 import { STYLES } from "./styles.ts";
 import { UsagePanel } from "./usage-panel.ts";
 
@@ -73,6 +74,8 @@ const PAT: BodyKey[] = [
 ];
 /** An AI this close to its owner looks at them (docs/prd.md 3.4.9). */
 const ATTEND_M = 5;
+/** A line in the chat log stays this long, then shows only while talking or pointing at the log. */
+const LOG_FRESH_MS = 20_000;
 /** The action bar (docs/prd.md 3.4.5): motion, label, key. Space also jumps. */
 const ACTIONS: [Motion, string, string][] = [
 	["wave", "手を振る", "1"],
@@ -192,7 +195,7 @@ function saveAvatar(id: string): void {
 
 /** Picks a preset avatar (T1). The host takes it when connecting, so picking one enters the area again. */
 function avatarPicker(current: string): HTMLSelectElement {
-	const select = el("select", "rj-logout rj-avatar");
+	const select = el("select", "rj-select");
 	select.title = "見た目を選ぶ（選ぶと入り直します）";
 	void api("/api/presets")
 		.then((r) => (r.ok ? (r.json() as Promise<{ id: string; name: string }[]>) : []))
@@ -338,53 +341,52 @@ async function startCity(
 	const hud = el("div", "rj-hud");
 	const status = el("div", "rj-status", "接続中…");
 	const right = el("div", "rj-right");
-	const approach = el("label", "rj-check");
-	const box = el("input", "");
-	box.type = "checkbox";
-	box.checked = me.allowAiApproach;
-	box.onchange = () => void patchMe({ allowAiApproach: box.checked });
-	approach.append(box, document.createTextNode(" AIから話しかけられてもいい"));
-	const logout = el("a", "rj-logout", "ログアウト");
-	logout.href = "/auth/logout";
-	if (me.role === "moderator" || me.role === "admin") {
-		const admin = el("a", "rj-logout", "管理");
-		admin.href = "/admin";
-		right.append(admin);
+	// what is not used all the time is in the settings (docs/prd.md 3.4.12): the top keeps only ⚙️
+	const settings = new SettingsPanel();
+	const settingsButton = el("button", "rj-logout", "⚙️");
+	settingsButton.type = "button";
+	settingsButton.title = "設定";
+	settingsButton.setAttribute("aria-label", "設定");
+	settingsButton.onclick = () => settings.toggle();
+	right.append(settingsButton);
+	/** Opens a panel from the settings, in their place (they all sit at the top right). */
+	const fromSettings = (open: () => void) => () => {
+		settings.hide();
+		open();
+	};
+	// where the camera looks from (docs/prd.md 3.4.8): chosen here, or V goes round the three
+	const viewSelect = el("select", "rj-select");
+	for (const v of VIEWS) {
+		const o = el("option", "", VIEW_LABEL[v]);
+		o.value = v;
+		viewSelect.append(o);
 	}
+	viewSelect.title = "V キーでも切り替えられます";
+	viewSelect.onchange = () => setView(viewSelect.value as View);
+	settings.row("🎥 視点", viewSelect);
+	settings.row("👤 見た目", avatarPicker(avatarParam));
 	// your own AI (T3): it runs in this tab while it is open, unless it is on your PC (docs/prd.md 3.5.1)
-	const myAi = el("button", "rj-logout", "🤖 自分のAI");
+	const myAi = el("button", "rj-secondary", "パネルを開く");
 	myAi.type = "button";
 	const agentPanel = new AgentPanel({ area: area.id, at: params.get("at") ?? undefined }, (running) => {
+		myAi.textContent = running ? "このタブで街にいます" : "パネルを開く";
 		myAi.classList.toggle("on", running);
-		myAi.title = running ? "自分のAIがこのタブで街にいます" : "";
 	});
-	myAi.onclick = () => agentPanel.toggle();
+	myAi.onclick = fromSettings(() => agentPanel.show());
 	if (openAi) agentPanel.show();
-	// where the camera looks from (docs/prd.md 3.4.8): the button or V goes round the three
-	const viewButton = el("button", "rj-logout", "");
-	viewButton.type = "button";
-	viewButton.title = "視点を切り替える（V）";
-	viewButton.onclick = () => nextView();
+	settings.row("🤖 自分のAI", myAi);
 	// your own AIs walk with you (docs/prd.md 3.4.9); shown while one of them is here
-	const companionButton = el("button", "rj-logout", "");
-	companionButton.type = "button";
-	companionButton.hidden = true;
+	const companionBox = el("input", "");
+	companionBox.type = "checkbox";
 	let companion = false;
 	try {
 		companion = localStorage.getItem("rj.companion") === "1";
 	} catch {
 		// private mode
 	}
-	const showCompanion = () => {
-		companionButton.textContent = companion ? "🤖 そばにいる" : "🤖 自由に歩く";
-		companionButton.title = companion
-			? "自分のAIがそばを歩いています（押すと自由に歩かせる）"
-			: "自分のAIは自由に歩いています（押すとそばにいさせる）";
-		companionButton.classList.toggle("on", companion);
-	};
-	showCompanion();
-	companionButton.onclick = () => {
-		companion = !companion;
+	companionBox.checked = companion;
+	companionBox.onchange = () => {
+		companion = companionBox.checked;
 		// following your AI somewhere ends too (the host hears it from COMPANION)
 		if (following?.lead) following = null;
 		try {
@@ -393,9 +395,40 @@ async function startCity(
 			// private mode
 		}
 		conn.send({ t: "COMPANION", on: companion });
-		showCompanion();
 	};
-	right.append(companionButton, viewButton, avatarPicker(avatarParam), myAi, approach, logout);
+	const companionLabel = el("label", "rj-settings-check");
+	companionLabel.append(companionBox, document.createTextNode(" 自分のAIをそばにいさせる"));
+	const companionRow = settings.row("", companionLabel);
+	companionRow.hidden = true;
+	const box = el("input", "");
+	box.type = "checkbox";
+	box.checked = me.allowAiApproach;
+	box.onchange = () => void patchMe({ allowAiApproach: box.checked });
+	const approach = el("label", "rj-settings-check");
+	approach.append(box, document.createTextNode(" AIから話しかけられてもいい"));
+	settings.row("", approach);
+	// free-tier usage for admins, moderators and development builds (docs/prd.md 2.5)
+	let usage: UsagePanel | null = null;
+	if (devBuild || me.role === "moderator" || me.role === "admin") {
+		const panel = new UsagePanel((on) => conn.send({ t: "WATCH_USAGE", on }));
+		const toggle = el("button", "rj-secondary", "開く");
+		toggle.type = "button";
+		toggle.onclick = fromSettings(() => panel.show());
+		settings.row("📊 利用状況", toggle);
+		root.append(panel.el);
+		onApiUsage((label, cost) => panel.addOwn(label, cost));
+		usage = panel;
+	}
+	const links = el("div", "rj-settings-links");
+	if (me.role === "moderator" || me.role === "admin") {
+		const admin = el("a", "", "管理");
+		admin.href = "/admin";
+		links.append(admin);
+	}
+	const logout = el("a", "", "ログアウト");
+	logout.href = "/auth/logout";
+	links.append(logout);
+	settings.row("", links);
 	const panel = new BuildPanel(() => void updateGhost());
 	if (freePlay) {
 		const badge = el("span", "rj-free", "🧪 自由モード");
@@ -420,49 +453,58 @@ async function startCity(
 	const left = el("div", "rj-left");
 	left.append(status, gateButton);
 	hud.append(left, right);
-	// free-tier usage for admins, moderators and development builds (docs/prd.md 2.5)
-	let usage: UsagePanel | null = null;
-	if (devBuild || me.role === "moderator" || me.role === "admin") {
-		const panel = new UsagePanel((on) => conn.send({ t: "WATCH_USAGE", on }));
-		const toggle = el("button", "rj-logout", "📊 利用状況");
-		toggle.type = "button";
-		toggle.onclick = () => panel.toggle();
-		right.prepend(toggle);
-		root.append(panel.el);
-		onApiUsage((label, cost) => panel.addOwn(label, cost));
-		usage = panel;
-	}
 	const chat = el("div", "rj-chat");
+	// what was said fades after a while; it all comes back while talking or pointing at it (docs/prd.md 3.4.12)
 	const log = el("div", "rj-log");
+	log.tabIndex = -1;
 	const form = el("form", "rj-say");
-	const target = el("button", "rj-target");
-	target.type = "button";
+	// whom to talk to: anyone in the area, seen on screen or not
+	const target = el("select", "rj-target");
+	target.title = "話しかける相手（相手をクリックしても選べます）";
 	const input = el("input", "");
 	input.maxLength = MAX_SAY_LENGTH;
 	input.placeholder = "Enter で話す（相手をクリックで話しかけ、WASD・矢印キーで歩く）";
 	form.append(target, input);
 	const motionBar = el("div", "rj-motions");
+	// gestures and postures, and those done together with the person chosen (docs/prd.md 3.4.5, 3.4.6)
+	const motionMenu = el("select", "rj-menu");
+	motionMenu.title = "動作（1〜0 キーでも）";
+	const motionTitle = el("option", "", "🙂 動作");
+	motionTitle.value = "";
+	motionTitle.disabled = true;
+	motionTitle.hidden = true;
+	motionMenu.append(motionTitle);
 	for (const [motion, label, key] of ACTIONS) {
-		const b = el("button", "", MOTION_EMOJI[motion]);
-		b.type = "button";
-		b.title = `${label}（${key}${motion === "jump" ? "、スペース" : ""}）`;
-		b.setAttribute("aria-label", label);
-		b.onclick = () => act(motion);
-		motionBar.append(b);
+		const o = el(
+			"option",
+			"",
+			`${MOTION_EMOJI[motion]} ${label}（${key}${motion === "jump" ? "、スペース" : ""}）`,
+		);
+		o.value = motion;
+		motionMenu.append(o);
 	}
-	// done together with the person chosen (docs/prd.md 3.4.6), and the thing in hand (3.4.7)
+	const togetherGroup = el("optgroup", "");
+	togetherGroup.label = "選んだ相手と";
 	for (const [kind, icon, label] of [
 		["handshake", "🤝", "握手"],
 		["hug", "🫂", "ハグ"],
 	] as const) {
-		const b = el("button", "", icon);
-		b.type = "button";
-		b.title = `${label}を申し込む（相手をクリックして選んでから）`;
-		b.setAttribute("aria-label", label);
-		b.onclick = () => offer(kind);
-		motionBar.append(b);
+		const o = el("option", "", `${icon} ${label}を申し込む`);
+		o.value = kind;
+		togetherGroup.append(o);
 	}
-	// a thing close by can be picked up with a button (or E), not only by clicking it
+	motionMenu.append(togetherGroup);
+	motionMenu.value = "";
+	motionMenu.onchange = () => {
+		const v = motionMenu.value;
+		motionMenu.value = "";
+		// the number keys and Space are moves again, not the menu's
+		motionMenu.blur();
+		if (v === "handshake" || v === "hug") offer(v);
+		else if (v) act(v as Motion);
+	};
+	motionBar.append(motionMenu);
+	// the thing in hand (3.4.7): a thing close by can be picked up with a button (or E), not only by clicking it
 	const pickButton = el("button", "", "✋");
 	pickButton.type = "button";
 	pickButton.title = "近くの物を拾う（E）";
@@ -494,7 +536,7 @@ async function startCity(
 	const travel = el("button", "rj-travel");
 	travel.type = "button";
 	travel.hidden = true;
-	root.append(hud, chat, toast, travel, offerBox, agentPanel.el);
+	root.append(hud, chat, toast, travel, offerBox, agentPanel.el, settings.el);
 	if (area.credit) root.append(el("div", "rj-credit", area.credit));
 
 	const avatars = new Map<AvatarId, AvatarView>();
@@ -504,28 +546,65 @@ async function startCity(
 
 	const relations = new Relations(me.relations);
 	let bar: ReturnType<typeof actionBar> | null = null;
+	/** Everyone here but you, to choose whom to talk to; made again as people come and go. */
+	const listTargets = () => {
+		const everyone = el("option", "", "みんなへ");
+		everyone.value = "";
+		const others = [...avatars.values()]
+			.filter((a) => a.state.id !== myId)
+			.sort((a, b) => a.state.name.localeCompare(b.state.name, "ja"));
+		target.replaceChildren(
+			everyone,
+			...others.map((a) => {
+				const o = el("option", "", `→ ${a.state.name}${a.state.kind === "ai" ? "（AI）" : ""}`);
+				o.value = a.state.id;
+				return o;
+			}),
+		);
+		target.value = talkTo ?? "";
+	};
 	const setTarget = (id: AvatarId | null) => {
-		talkTo = id;
 		const a = id ? avatars.get(id) : undefined;
-		target.textContent = a ? `→ ${a.state.name}` : "みんなへ";
+		talkTo = a ? a.state.id : null;
+		listTargets();
 		target.classList.toggle("on", !!a);
 		bar?.show(a ? a.state.id : null, a?.state.name ?? "");
 	};
 	setTarget(null);
-	target.onclick = () => setTarget(null);
+	target.onchange = () => {
+		setTarget(target.value || null);
+		input.focus();
+	};
 
 	const showToast = (text: string) => {
 		toast.textContent = text;
 		toast.classList.add("show");
 		setTimeout(() => toast.classList.remove("show"), 4000);
 	};
+	/** The log shows only what is new unless you are talking or pointing at it. */
+	const showLog = () => {
+		const full = chat.matches(":focus-within") || log.matches(":hover");
+		log.classList.toggle("full", full);
+		log.hidden = !full && !log.querySelector(".rj-line:not(.old)");
+		log.scrollTop = log.scrollHeight;
+	};
 	const addLog = (who: string, text: string, cls = "") => {
 		const line = el("div", `rj-line ${cls}`);
 		line.append(el("b", "", who), document.createTextNode(` ${text}`));
 		log.append(line);
 		while (log.childElementCount > 60) log.firstElementChild?.remove();
-		log.scrollTop = log.scrollHeight;
+		setTimeout(() => {
+			line.classList.add("old");
+			showLog();
+		}, LOG_FRESH_MS);
+		showLog();
 	};
+	log.hidden = true;
+	chat.addEventListener("focusin", showLog);
+	// focus moves on after focusout: look once it has
+	chat.addEventListener("focusout", () => setTimeout(showLog));
+	log.addEventListener("pointerenter", showLog);
+	log.addEventListener("pointerleave", showLog);
 	const updateStatus = (state: ConnState, detail?: string) => {
 		const label = { connecting: "接続中…", open: "接続済み", closed: "切断" }[state];
 		status.textContent = `${me.name} ｜ ${area.name} ｜ ${detail ?? label} ｜ ${avatars.size}人`;
@@ -540,13 +619,7 @@ async function startCity(
 			setTarget(null);
 		},
 	});
-	chat.insertBefore(bar.el, form);
-	// walk up to the selected person, following them if they move (also the F key)
-	const followButton = el("button", "", "🚶 そばへ行く");
-	followButton.type = "button";
-	followButton.title = "選んだ相手のそばまで歩いていきます（F キー）";
-	followButton.onclick = () => talkTo && startFollow(talkTo);
-	bar.el.prepend(followButton);
+	motionBar.append(bar.el);
 
 	const add = (s: AvatarView["state"]) => {
 		if (relations.blocks.has(s.id)) return;
@@ -558,7 +631,7 @@ async function startCity(
 	const view = new ViewController(scene);
 	const setView = (v: View) => {
 		view.set(v, myId ? (avatars.get(myId) ?? null) : null);
-		viewButton.textContent = `🎥 ${VIEW_LABEL[v]}`;
+		viewSelect.value = v;
 		try {
 			localStorage.setItem("rj.view", v);
 		} catch {
@@ -622,6 +695,7 @@ async function startCity(
 						}
 						agentPanel.present(a.id);
 					}
+					listTargets();
 					if (m.builds) builds.set(m.builds);
 					items.reset(m.items ?? []);
 					showHeld();
@@ -677,6 +751,7 @@ async function startCity(
 					break;
 				case "JOINED":
 					add(m.avatar);
+					listTargets();
 					addLog("", `${m.avatar.name} が来ました`, "sys");
 					agentPanel.present(m.avatar.id);
 					break;
@@ -687,6 +762,7 @@ async function startCity(
 					v?.dispose();
 					avatars.delete(m.id);
 					if (talkTo === m.id) setTarget(null);
+					else listTargets();
 					break;
 				}
 				case "MOVED":
@@ -1377,7 +1453,7 @@ async function startCity(
 		pickButton.hidden = nearestThing() === null;
 		patButton.hidden = myAiToPat() === null;
 		const withAi = [...avatars.values()].some((a) => a.state.kind === "ai" && a.state.ownerId === myId);
-		companionButton.hidden = !withAi;
+		companionRow.hidden = !withAi;
 		const mine = myId ? avatars.get(myId) : undefined;
 		if (keys.size > 0) steer(t);
 		followStep(t);

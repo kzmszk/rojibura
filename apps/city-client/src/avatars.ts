@@ -35,8 +35,17 @@ interface Template {
 }
 
 const BUBBLE_MS = 7000;
-/** Small things done while standing about (moves.ts), one at random now and then. */
-const FIDGETS: MoveName[] = ["look", "tilt", "shift", "hands", "stretch"];
+/**
+ * Small things done while standing about (moves.ts), one at random now and then, and how often each comes
+ * up: the stretch, arms over the head, stands out, so it is rare.
+ */
+const FIDGETS: [MoveName, number][] = [
+	["look", 3],
+	["tilt", 2],
+	["shift", 3],
+	["stretch", 0.5],
+];
+const FIDGET_NAMES = new Set<string>(FIDGETS.map(([name]) => name));
 /** Motions that come with a smile. */
 const SMILING = new Set<string>(["tilt", "wave", "jump", "handshake", "hug"]);
 const FADE = 0.3;
@@ -571,21 +580,25 @@ export class AvatarView {
 	}
 
 	/**
-	 * Standing about: a fidget now and then (looking round, a head tilt, the weight on one leg, the hands
-	 * together, a stretch), each picked at random, so nobody stands frozen. Not while moving, sitting or
+	 * Standing about: a fidget now and then (looking round, a head tilt, the weight on one leg, now and
+	 * then a stretch), each picked at random, so nobody stands frozen. Not while moving, sitting or
 	 * doing something else; each avatar fidgets on its own clock (nothing goes to the host).
 	 */
 	private fidget(hostNow: number, busy: boolean): void {
 		if (this.nextFidget === 0) this.nextFidget = hostNow + 2000 + Math.random() * 6000;
-		const fidgeting = this.gesture !== null && FIDGETS.includes(this.gesture.name as MoveName);
+		const fidgeting = this.gesture !== null && FIDGET_NAMES.has(this.gesture.name);
 		if (busy) {
 			if (!fidgeting) this.nextFidget = Math.max(this.nextFidget, hostNow + 3000 + Math.random() * 5000);
 			return;
 		}
 		if (hostNow < this.nextFidget) return;
 		// an AI by its owner does not stretch, arms over its head, in their face
-		const can = FIDGETS.filter((f) => this.actions[f] && !(f === "stretch" && this.attention));
-		const pick = can[Math.floor(Math.random() * can.length)];
+		const can = FIDGETS.filter(([f]) => this.actions[f] && !(f === "stretch" && this.attention));
+		let r = Math.random() * can.reduce((sum, [, w]) => sum + w, 0);
+		const pick = can.find(([, w]) => {
+			r -= w;
+			return r < 0;
+		})?.[0];
 		if (pick) this.perform(pick, hostNow);
 		this.nextFidget = hostNow + (this.durationOf(pick ?? "") ?? 0) * 1000 + 3000 + Math.random() * 8000;
 	}
@@ -615,9 +628,7 @@ export class AvatarView {
 		const rolling = this.gesture !== null && TRAVEL.has(this.gesture.name) && hostNow < this.gesture.until;
 		const posture0 = move.kind === "idle" ? move.posture : undefined;
 		const gesturing =
-			this.gesture !== null &&
-			hostNow < this.gesture.until &&
-			!FIDGETS.includes(this.gesture.name as MoveName);
+			this.gesture !== null && hostNow < this.gesture.until && !FIDGET_NAMES.has(this.gesture.name);
 		if (this.script && hostNow > this.script.end) {
 			this.script = null;
 			this.partner = null;

@@ -21,16 +21,31 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #bfd6e8; }
 .rj-right { display: flex; gap: 8px; align-items: center; }
 .rj-left { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
 .rj-gate { white-space: nowrap; }
-.rj-check { pointer-events: auto; font-size: 12px; padding: 6px 10px; border-radius: 8px; background: rgba(255,255,255,.8); color: #222; cursor: pointer; }
+.rj-settings { position: fixed; top: 52px; right: 12px; width: 300px; max-width: calc(100vw - 24px); max-height: calc(100vh - 220px); overflow-y: auto; box-sizing: border-box;
+  display: flex; flex-direction: column; gap: 10px; padding: 10px 12px; border-radius: 10px; background: rgba(255,255,255,.96); color: #222; font-size: 13px;
+  box-shadow: 0 2px 10px rgba(0,0,0,.15); pointer-events: auto; z-index: 7; }
+.rj-settings-head { display: flex; justify-content: space-between; align-items: center; font-size: 14px; }
+.rj-settings-close { border: none; background: none; color: #555; font-size: 18px; line-height: 1; padding: 0 4px; cursor: pointer; }
+.rj-settings-body { display: flex; flex-direction: column; gap: 8px; }
+.rj-settings-row { display: flex; align-items: center; gap: 8px; }
+.rj-settings-label { flex: 0 0 96px; color: #444; }
+.rj-settings-row select, .rj-settings-row button { flex: 1; min-width: 0; font: inherit; padding: 5px 8px; border-radius: 8px; border: 1px solid #bbc; background: #fff; color: #222; cursor: pointer; }
+.rj-settings-row button.on { background: #2f6fae; border-color: #2f6fae; color: #fff; }
+.rj-settings-check { cursor: pointer; }
+.rj-settings-links { display: flex; gap: 14px; padding-top: 6px; border-top: 1px solid #e3e5ea; flex: 1; }
+.rj-settings-links a { color: #2f6fae; text-decoration: none; }
 .rj-google { display: block; text-align: center; font-size: 16px; padding: 10px; border-radius: 8px; border: 1px solid #bbc; color: #222; text-decoration: none; background: #fff; }
 .rj-chat { position: absolute; left: 12px; bottom: 12px; width: min(440px, calc(100% - 24px)); display: flex; flex-direction: column; gap: 6px; }
 .rj-log { max-height: 30vh; overflow-y: auto; font-size: 13px; line-height: 1.5; padding: 6px 10px; border-radius: 8px; background: rgba(255,255,255,.75); }
 .rj-log:empty { display: none; }
+.rj-log:focus { outline: none; }
+.rj-log:not(.full) .rj-line.old { display: none; }
 .rj-line { overflow-wrap: anywhere; }
 .rj-line.sys { color: #777; font-size: 12px; }
 .rj-line.mine b { color: #b46a17; }
 .rj-say { display: flex; gap: 6px; }
-.rj-motions { display: flex; gap: 4px; }
+.rj-motions { display: flex; flex-wrap: wrap; gap: 4px; }
+.rj-motions select { font-size: 14px; padding: 6px 8px; border-radius: 8px; border: 1px solid #aab; background: rgba(255,255,255,.85); color: #222; cursor: pointer; }
 .rj-motions button { font-size: 18px; line-height: 1; padding: 6px 8px; border-radius: 8px; border: 1px solid #aab; background: rgba(255,255,255,.85); cursor: pointer; }
 .rj-motions button:hover { background: #fff; }
 .rj-motions button[hidden] { display: none; }
@@ -39,7 +54,8 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #bfd6e8; }
 .rj-offer button { font-size: 14px; padding: 6px 12px; border-radius: 8px; border: 1px solid #2f6fae; background: #2f6fae; color: #fff; cursor: pointer; }
 .rj-offer button.rj-secondary { background: #fff; color: #2f6fae; }
 .rj-say input { flex: 1; font-size: 15px; padding: 8px 10px; border-radius: 8px; border: 1px solid #aab; }
-.rj-target { font-size: 13px; padding: 0 10px; border-radius: 8px; border: 1px solid #aab; background: #f3f4f6; cursor: pointer; white-space: nowrap; }
+.rj-target { max-width: 40%; font-size: 13px; padding: 0 6px; border-radius: 8px; border: 1px solid #aab; background: #f3f4f6; color: #222; cursor: pointer; }
+.rj-target option { background: #fff; color: #222; }
 .rj-target.on { background: #2f6fae; color: #fff; border-color: #2f6fae; }
 .rj-toast { position: absolute; top: 56px; left: 50%; transform: translateX(-50%); padding: 8px 14px; border-radius: 8px;
   background: rgba(30,30,30,.85); color: #fff; font-size: 14px; opacity: 0; transition: opacity .3s; pointer-events: none; }
@@ -56,9 +72,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #bfd6e8; }
 .rj-login input, .rj-login select, .rj-login button { font-size: 16px; padding: 9px 10px; border-radius: 8px; border: 1px solid #bbc; }
 .rj-login button { background: #2f6fae; color: #fff; border: none; cursor: pointer; }
 .rj-note { font-size: 12px; color: #888 !important; }
-.rj-actions { display: none; gap: 6px; }
-.rj-actions.show { display: flex; }
-.rj-actions button, .rj-report-actions button { font-size: 12px; padding: 4px 10px; border-radius: 8px; border: 1px solid #aab; background: #fff; cursor: pointer; }
+.rj-report-actions button { font-size: 12px; padding: 4px 10px; border-radius: 8px; border: 1px solid #aab; background: #fff; cursor: pointer; }
 .rj-dialog { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(340px, calc(100% - 32px)); display: flex; flex-direction: column; gap: 8px;
   padding: 18px; border-radius: 12px; background: #fff; box-shadow: 0 6px 30px rgba(0,0,0,.25); z-index: 10; font-size: 14px; }
 .rj-dialog select, .rj-dialog textarea, .rj-dialog button { font-size: 14px; padding: 8px; border-radius: 8px; border: 1px solid #bbc; }

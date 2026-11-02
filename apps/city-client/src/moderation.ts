@@ -51,33 +51,50 @@ const REASONS: [string, string][] = [
 	["other", "その他"],
 ];
 
-/** Buttons shown while someone is selected: mute, block, report. */
+/** A menu shown while someone is selected: mute, block, report. */
 export function actionBar(opts: {
 	relations: Relations;
 	onBlocked: (id: AvatarId) => void;
 	toast: (text: string) => void;
 }): { el: HTMLElement; show: (id: AvatarId | null, name: string) => void } {
-	const bar = el("div", "rj-actions");
+	const bar = el("select", "rj-menu");
+	bar.title = "選んだ相手をミュート、ブロック、通報する";
+	bar.hidden = true;
 	let current: AvatarId | null = null;
 	let currentName = "";
-	const mute = el("button", "");
-	const block = el("button", "", "ブロック");
-	const report = el("button", "", "通報");
-	for (const b of [mute, block, report]) b.type = "button";
-	bar.append(mute, block, report);
+	const title = el("option", "", "🛡️ 困ったとき");
+	title.value = "";
+	title.disabled = true;
+	title.hidden = true;
+	const mute = el("option", "");
+	mute.value = "mute";
+	const block = el("option", "", "ブロック");
+	block.value = "block";
+	const report = el("option", "", "通報");
+	report.value = "report";
+	bar.append(title, mute, block, report);
+	bar.onchange = () => {
+		const v = bar.value;
+		bar.value = "";
+		bar.blur();
+		if (v === "mute") void toggleMute();
+		else if (v === "block") void blockNow();
+		else if (v === "report") reportNow();
+	};
 
 	const render = () => {
-		bar.classList.toggle("show", current !== null);
+		bar.hidden = current === null;
+		bar.value = "";
 		if (current) mute.textContent = opts.relations.mutes.has(current) ? "ミュート解除" : "ミュート";
 	};
-	mute.onclick = async () => {
+	const toggleMute = async () => {
 		if (!current) return;
 		const on = !opts.relations.mutes.has(current);
 		if (await opts.relations.set(current, "mute", on))
 			opts.toast(on ? `${currentName} をミュートしました` : "ミュートを解除しました");
 		render();
 	};
-	block.onclick = async () => {
+	const blockNow = async () => {
 		if (!current) return;
 		if (!confirm(`${currentName} をブロックしますか？お互いに話しかけられなくなり、相手は見えなくなります。`))
 			return;
@@ -87,7 +104,7 @@ export function actionBar(opts: {
 			opts.onBlocked(id);
 		}
 	};
-	report.onclick = () => {
+	const reportNow = () => {
 		if (!current) return;
 		const id = current;
 		const dialog = el("form", "rj-dialog");
