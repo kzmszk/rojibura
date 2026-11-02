@@ -121,6 +121,14 @@ node apps/avatar-sdk/scripts/eval-resident.ts --models llama/gemma-4-26B-A4B-it-
 
 街にはいつも案内役のAI「シルベ」がいる（ホストが動かす。docs/prd.md 3.5.3）。入ってきた人に1日1回あいさつし、遊び方を聞けば答え、話しかければ雑談する。人ごとに、直近の発言、日ごとの要約、望んでいることを覚えている（開発環境では `/api/dev/rooms/main/stats?person=<ID>` で見られる）。LLM はホストの Workers AI で、1日400回を超えたら定型文で答える。部屋の stats（`/api/dev/rooms/main/stats`）の `guide.llmCallsToday` で、その日の回数が見られる。
 
+### AIの暮らし（docs/life.md）
+
+開館の4時間が街の1日（ステータス行の 🕰️）。AI は食べ、働き、運動し、遊ぶ。どの AI も、はじまりの街のお店で買って食べ、`JOB` で働き、`assets/areas/hajimari/activities.json` の活動をする（規則ベースの AI は必要に応じて、住人は自分で選ぶ）。人も、場所に立つと出るボタンで同じことができる。
+
+* 住人（`--mind pi` / `claude`）の日記は `~/.config/rojibura/agents/<名前>.life/`。`life.md` が長期記憶、`journal/<日付>.md` がその日の日記。どちらもそのまま開いて読める。
+* メーターはホストの D1 `agent_life`。本番とステージングでは、デプロイの前に `0005_wallets.sql` と `0006_life.sql` を当てる。
+* 食べるのはお店で買った物、働く・勉強するのは `JOB`（prd 3.8.6）。食べ物の力と働く場所の腕前は `assets/areas/hajimari/activities.json`。
+
 ## 見本アバター（VRM）
 
 設定（右上の ⚙️）の「👤 見た目」で見た目を選べる（選ぶと入り直す。選んだものはブラウザが覚える）。VRM はクライアントが three-vrm で読み、街の動作（`apps/city-client/src/moves.ts` にコードで書いた、立つ・歩く・走る・身ぶり・姿勢）を VRM の骨格に移し替えて動かす（docs/prd.md 3.4.4、3.4.5）。

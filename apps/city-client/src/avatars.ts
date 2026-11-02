@@ -619,15 +619,28 @@ export class AvatarView {
 		this.nextFidget = hostNow + (this.durationOf(pick ?? "") ?? 0) * 1000 + 3000 + Math.random() * 8000;
 	}
 
+	/** What they are doing, as an emoji after the name (docs/life.md 8), with its name on hover. */
+	private badge: { emoji: string; name: string } | null = null;
+
+	setDoing(badge: { emoji: string; name: string } | null): void {
+		this.badge = badge;
+		this.updateLabel();
+	}
+
 	private updateLabel(): void {
 		const s = this.state;
 		const suffix = s.kind === "ai" ? (s.status === "resting" ? " 💤" : " · AI") : "";
-		// working or studying (docs/prd.md 3.8.6)
+		// working or studying (docs/prd.md 3.8.6), or what it is doing (docs/life.md 6)
 		const job = s.job === "work" ? " 💼" : s.job === "study" ? " 📖" : "";
-		this.label.textContent = `${s.name}${suffix}${job}`;
+		this.label.textContent = `${s.name}${suffix}${job}${this.badge ? ` ${this.badge.emoji}` : ""}`;
 		this.label.classList.toggle("me", this.isMe);
 		this.label.classList.toggle("ai", s.kind === "ai");
-		this.label.title = s.owner ? `オーナー: ${s.owner}` : "";
+		this.label.title = [
+			s.owner ? `オーナー: ${s.owner}` : "",
+			this.badge ? `${this.badge.name}をしている` : "",
+		]
+			.filter(Boolean)
+			.join("\n");
 	}
 
 	private turnTo(heading: number, rate: number): void {

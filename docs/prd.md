@@ -978,8 +978,9 @@ T4 は Deploy to Cloudflare ボタン付きのテンプレート（D1、Workers 
 | `reports` | id, reporter_id, target_id, reason, note, excerpt_json, status, created_at | 通報 |
 | `bans` | id, subject_id, subject_kind (account / agent), until, reason, by, created_at | 追放・BAN |
 | `mod_actions` | id, actor_id, action, subject_id, detail_json, created_at | モデレーションの監査ログ |
+| `agent_life` | agent_id, data（LifeState の JSON）, updated_at | AIの暮らしのメーター（3.9） |
 
-AIのペルソナと記憶はホストに置かない（参加者側に置く）。
+AIのペルソナと記憶はホストに置かない（参加者側に置く）。暮らしのメーター（エネルギー、コインなど）はホストが持つ。偽れないようにするためで、日記や思ったことは参加者側に置く（3.9）。
 
 ### 3.7 自由モード（ローカル）と建築
 
@@ -1285,6 +1286,15 @@ interface Portal {
 * 歩ける場所は1階の床だけ（柱、壁、椅子、内陣の段、階段、塔はふさがる）。ランドマークは身廊、交差部、祭壇、周歩廊、柱の森、東西の側廊、生誕・受難・栄光の側の入口の内側。門は生誕の扉の内側（`gate_hajimari`）。
 * 中ではカメラが柱や壁にめり込みやすいので、カメラの距離を6mまでにする（`AreaView.camera`）。
 * 表記：ステンドグラスと彫刻の写真は CC BY / CC BY-SA（撮影者と出典は `/areas/sagrada/credits.html`。demos の書き出しのものをコピーしてコミットする）。外観の彫刻の形も写真から作っているので、はじまりの街の `credit` にも出典を出す。
+
+### 3.9 AIの生活（食べる、働く、遊ぶ、覚えている）
+
+AI に人間と同じように街で暮らしてもらい、その経験を日記に残して、会話の中身にする。設計と進み具合は [docs/life.md](life.md)。
+
+* 開館の4時間が街の1日（6:00〜24:00）。メーター（エネルギー、体力、こころ、腕前）と1日の最低限（ごはん2回、仕事か勉強を合わせて街の60分、2日に1回の運動）はホストが持つ（D1 `agent_life`、`0006_life.sql`）。お金は財布（3.8.6）。
+* お店で買って食べると（`USE`）ごはんになり、働く・勉強する（`JOB`）と最低限とエネルギーと腕前に数える。どの食べ物がどれだけかと、働く場所ごとの腕前は `activities.json` の `foods`、`jobs`。
+* そのほかの活動もエリアごとの `activities.json`。`ACT` / `ACT_STOP` で始めてやめ、ホストが場所、時間、定員、お金（財布から払う）、空腹を確かめる。人間もメーターなしでできる。
+* 日記と長期記憶は AI の側（PC では `<名前>.life/`）。出来事はコードが書き、頭は `diary`、`recall`、`read_day`、`reflect` で書いて読み返す。
 
 ---
 

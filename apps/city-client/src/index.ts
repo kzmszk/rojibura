@@ -2,14 +2,26 @@
 
 import { applyBuilds, NavMesh, type NavMeshData, validatePath } from "@rojibura/nav";
 import {
+	ACTIVITY_REACH,
+	type ActivitiesData,
+	type Activity,
 	type AvatarId,
+	activityOpen,
 	BODY_CALL_REACH,
 	type BodyKey,
+	cityTime,
+	clockText,
+	type Doing,
+	deltaText,
 	dist,
+	energyWord,
 	type HostToClient,
+	hoursText,
 	ITEM_REACH,
 	type ItemId,
+	type LifeState,
 	MAX_SAY_LENGTH,
+	MEALS_PER_DAY,
 	type Motion,
 	OFFER_REACH,
 	OFFER_TTL_MS,
@@ -18,6 +30,7 @@ import {
 	pathLeg,
 	poseAt,
 	RUN_SPEED,
+	SKILL_NAMES,
 	type Together,
 	travelReason,
 	type Vec2,
@@ -326,6 +339,40 @@ async function startCity(
 		area.portals ?? [],
 		(x, z) => mesh.heightAt([x, z]) ?? scene.heightAt(x, z),
 	);
+	// what can be done where (docs/life.md 3): the area's activities, and its places
+	let activities: Activity[] = [];
+	const places = new Map<string, Vec2>();
+	const lifeFiles = Promise.all([
+		fetch(`${area.dir}/activities.json`)
+			.then((r) => (r.ok ? (r.json() as Promise<ActivitiesData>) : null))
+			.catch(() => null),
+		fetch(`${area.dir}/landmarks.json`)
+			.then((r) => (r.ok ? (r.json() as Promise<{ landmarks: { id: string; pos: Vec2 }[] }>) : null))
+			.catch(() => null),
+	]).then(([a, l]) => {
+		activities = Array.isArray(a?.activities) ? a.activities : [];
+		for (const x of l?.landmarks ?? []) places.set(x.id, [x.pos[0], x.pos[1]]);
+	});
+	const badgeOf = (d?: Doing | null) => {
+		if (!d) return null;
+		const a = activities.find((x) => x.id === d.activity);
+		return { emoji: a?.emoji ?? "⏳", name: a?.name ?? d.activity };
+	};
+	/** An AI's life in a few lines, for its owner's panel. */
+	const lifeText = (life: LifeState, doing?: Doing, coins?: number) => {
+		const skills = Object.entries(life.skills)
+			.filter(([, v]) => v > 0)
+			.map(([k, v]) => `${SKILL_NAMES[k] ?? k} ${Math.round(v)}`)
+			.join("・");
+		const badge = badgeOf(doing);
+		return [
+			`暮らして${life.days}日目`,
+			`エネルギー ${Math.round(life.energy)}（${energyWord(life.energy)}）・体力 ${Math.round(life.fitness)}・こころ ${Math.round(life.mood)}${coins !== undefined ? `・👛 ${coins} 銅貨` : ""}`,
+			`今日：ごはん ${life.duties.meals}/${MEALS_PER_DAY}・仕事か勉強 ${life.duties.work ? "✓" : "まだ"}・運動 ${life.duties.exercise ? "✓" : "まだ"}`,
+			...(skills ? [`腕前：${skills}`] : []),
+			...(badge ? [`いま：${badge.emoji} ${badge.name}`] : []),
+		].join("\n");
+	};
 	// free play (docs/prd.md 3.7): what has been built, and the walkable area with it
 	let navVersion = 0;
 	modelsFromHost(building);
@@ -580,10 +627,13 @@ async function startCity(
 	const travel = el("button", "rj-travel");
 	travel.type = "button";
 	travel.hidden = true;
+	// at a place: what you can do there, and stopping what you are doing (docs/life.md 6)
+	const actsBar = el("div", "rj-acts");
+	actsBar.hidden = true;
 	// at a shop's counter: what it sells (docs/prd.md 3.8.6)
 	const shops = new ShopsUi((shop, goods) => conn.send({ t: "BUY", shop: shop.id, goods }));
 	void shops.load(area.dir);
-	root.append(hud, chat, toast, travel, offerBox, agentPanel.el, settings.el, shops.el);
+	root.append(hud, chat, toast, travel, actsBar, offerBox, agentPanel.el, settings.el, shops.el);
 	if (area.credit) root.append(el("div", "rj-credit", area.credit));
 
 	const avatars = new Map<AvatarId, AvatarView>();
@@ -652,9 +702,15 @@ async function startCity(
 	chat.addEventListener("focusout", () => setTimeout(showLog));
 	log.addEventListener("pointerenter", showLog);
 	log.addEventListener("pointerleave", showLog);
+	let shownStatus: { state: ConnState; detail?: string } = { state: "connecting" };
+	/** Host time, once connected. */
+	let hostNow = () => Date.now();
 	const updateStatus = (state: ConnState, detail?: string) => {
+		shownStatus = { state, ...(detail ? { detail } : {}) };
 		const label = { connecting: "接続中…", open: "接続済み", closed: "切断" }[state];
-		status.textContent = `${me.name} ｜ ${area.name} ｜ ${detail ?? label} ｜ ${avatars.size}人`;
+		// the city's own time (docs/life.md 1)
+		const clock = clockText(cityTime(hostNow()).minutes);
+		status.textContent = `${me.name} ｜ ${area.name} ｜ 🕰️ ${clock} ｜ ${detail ?? label} ｜ ${avatars.size}人`;
 	};
 
 	bar = actionBar({
@@ -674,7 +730,12 @@ async function startCity(
 		const v = new AvatarView(s, s.id === myId);
 		avatars.set(s.id, v);
 		scene.scene.add(v.root);
+		v.setDoing(badgeOf(s.doing));
 	};
+	// the activities arrive after the first people may have: their badges then
+	void lifeFiles.then(() => {
+		for (const v of avatars.values()) v.setDoing(badgeOf(v.state.doing));
+	});
 	const view = new ViewController(scene);
 	/** The view chosen outside, while indoors switched it to the eyes. */
 	let viewOutside: View | null = null;
@@ -739,6 +800,8 @@ async function startCity(
 							JSON.stringify(v.state.assets) === JSON.stringify(a.assets);
 						if (v && same) {
 							Object.assign(v.state, a);
+							if (!a.doing) delete v.state.doing;
+							v.setDoing(badgeOf(a.doing));
 							v.setStatus(a.status);
 						} else {
 							v?.dispose();
@@ -883,6 +946,30 @@ async function startCity(
 				case "STATUS_CHANGED":
 					avatars.get(m.id)?.setStatus(m.status);
 					break;
+				// what people do at places (docs/life.md 3, 8)
+				case "ACTING": {
+					const v = avatars.get(m.id);
+					if (!v) break;
+					if (m.doing) v.state.doing = m.doing;
+					else delete v.state.doing;
+					v.setDoing(badgeOf(m.doing));
+					shownActs = "";
+					break;
+				}
+				case "ACT_DONE": {
+					const a = activities.find((x) => x.id === m.activity);
+					const change = m.delta ? deltaText(m.delta) : "";
+					// an activity of the area, or (an AI's page) work done or something eaten
+					showToast(
+						a
+							? `${a.emoji} ${a.name}を${m.share >= 0.999 ? "終えました" : "やめました"}${change ? `（${change}）` : ""}`
+							: `${m.name ?? m.activity}${change ? `（${change}）` : ""}`,
+					);
+					break;
+				}
+				case "LIFE":
+					agentPanel.life(m.id, lifeText(m.life, avatars.get(m.id)?.state.doing, m.coins));
+					break;
 				case "NOTICE":
 					showToast(m.message);
 					break;
@@ -895,6 +982,7 @@ async function startCity(
 			updateStatus("open");
 		},
 	});
+	hostNow = () => conn.hostNow();
 	conn.start();
 	usage?.restore();
 	// debug hook for tools/snap.ts on development builds (cf dev and staging)
@@ -1524,6 +1612,45 @@ async function startCity(
 	/** __rj.look() stops the camera from following your avatar (for screenshots). */
 	let followCamera = true;
 	let shownGate: ReturnType<PortalsView["near"]> = null;
+	/** What the activity buttons show now, to make them again only when that changes. */
+	let shownActs = "";
+	let shownClock = "";
+	/** At a place: its activities (those closed now greyed, with their hours); doing one: a way to stop. */
+	const actsStep = (mine: AvatarView | undefined, now: number) => {
+		const pos = mine ? poseAt(mine.state.move, now).pos : null;
+		const minutes = cityTime(now).minutes;
+		const doing = mine?.state.doing;
+		const here = pos
+			? activities.filter((a) => {
+					const p = places.get(a.place);
+					return p && dist(p, pos) <= ACTIVITY_REACH;
+				})
+			: [];
+		const key = doing
+			? `doing ${doing.activity}`
+			: here.map((a) => `${a.id}${activityOpen(a, minutes) ? "" : "-"}`).join(",");
+		if (key === shownActs) return;
+		shownActs = key;
+		actsBar.replaceChildren();
+		if (doing) {
+			const badge = badgeOf(doing);
+			const stop = el("button", "on", `⏹ ${badge?.emoji ?? ""} ${badge?.name ?? ""}をやめる`);
+			stop.type = "button";
+			stop.title = "歩き出しても終わります";
+			stop.onclick = () => conn.send({ t: "ACT_STOP" });
+			actsBar.append(stop);
+		}
+		for (const a of doing ? [] : here) {
+			const b = el("button", "", `${a.emoji} ${a.name}`);
+			b.type = "button";
+			const open = activityOpen(a, minutes);
+			b.disabled = !open;
+			b.title = `街の${a.minutes}分${a.cost ? `、${a.cost}銅貨` : ""}。${hoursText(a)}${a.about ? `\n${a.about}` : ""}`;
+			b.onclick = () => conn.send({ t: "ACT", activity: a.id });
+			actsBar.append(b);
+		}
+		actsBar.hidden = actsBar.childElementCount === 0;
+	};
 	/** Avatars in their bath towel now, and those whose towel is ready (docs/prd.md 3.8.6). */
 	const bathers = new WeakSet<AvatarView>();
 	const readied = new WeakSet<AvatarView>();
@@ -1587,6 +1714,13 @@ async function startCity(
 		if (mine && !placed) {
 			scene.jumpTo(mine.root.position);
 			placed = true;
+		}
+		actsStep(mine, now);
+		// the city's clock in the status line, each city minute
+		const clock = clockText(cityTime(now).minutes);
+		if (clock !== shownClock) {
+			shownClock = clock;
+			updateStatus(shownStatus.state, shownStatus.detail);
 		}
 		shops.update(mine ? poseAt(mine.state.move, now).pos : null);
 		// at a portal: offer the way through

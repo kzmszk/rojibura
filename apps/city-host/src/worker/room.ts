@@ -21,7 +21,7 @@ import {
 	randomToken,
 	verifyAuth,
 } from "@rojibura/protocol";
-import { addToWallet, relationsOf, walletOf } from "./db.ts";
+import { addToWallet, relationsOf, saveLife, walletOf } from "./db.ts";
 import { GUIDE_NAME, Guide, type GuideSaved } from "./guide.ts";
 import { GuideMemory, type Kv } from "./guide-memory.ts";
 import { CLOSING_NOTICE_MS, closingTime, describeHours, type Hours, isOpen, parseHours } from "./hours.ts";
@@ -98,6 +98,8 @@ const MESSAGE_LABELS: Record<ClientToHost["t"], string> = {
 	COMPANION: "自分のAIを連れて歩く",
 	LEAD: "AIがオーナーを連れて行く",
 	BODY: "AIが体を動かす",
+	ACT: "活動を始める",
+	ACT_STOP: "活動をやめる",
 };
 /** Registered models are stored in pieces: a DO SQLite value may be at most 2 MB. */
 const MODEL_CHUNK = 1024 * 1024;
@@ -178,6 +180,13 @@ export class CityRoomDO extends DurableObject<Env> {
 			{
 				// the small things are saved whenever one changes, so they stay put while the room sleeps
 				items: { save: (items) => kv.put("items", items) },
+				// an AI's life goes to D1, so it carries over between areas (docs/life.md 7.1)
+				life: {
+					save: (id, life) =>
+						void this.meter.track("暮らしの記録", () =>
+							saveLife(this.db, id, life).catch((e) => console.warn(`life ${id}: ${(e as Error).message}`)),
+						),
+				},
 				// each change of a wallet is added to it in D1 as it happens (docs/prd.md 3.8.6)
 				wallets: {
 					add: (id, delta) =>

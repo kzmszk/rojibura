@@ -5,8 +5,10 @@ import {
 	type AvatarId,
 	type AvatarState,
 	type BudgetLevel,
+	decay,
 	dist,
 	type HostToClient,
+	type LifeState,
 	poseAt,
 	type Vec2,
 } from "@rojibura/protocol";
@@ -18,6 +20,10 @@ export class World {
 	budget: BudgetLevel = 0;
 	/** The owner this agent walks with now (docs/prd.md 3.4.9): the host moves it meanwhile. */
 	company: AvatarId | null = null;
+	/** This agent's life as the host last told it (docs/life.md 2); `lifeNow` brings it up to now. */
+	life: LifeState | null = null;
+	/** Coins in its wallet as the host last told it (WALLET); null before that. */
+	coins: number | null = null;
 	private offset = 0;
 	/** Which way each avatar last walked or turned (a unit vector), for where it faces standing. */
 	private readonly lastDir = new Map<AvatarId, Vec2>();
@@ -33,6 +39,7 @@ export class World {
 				if (!msg.resumed) this.company = null;
 				this.avatars.clear();
 				for (const a of msg.avatars) this.avatars.set(a.id, a);
+				this.life = msg.life ?? null;
 				return true;
 			case "JOINED":
 				this.avatars.set(msg.avatar.id, msg.avatar);
@@ -61,6 +68,39 @@ export class World {
 			case "COMPANY":
 				this.company = msg.on ? msg.owner : null;
 				return true;
+			case "ACTING": {
+				const a = this.avatars.get(msg.id);
+				if (a) {
+					if (msg.doing) a.doing = msg.doing;
+					else delete a.doing;
+				}
+				return true;
+			}
+			case "LIFE":
+				if (msg.id === this.me) {
+					this.life = msg.life;
+					if (msg.coins !== undefined) this.coins = msg.coins;
+				}
+				return true;
+			// these the agent hears of too (false)
+			case "WALLET":
+				this.coins = msg.coins;
+				return false;
+			case "JOBBED": {
+				const a = this.avatars.get(msg.id);
+				if (a) {
+					if (msg.job) a.job = msg.job;
+					else delete a.job;
+				}
+				return false;
+			}
+			// these also tell the agent what happened: its mind hears of them (false)
+			case "ACT_DONE":
+				if (msg.life) this.life = msg.life;
+				return false;
+			case "DAY":
+				this.life = msg.life;
+				return false;
 			default:
 				return false;
 		}
@@ -115,6 +155,11 @@ export class World {
 	positionOf(id: AvatarId): Vec2 | null {
 		const a = this.avatars.get(id);
 		return a ? poseAt(a.move, this.hostNow()).pos : null;
+	}
+
+	/** This agent's life now: energy goes down with time (the host decides the same way). */
+	lifeNow(): LifeState | null {
+		return this.life ? decay(this.life, this.hostNow()) : null;
 	}
 
 	/** This agent's own avatar. */

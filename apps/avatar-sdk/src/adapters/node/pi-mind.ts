@@ -34,6 +34,8 @@ export interface PiMindOptions {
 	fresh?: boolean;
 	/** Carries out a tool call (Resident.act). */
 	act: (tool: string, args: Record<string, unknown>) => Promise<ToolResult>;
+	/** The life tools (docs/life.md 5.2): do, stop, diary, recall, read_day, reflect. */
+	life?: boolean;
 	/** The body tools (docs/prd.md 3.4.11): move_body, practice, learn and step. */
 	body?: boolean;
 	/** The model takes images (llama-server started with its --mmproj): it sees itself in the mirror. */
@@ -88,7 +90,7 @@ export async function createPiMind(opts: PiMindOptions): Promise<Mind> {
 	const model = runtime.getModel(provider, id);
 	if (!model) throw new Error(`unknown model ${name} (pi --list-models shows the logged-in ones)`);
 
-	const tools = residentTools(!!opts.body).map(
+	const tools = residentTools(!!opts.body, !!opts.life).map(
 		(t) =>
 			defineTool({
 				name: t.name,

@@ -10,6 +10,7 @@ import {
 	validatePath,
 } from "@rojibura/nav";
 import type {
+	ActivitiesData,
 	AreaId,
 	AreaInfo,
 	AreasData,
@@ -20,6 +21,7 @@ import type {
 	ShopsData,
 	Vec2,
 } from "@rojibura/protocol";
+import activitiesJson from "../../../../assets/areas/hajimari/activities.json";
 import publishedJson from "../../../../assets/areas/hajimari/builds.json";
 import landmarksJson from "../../../../assets/areas/hajimari/landmarks.json";
 import baseNavmeshJson from "../../../../assets/areas/hajimari/navmesh.base.json";
@@ -125,6 +127,10 @@ export const world: World = {
 	spawn: [sx, sz],
 	areaName: areaOf(MAIN_AREA).name,
 	fixedBuilds: PUBLISHED.builds,
+	// how AIs live here besides the shops and job zones (docs/life.md 3)
+	activities: (activitiesJson as ActivitiesData).activities,
+	foods: (activitiesJson as ActivitiesData).foods ?? {},
+	jobs: (activitiesJson as ActivitiesData).jobs ?? {},
 	// two balls and a box near where people arrive (docs/prd.md 3.4.7)
 	items: [
 		{ kind: "ball", pos: [sx + 2, sz + 1.5] },

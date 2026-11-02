@@ -1,6 +1,7 @@
 // Avatar Protocol v2 message types (docs/prd.md 3.2.2).
 
 import type { BodyKey } from "./body.ts";
+import type { DayReview, Doing, LifeState, Meter } from "./life.ts";
 import type { Usage, UsageEvent } from "./usage.ts";
 
 /** Host-issued immutable ID: "h_..." for humans, "a_..." for AI agents. */
@@ -95,6 +96,8 @@ export interface AvatarState {
 	status: Status;
 	assets: AvatarAssets;
 	move: MoveState;
+	/** What it is doing now (docs/life.md 3). */
+	doing?: Doing;
 	/** Working or studying now (docs/prd.md 3.8.6): it earns coins. */
 	job?: JobKind;
 }
@@ -114,7 +117,8 @@ export interface JobZone {
 export interface SpatialContext {
 	area: string;
 	pos: Vec2;
-	nearbyAvatars: { id: AvatarId; name: string; kind: AvatarKind; distance: number }[];
+	/** `doing`: the name of what they are doing (docs/life.md 3). */
+	nearbyAvatars: { id: AvatarId; name: string; kind: AvatarKind; distance: number; doing?: string }[];
 	nearbyLandmarks: { id: string; name: string; distance: number }[];
 	/** Coins in the wallet, and what it is doing to earn more (docs/prd.md 3.8.6). */
 	coins?: number;
@@ -292,7 +296,10 @@ export type ClientToHost =
 	 * Moves your own body by a script (docs/prd.md 3.4.11). `to`: the one the script points at ("you"); a hand
 	 * may touch only your own owner, close by.
 	 */
-	| { t: "BODY"; keys: BodyKey[]; to?: AvatarId };
+	| { t: "BODY"; keys: BodyKey[]; to?: AvatarId }
+	/** Starts an activity of the area where one stands (docs/life.md 3); moving or ACT_STOP ends it. */
+	| { t: "ACT"; activity: string }
+	| { t: "ACT_STOP" };
 
 export type LeaveReason = "quit" | "timeout" | "kicked" | "closing";
 export type ConvEndReason = "max_turns" | "timeout" | "left" | "budget";
@@ -314,6 +321,8 @@ export type HostToClient =
 			 * company still on; what they missed meanwhile follows. Others heard nothing.
 			 */
 			resumed?: true;
+			/** AIs: their own life (docs/life.md 2). */
+			life?: LifeState;
 	  }
 	| { t: "JOINED"; avatar: AvatarState }
 	| { t: "LEFT"; id: AvatarId; reason: LeaveReason }
@@ -359,6 +368,29 @@ export type HostToClient =
 	| { t: "FOLLOW"; owner: AvatarId; to: AreaId; at: string }
 	/** A small thing changed: picked up, thrown, put down or bought. */
 	| { t: "ITEM"; item: Item }
+	/** Someone started an activity, or stopped (`doing` null): their badge and posture (docs/life.md 3). */
+	| { t: "ACTING"; id: AvatarId; doing: Doing | null }
+	/**
+	 * To the one who did it: it is over, done (`share` 1) or stopped part way. AIs get what it changed and their
+	 * life now; this is what their diary is written from (docs/life.md 5.1). Also to an AI that stopped working
+	 * or studying (`activity` the zone, `name` what it was, `minutes` how long) or ate something it bought
+	 * (`activity` the goods): those are not the area's activities.
+	 */
+	| {
+			t: "ACT_DONE";
+			activity: string;
+			share: number;
+			name?: string;
+			about?: string;
+			/** City minutes it lasted. */
+			minutes?: number;
+			delta?: Partial<Record<Meter | "coins", number>>;
+			life?: LifeState;
+	  }
+	/** To an AI and its owner: its life changed (docs/life.md 2), and the coins in its wallet. */
+	| { t: "LIFE"; id: AvatarId; life: LifeState; coins?: number }
+	/** To an AI: a new morning, and how the day before went. */
+	| { t: "DAY"; review: DayReview; life: LifeState }
 	/** A small thing is gone: eaten (`by`), or tidied away (bought things beyond MAX_GOODS, oldest first). */
 	| { t: "ITEM_GONE"; id: ItemId; by?: AvatarId }
 	/** To its owner: the coins in your wallet now, and what changed them (paid, earned) (docs/prd.md 3.8.6). */

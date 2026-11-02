@@ -4,6 +4,17 @@
 import { MAX_PATH_LENGTH, MAX_PATH_POINTS } from "./limits.ts";
 import type { MoveState, Vec2 } from "./types.ts";
 
+/** Whether `p` is inside the polygon (even-odd rule). */
+export function insidePolygon(p: Vec2, poly: Vec2[]): boolean {
+	let inside = false;
+	for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+		const [xi, zi] = poly[i] as Vec2;
+		const [xj, zj] = poly[j] as Vec2;
+		if (zi > p[1] !== zj > p[1] && p[0] < ((xj - xi) * (p[1] - zi)) / (zj - zi) + xi) inside = !inside;
+	}
+	return inside;
+}
+
 export function dist(a: Vec2, b: Vec2): number {
 	return Math.hypot(a[0] - b[0], a[1] - b[1]);
 }

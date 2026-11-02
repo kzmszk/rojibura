@@ -29,6 +29,8 @@ export interface ClaudeMindOptions {
 	fresh?: boolean;
 	/** Carries out a tool call (Resident.act). */
 	act: (tool: string, args: Record<string, unknown>) => Promise<ToolResult>;
+	/** The life tools (docs/life.md 5.2): do, stop, diary, recall, read_day, reflect. */
+	life?: boolean;
 	/** The body tools (docs/prd.md 3.4.11). Claude sees the mirror's pictures. */
 	body?: boolean;
 	logger: Logger;
@@ -148,7 +150,7 @@ interface StreamEvent {
 
 export async function createClaudeMind(opts: ClaudeMindOptions): Promise<Mind> {
 	const model = opts.model ?? DEFAULT_CLAUDE_MIND_MODEL;
-	const tools = residentTools(!!opts.body);
+	const tools = residentTools(!!opts.body, !!opts.life);
 	const server = new ResidentToolServer(tools, opts.act);
 	await server.start();
 	// the session holds everything the resident heard: only the owner may read it

@@ -41,6 +41,8 @@ export interface PromptInput {
 	/** Turn number of this message and the limit (null: no limit, e.g. with a human). */
 	turn?: number;
 	maxTurns?: number | null;
+	/** Its own day (docs/life.md 5.3): the city's time, how it feels, what it did today and the days before. */
+	today?: string[];
 }
 
 /** A string from the city made safe to quote in a prompt: sanitized, without angle brackets, cut at `max`. */
@@ -54,6 +56,7 @@ export function userPrompt(input: PromptInput): string {
 	const who = (k: "human" | "ai") => (k === "human" ? "人間" : "AI");
 	const lines = [
 		"<city_input>",
+		...(input.today ? input.today.map((l) => clean(l, 200)) : []),
 		`場所: ${clean(c.area)}`,
 		`近くにいる人: ${c.nearbyAvatars.map((a) => `${clean(a.name, 24)}（${who(a.kind)}、${a.distance}m）`).join("、") || "なし"}`,
 		`近くのランドマーク: ${c.nearbyLandmarks.map((l) => `${l.id}=${clean(l.name, 24)}（${l.distance}m）`).join("、") || "なし"}`,
@@ -79,6 +82,8 @@ export interface OpeningInput {
 	area: string;
 	landmarks: { id: string; name: string; distance: number }[];
 	memory: string[];
+	/** Its own day (docs/life.md 5.3): the city's time, how it feels, what it did today and the days before. */
+	today?: string[];
 }
 
 /** Prompt for starting a conversation with someone nearby (the AI speaks first). */
@@ -86,6 +91,7 @@ export function openingPrompt(input: OpeningInput): string {
 	const who = input.to.kind === "human" ? "人間" : "AI";
 	return [
 		"<city_input>",
+		...(input.today ? input.today.map((l) => clean(l, 200)) : []),
 		`場所: ${clean(input.area)}`,
 		`近くのランドマーク: ${input.landmarks.map((l) => `${l.id}=${clean(l.name, 24)}（${l.distance}m）`).join("、") || "なし"}`,
 		`近くにいる相手: ${clean(input.to.name, 24)}（${who}、${input.to.distance}m）`,
