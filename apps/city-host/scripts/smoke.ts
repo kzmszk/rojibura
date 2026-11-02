@@ -69,26 +69,34 @@ check(true, "agent challenge-response and JOINED");
 
 // movement
 const mine = welcome.avatars.find((x) => x.id === me.id);
-const start = mine?.move.kind === "idle" ? mine.move.pos : [0, -8];
-const mesh = NavMesh.fromJSON((await (await fetch(`${BASE}/test-city/navmesh.json`)).json()) as NavMeshData);
-// straight through the fountain (radius 3 m at the origin) must be rejected
-h.send({ t: "MOVE_PATH", path: [start as [number, number], [0, 8]], speed: 1.4, seq: 1 });
+const start = (mine?.move.kind === "idle" ? mine.move.pos : [-62, 11]) as [number, number];
+const mesh = NavMesh.fromJSON(
+	(await (await fetch(`${BASE}/areas/hajimari/navmesh.json`)).json()) as NavMeshData,
+);
+// straight through the fountain on the plaza (radius 5 m at (-50, 0), はじまりの街) must be rejected: aim at
+// the far side of it, on the line from where we stand through its middle
+const fountain: [number, number] = [-50, 0];
+const beyond: [number, number] = [
+	fountain[0] + (fountain[0] - start[0]) * 0.8,
+	fountain[1] + (fountain[1] - start[1]) * 0.8,
+];
+h.send({ t: "MOVE_PATH", path: [start, beyond], speed: 1.4, seq: 1 });
 await h.waitFor("CORRECT");
 check(true, "path through the fountain is corrected");
-const around = mesh.findPath(start as [number, number], [0, 8]);
+const around = mesh.findPath(start, beyond);
 check(around && around.length > 2, `navmesh path around the fountain (${around?.length} points)`);
 h.send({ t: "MOVE_PATH", path: around ?? [], speed: 1.4, seq: 2 });
 await a.waitFor("MOVED", (m) => m.id === me.id && m.move.kind === "path");
 check(true, "MOVE_PATH along the navmesh reaches the agent");
 
 // conversation
-h.send({ t: "SAY", text: "こんばんは、カフェはどこ？", to: agent.id });
+h.send({ t: "SAY", text: "こんばんは、パン屋はどこ？", to: agent.id });
 const addressed = await a.waitFor("ADDRESSED");
 check(
 	addressed.context.nearbyLandmarks.length > 0,
 	`ADDRESSED with context (area: ${addressed.context.area})`,
 );
-a.send({ t: "SAY", text: "こんばんは！カフェは東の方ですよ。", convId: addressed.convId });
+a.send({ t: "SAY", text: "こんばんは！パン屋は大通りですよ。", convId: addressed.convId });
 const reply = await h.waitFor("SAID", (m) => m.id === agent.id);
 check(reply.convId === addressed.convId, "agent reply reaches the human");
 
