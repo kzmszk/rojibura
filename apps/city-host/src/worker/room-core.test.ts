@@ -106,6 +106,33 @@ describe("membership", () => {
 		expect(ctx.room.has("h_alice")).toBe(false);
 	});
 
+	test("someone whose socket closed while the room slept leaves when it wakes, unless they came back in", () => {
+		const a = conn("a");
+		const b = conn("b");
+		ctx.room.join(a, human("alice"));
+		ctx.room.join(b, human("bob"));
+		const alice = structuredClone(ctx.room.members.get(a));
+		const bob = structuredClone(ctx.room.members.get(b));
+		if (!alice || !bob) throw new Error("not joined");
+		// woken for alice's close: only bob's socket is still there to restore
+		const woke = setup().room;
+		woke.restore(b, bob);
+		woke.departed(a, alice);
+		expect(last(b)).toEqual({ t: "LEFT", id: "h_alice", reason: "quit" });
+		expect(woke.has("h_alice")).toBe(false);
+		// alice is back on another socket: the old one closing does not take her out
+		const again = setup().room;
+		const a2 = conn("a2");
+		again.restore(b, bob);
+		again.restore(a2, alice);
+		const seen = b.inbox.length;
+		again.departed(a, alice);
+		expect(b.inbox.length).toBe(seen);
+		expect(again.has("h_alice")).toBe(true);
+		again.leave(a2);
+		expect(last(b)).toEqual({ t: "LEFT", id: "h_alice", reason: "quit" });
+	});
+
 	test("sweep removes members without heartbeat", () => {
 		const a = conn("a");
 		const b = conn("b");

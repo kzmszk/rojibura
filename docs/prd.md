@@ -628,6 +628,7 @@ type HostToClient =
 1. **WebSocket Hibernation の徹底**
    * `ctx.acceptWebSocket(ws, [kind])` で接続を受け、`webSocketMessage` / `webSocketClose` で処理する。タグ（`human` / `ai` / `spectator`）を付け、`ctx.getWebSockets(tag)` で配信先を絞る。
    * `setInterval` は使わない（DOがスリープできなくなる）。時間で動く処理はすべて Alarm で行う。
+   * 寝ている間に切れた接続：その `webSocketClose` で起きたとき、切れた接続は `getWebSockets()` に入らないので、在籍に戻らない。そのままでは退出（LEFT）がだれにも届かず、ほかの人の画面に姿が残る。そこで、切れた接続の `serializeAttachment` から誰だったかを読み、同じIDで入り直していなければ、起きていたときと同じように退出させる。ホストが自分で閉じる接続（入れ替わり、キック、無応答、満員）は、閉じる前に `serializeAttachment` を空にする。退出はもう済んでいるので、二重に退出させず、閉じきる前に部屋が起きても在籍に戻さない（2026-11-01、ローカルで再現して直した）。
 
 2. **状態の置き場所**（無料枠の rows written 100,000/日を守るため、移動のたびにDBへ書かない）
 

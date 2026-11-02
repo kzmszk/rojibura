@@ -426,6 +426,17 @@ export class RoomCore<C> {
 		this.removeMember(conn, reason);
 	}
 
+	/**
+	 * Called when a socket closed that the room may not know: one that closed while the room slept is not
+	 * among the sockets restored on waking, so `member` (what it last persisted) says who left. Unless they are
+	 * here under another connection (they came back in, replacing it), they leave as if the room had been
+	 * awake, so the others hear LEFT and what they held is put down.
+	 */
+	departed(conn: C, member: Member, reason: LeaveReason = "quit"): void {
+		if (!this.members.has(conn) && !this.byId.has(member.id)) this.restore(conn, member);
+		this.removeMember(conn, reason);
+	}
+
 	/** Removes members without a heartbeat or message for PRESENCE_TIMEOUT_MS and stale conversations. */
 	sweep(lastPing: (conn: C) => number | null): void {
 		const now = this.clock();

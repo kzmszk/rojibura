@@ -158,7 +158,13 @@ export class CityRoomDO extends DurableObject<Env> {
 		this.core = new RoomCore<Conn>(
 			{
 				send: (c, msg) => (isGuide(c) ? this.guide.onMessage(msg) : safeSend(c, msg)),
-				close: (c, code, reason) => !isGuide(c) && safeClose(c, code, reason),
+				close: (c, code, reason) => {
+					if (isGuide(c)) return;
+					// the room let it go itself (replaced, kicked, timed out, full): it has left already, so its
+					// close is no departure, and it is not restored as a member if the room wakes before it is gone
+					forget(c);
+					safeClose(c, code, reason);
+				},
 				persist: (c, member) => (isGuide(c) ? this.guide.persist(member) : persistMember(c, member)),
 			},
 			world,
@@ -341,12 +347,22 @@ export class CityRoomDO extends DurableObject<Env> {
 	}
 
 	async webSocketClose(ws: WebSocket): Promise<void> {
-		const name = this.core.members.get(ws)?.name ?? "?";
-		this.meter.track(`${name}：退出`, () => this.core.leave(ws, "quit"), { doRequests: WS_MESSAGE });
+		const member = attachmentOf(ws)?.member;
+		const name = this.core.members.get(ws)?.name ?? member?.name ?? "?";
+		this.meter.track(`${name}：退出`, () => this.depart(ws, member), { doRequests: WS_MESSAGE });
 	}
 
 	async webSocketError(ws: WebSocket): Promise<void> {
-		this.core.leave(ws, "quit");
+		this.depart(ws, attachmentOf(ws)?.member);
+	}
+
+	/**
+	 * The socket is gone. Waking for its close, the room did not restore it (disconnected sockets are not in
+	 * getWebSockets()), so who it was comes from its attachment; otherwise the others never hear LEFT.
+	 */
+	private depart(ws: WebSocket, member: Member | undefined): void {
+		if (member) this.core.departed(ws, member, "quit");
+		else this.core.leave(ws, "quit");
 	}
 
 	async alarm(): Promise<void> {
@@ -674,6 +690,22 @@ function safeSend(ws: WebSocket, msg: HostToClient): void {
 		ws.send(encode(msg));
 	} catch {
 		// socket already closing
+	}
+}
+
+function attachmentOf(ws: WebSocket): Attachment | null {
+	try {
+		return ws.deserializeAttachment() as Attachment | null;
+	} catch {
+		return null;
+	}
+}
+
+function forget(ws: WebSocket): void {
+	try {
+		ws.serializeAttachment({} satisfies Attachment);
+	} catch {
+		// already gone
 	}
 }
 
