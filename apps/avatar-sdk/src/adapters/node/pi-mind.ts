@@ -1,6 +1,6 @@
 // A resident's mind as one long-lived pi session (node adapter, development; docs/prd.md 3.5.2 "pi 住人").
 // The model is a local llama.cpp server ("llama/<model id>") or any model pi is logged in to.
-// pi gets the four city tools only: no built-in tools, extensions, skills, AGENTS.md or user settings.
+// pi gets the city tools only (resident-tools.ts): no built-in tools, extensions, skills, AGENTS.md or user settings.
 
 import { mkdir } from "node:fs/promises";
 import {
@@ -14,10 +14,9 @@ import {
 	SettingsManager,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { MOTIONS } from "@rojibura/protocol";
-import { Type } from "typebox";
 import type { Mind, ToolResult } from "../../core/resident.ts";
 import type { Logger } from "../../core/types.ts";
+import { residentTools } from "./resident-tools.ts";
 
 export const DEFAULT_PI_MIND_MODEL = "llama/gemma-4-26B-A4B-it-qat-UD-Q4_K_XL";
 export const DEFAULT_LLAMA_URL = "http://127.0.0.1:8080/v1";
@@ -40,67 +39,6 @@ export interface PiMindOptions {
 	/** The model takes images (llama-server started with its --mmproj): it sees itself in the mirror. */
 	vision?: boolean;
 	logger: Logger;
-}
-
-/**
- * A body script's keys as one JSON string (checked by the resident against the protocol): local models write
- * nested objects in tool arguments badly (Gemma 4's call format mangles their quotes), a string they write well.
- */
-const KEYS = Type.String({
-	description:
-		'キーの配列を JSON で書いた文字列。例: [{"at":1,"look":"ahead"}]。書き方はシステムプロンプトの「体の動かし方」',
-});
-
-/** The tools for moving its own body (docs/prd.md 3.4.11). Rehearsing and learning do not end the turn. */
-function bodyTools(
-	tool: (
-		name: string,
-		description: string,
-		parameters: Parameters<typeof defineTool>[0]["parameters"],
-		terminate?: boolean,
-	) => ToolDefinition,
-): ToolDefinition[] {
-	return [
-		tool(
-			"move_body",
-			"街で体を動かす。覚えた動きなら move に名前、新しい動きなら keys。to は of: you の相手の id（省くとオーナー）。distance を入れると、その人からその距離（メートル）まで近づいてからする。",
-			Type.Object({
-				move: Type.Optional(Type.String()),
-				keys: Type.Optional(KEYS),
-				to: Type.Optional(Type.String()),
-				distance: Type.Optional(Type.Number()),
-			}),
-		),
-		tool(
-			"practice",
-			"鏡の前で体の動きを試す。自分の姿の画像と、手が狙った所から何cm離れたかが返る。引数は move_body と同じ。name に練習中の動きの名前を付けてもよい。show: true なら、試したあとそのまま街でもする（頼まれた動きはこれ）。false なら鏡の中だけで、だれにも見えない。",
-			Type.Object({
-				move: Type.Optional(Type.String()),
-				keys: Type.Optional(KEYS),
-				to: Type.Optional(Type.String()),
-				distance: Type.Optional(Type.Number()),
-				name: Type.Optional(Type.String()),
-				show: Type.Optional(Type.Boolean()),
-			}),
-			false,
-		),
-		tool(
-			"learn",
-			"体の動きに名前をつけて覚える（keys を省くと、最後に practice したもの）。覚えた動きに note（言われたこと、気づいたこと）だけ書き足すこともできる。",
-			Type.Object({
-				name: Type.String({ description: "24文字まで" }),
-				about: Type.Optional(Type.String({ description: "どんな動きか（60文字まで）" })),
-				keys: Type.Optional(KEYS),
-				note: Type.Optional(Type.String({ description: "80文字まで" })),
-			}),
-			false,
-		),
-		tool(
-			"step",
-			"オーナー（to）のそばで、立つ位置を変える。distance はその人から何メートルのところに立つか（0.3〜2.5）。",
-			Type.Object({ to: Type.Optional(Type.String()), distance: Type.Number() }),
-		),
-	];
 }
 
 type AssistantMessage = {
@@ -150,66 +88,30 @@ export async function createPiMind(opts: PiMindOptions): Promise<Mind> {
 	const model = runtime.getModel(provider, id);
 	if (!model) throw new Error(`unknown model ${name} (pi --list-models shows the logged-in ones)`);
 
-	// every action ends the turn, so a model cannot keep talking to itself; a failed call does not, so it can
-	// retry; writing a note does not either, so the model can still answer after it
-	const tool = (
-		toolName: string,
-		description: string,
-		parameters: Parameters<typeof defineTool>[0]["parameters"],
-		terminate = true,
-	) =>
-		defineTool({
-			name: toolName,
-			label: toolName,
-			description,
-			parameters,
-			async execute(_id, params) {
-				const r = await opts.act(toolName, params as Record<string, unknown>);
-				const text = typeof r === "string" ? r : r.text;
-				const image =
-					typeof r !== "string" && r.image
-						? [
-								{
-									type: "image" as const,
-									data: Buffer.from(r.image).toString("base64"),
-									mimeType: "image/jpeg",
-								},
-							]
-						: [];
-				return { content: [{ type: "text", text }, ...image], details: {}, terminate };
-			},
-		}) as ToolDefinition;
-	const tools = [
-		tool(
-			"say",
-			"声に出して話す。to は話す相手の id（近くのみんなに向けて話すなら省く）。",
-			Type.Object({ text: Type.String({ maxLength: 200 }), to: Type.Optional(Type.String()) }),
-			// with a body, "I'll do it" comes before rehearsing and doing it: saying does not end the turn (the
-			// resident still lets it speak to each one once per turn)
-			!opts.body,
-		),
-		tool(
-			"walk_to",
-			"ランドマークの id の場所か、人の id のそばへ歩く。",
-			Type.Object({ target: Type.String() }),
-		),
-		tool(
-			"gesture",
-			"身ぶりをする。sit（座る）と lie（寝転がる）は、歩き出すまで続く。to は相手の id（任意）。",
-			Type.Object({
-				motion: Type.Union(MOTIONS.map((m) => Type.Literal(m))),
-				to: Type.Optional(Type.String()),
-			}),
-		),
-		tool("wait", "何もしないで、次の出来事を待つ。", Type.Object({})),
-		...(opts.body ? bodyTools(tool) : []),
-		tool(
-			"remember",
-			"覚えておきたいことを書き留める。about はその人の id で、次にその人と話すときに見られる。自分のこと（今日やりたいことなど）は about を self にする。self にはほかの人の話を書かない。",
-			Type.Object({ about: Type.String(), note: Type.String({ maxLength: 160 }) }),
-			false,
-		),
-	];
+	const tools = residentTools(!!opts.body).map(
+		(t) =>
+			defineTool({
+				name: t.name,
+				label: t.name,
+				description: t.description,
+				parameters: t.parameters,
+				async execute(_id, params) {
+					const r = await opts.act(t.name, params as Record<string, unknown>);
+					const text = typeof r === "string" ? r : r.text;
+					const image =
+						typeof r !== "string" && r.image
+							? [
+									{
+										type: "image" as const,
+										data: Buffer.from(r.image).toString("base64"),
+										mimeType: "image/jpeg",
+									},
+								]
+							: [];
+					return { content: [{ type: "text", text }, ...image], details: {}, terminate: t.terminate };
+				},
+			}) as ToolDefinition,
+	);
 
 	opts.logger.info(`pi tools: ${tools.map((t) => t.name).join(", ")}${opts.vision ? " (sees images)" : ""}`);
 	const resources: ResourceLoader = {

@@ -3,6 +3,8 @@
 //     [--avatar shino]   (the look, when it is registered: one of the host's /api/presets)
 //   node apps/avatar-sdk/src/cli.ts --name ハル --mind pi [--model llama/<id>] [--llama-url URL] [--fresh]
 //     [--body] [--vision]   (moves its own body, rehearsing in a mirror; --vision: and sees the pictures)
+//   node apps/avatar-sdk/src/cli.ts --name ハル --mind claude [--model claude-haiku-5-5] [--fresh] [--body]
+//     (the same resident with Claude Code as its mind: your subscription, for your own testing only)
 //   node apps/avatar-sdk/src/cli.ts --base https://… --pair ABCD2345 --persona '…' [--mind pi]
 //     (runs on this PC an AI registered in the city's 🤖 自分のAI, with the code shown there; docs/prd.md 3.5.1;
 //     next time --base https://… --name <name>: the personality is kept with the identity)
@@ -14,6 +16,7 @@ import { join } from "node:path";
 import { parseArgs } from "node:util";
 import type { ClientToHost, HostToClient } from "@rojibura/protocol";
 import { ClaudeCodeLLM } from "./adapters/node/claude-code.ts";
+import { createClaudeMind } from "./adapters/node/claude-mind.ts";
 import { EchoLLM } from "./adapters/node/echo-llm.ts";
 import { FileMemory } from "./adapters/node/file-memory.ts";
 import {
@@ -43,11 +46,12 @@ const { values: args } = parseArgs({
 		avatar: { type: "string" },
 		// kept with the identity, so later runs can leave it out
 		persona: { type: "string" },
-		// rules: the rule-based Agent asking an LLM per reply; pi: a resident living in one long pi session
+		// rules: the rule-based Agent asking an LLM per reply; pi / claude: a resident living in one long pi or
+		// Claude Code session
 		mind: { type: "string", default: "rules" },
 		llm: { type: "string", default: "claude-code" },
 		// default: claude-haiku-5-5 (--llm claude-code), openai-codex/gpt-6-luna (--llm pi),
-		// llama/gemma-4-26B-A4B-it-qat-UD-Q4_K_XL (--mind pi)
+		// llama/gemma-4-26B-A4B-it-qat-UD-Q4_K_XL (--mind pi), claude-haiku-5-5 (--mind claude)
 		model: { type: "string" },
 		"llama-url": { type: "string", default: DEFAULT_LLAMA_URL },
 		fresh: { type: "boolean", default: false },
@@ -59,7 +63,7 @@ const { values: args } = parseArgs({
 		// a one-time code from /agent: this PC runs that AI (its name and look come from the host)
 		pair: { type: "string" },
 		approve: { type: "boolean", default: false },
-		// LLM calls (--mind rules, default 300) or turns (--mind pi, default 1500) per day
+		// LLM calls (--mind rules, default 300) or turns (--mind pi / claude, default 1500) per day
 		"daily-limit": { type: "string" },
 	},
 });
@@ -128,7 +132,8 @@ const send = (m: ClientToHost) => conn.send(m);
 const dailyLimit = args["daily-limit"] ? Number(args["daily-limit"]) : undefined;
 
 let stopMind: () => void;
-if (args.mind === "pi") {
+if (args.mind === "pi" || args.mind === "claude") {
+	const claude = args.mind === "claude";
 	let resident: Resident | null = null;
 	const body = args.body || args.vision;
 	const moves = body
@@ -139,17 +144,30 @@ if (args.mind === "pi") {
 			)
 		: undefined;
 	if (moves) log.info(`わざ帳: ${shortPath(moves.page, homedir())}`);
-	const mind = await createPiMind({
-		model: args.model,
-		llamaUrl: args["llama-url"],
-		system: residentSystemPrompt(persona, city.landmarks, body),
-		body,
-		vision: args.vision,
-		sessionDir: join(dir, `${encodeURIComponent(name)}.pi`),
-		fresh: args.fresh,
-		act: (tool, params) => (resident ? resident.act(tool, params) : Promise.resolve("まだ街にいない。")),
-		logger: log,
-	});
+	const act = (tool: string, params: Record<string, unknown>) =>
+		resident ? resident.act(tool, params) : Promise.resolve("まだ街にいない。");
+	const system = residentSystemPrompt(persona, city.landmarks, body);
+	const mind = claude
+		? await createClaudeMind({
+				model: args.model,
+				system,
+				body,
+				sessionDir: join(dir, `${encodeURIComponent(name)}.claude`),
+				fresh: args.fresh,
+				act,
+				logger: log,
+			})
+		: await createPiMind({
+				model: args.model,
+				llamaUrl: args["llama-url"],
+				system,
+				body,
+				vision: args.vision,
+				sessionDir: join(dir, `${encodeURIComponent(name)}.pi`),
+				fresh: args.fresh,
+				act,
+				logger: log,
+			});
 	resident = new Resident({
 		persona,
 		mind,
@@ -160,7 +178,10 @@ if (args.mind === "pi") {
 		logger: log,
 		send,
 		dailyTurnLimit: dailyLimit,
-		...(moves ? { moves, mirror: new ChromeMirror({ base, logger: log }), sees: args.vision } : {}),
+		// every turn of a Claude Code mind is a call on the subscription: turns of its own come less often
+		...(claude ? { tickMs: [120_000, 300_000], quietTickMs: [300_000, 900_000] } : {}),
+		// Claude sees images
+		...(moves ? { moves, mirror: new ChromeMirror({ base, logger: log }), sees: claude || args.vision } : {}),
 	});
 	handle = (m) => resident?.handle(m);
 	stopMind = () => resident?.stop();

@@ -107,6 +107,7 @@ node apps/avatar-sdk/src/cli.ts --mind pi --name ハル --owner kazu --persona "
 - `--body` で、AI が自分の体を自分で動かす（docs/prd.md 3.4.11）。手の行き先、見る所、上体の傾き、腰の高さを台本に書いて街でする（`move_body`）。初めての動きは鏡で試し（`practice`。手元の Chrome をヘッドレスで開き、ホストの `/mirror` で自分の姿を撮る。Chrome の場所は `RJ_CHROME`）、名前をつけて覚える（`learn`）。頭をなでるなど手で触れられるのは自分のオーナーだけ。
 - 覚えた動きは `<名前>.moves.json`、鏡の絵は `<名前>.album/`。`<名前>.album/index.html` をブラウザで開くと、動きごとに最初と今の姿が並ぶ（わざ帳）。
 - `--vision` で、鏡の絵を AI 自身に見せる。llama-server に、そのモデルの画像用ファイル（`--mmproj`）を読ませておく。
+- `--mind claude` で、同じ住人の頭を自分の Claude Code（`claude -p`、既定は `claude-haiku-5-5`。`--model` で変えられる）にする。体のツールも同じで（`--body`）、鏡の絵はいつも見せる。セッションは `<名前>.claude/` に残り、次の起動で続きから。サブスクリプションを使うので自分の番は2〜15分ごとと少なめ。自分の開発・テスト用で、ほかの参加者には出さない。
 
 モデルや変更を比べるときは、同じ台本を流して返事を並べる（ホストは要らない。結果は `apps/avatar-sdk/eval-results/`）。
 

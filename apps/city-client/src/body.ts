@@ -469,8 +469,15 @@ export class BodyRig {
 		if (palm) wrist.addScaledVector(palm, -0.025 * this.scale);
 		// the elbow hangs down and a little out and back
 		const pole = f.up.clone().negate().addScaledVector(outward, 0.6).addScaledVector(f.front, -0.3);
-		const short = solveChain(c, wrist, pole);
+		let short = solveChain(c, wrist, pole);
 		if (palm) this.turnHand(c, side, palm, along);
+		// where the palm's middle came to, against where it should be: aim again, off by as much the other way
+		const landed = palmCentre(this.bones, side, this.scale);
+		if (landed && short === 0) {
+			const target = palm ? at.clone().addScaledVector(palm, -0.015 * this.scale) : at;
+			short = solveChain(c, wrist.add(target.sub(landed)), pole);
+			if (palm) this.turnHand(c, side, palm, along);
+		}
 		// weighed against the motion's own pose (a hand going to or coming back from rest)
 		const ik = [c.upper, c.lower, c.end].map((bone) => bone.quaternion.clone());
 		[c.upper, c.lower, c.end].forEach((bone, i) => {
@@ -592,15 +599,28 @@ export function spotOn(
 			break;
 		}
 		case "hand_l":
-		case "hand_r": {
-			const a = at(`${sideOf(part)}LowerArm`);
-			const b = at(`${sideOf(part)}Hand`);
-			p = a && b ? b.clone().addScaledVector(b.clone().sub(a).normalize(), 0.07 * s) : null;
+		case "hand_r":
+			p = palmCentre(bones, sideOf(part), s);
 			break;
-		}
 	}
 	if (p && off) p.addScaledVector(right, off[0]).addScaledVector(up, off[1]).addScaledVector(front, off[2]);
 	return p;
+}
+
+/**
+ * The middle of a palm (world): halfway from the wrist to the middle finger's knuckle, or, without finger
+ * bones, a little past the wrist along the forearm.
+ */
+export function palmCentre(bones: Bones, side: "left" | "right", scale = 1): THREE.Vector3 | null {
+	const hand = bones[`${side}Hand`];
+	if (!hand) return null;
+	const wrist = worldPos(hand);
+	const knuckle = bones[`${side}MiddleProximal`];
+	if (knuckle) return wrist.lerp(worldPos(knuckle), 0.5);
+	const elbow = bones[`${side}LowerArm`];
+	return elbow
+		? wrist.clone().addScaledVector(wrist.clone().sub(worldPos(elbow)).normalize(), 0.05 * scale)
+		: wrist;
 }
 
 /** Parts of a body without bones (a capsule, Saki): about where they would be on someone 1.6 m tall. */
