@@ -1101,6 +1101,19 @@ async function startCity(
 			pickAfter = null;
 		}
 	}
+	/**
+	 * With your AI by you, a click's walk that has come to its end says so (keys do on letting go): the host
+	 * then brings the AI up close (docs/prd.md 3.4.9). Following someone, the next leg is on its way.
+	 */
+	function stopStep(): void {
+		const mine = myId ? avatars.get(myId) : undefined;
+		if (!mine || following || mine.state.move.kind !== "path") return;
+		const now = conn.hostNow();
+		const { pos, moving } = poseAt(mine.state.move, now);
+		if (moving) return;
+		mine.setMove({ kind: "idle", pos, at: now });
+		conn.send({ t: "MOVE_VEL", pos, dir: [0, 0], speed: 0, seq: ++seq });
+	}
 	/** Stops where it is (the body cannot bend down while walking), then picks up. */
 	function pickNow(id: ItemId): void {
 		const mine = myId ? avatars.get(myId) : undefined;
@@ -1276,12 +1289,12 @@ async function startCity(
 		}
 		items.update(now);
 		pickButton.hidden = nearestThing() === null;
-		companionButton.hidden = ![...avatars.values()].some(
-			(a) => a.state.kind === "ai" && a.state.ownerId === myId,
-		);
+		const withAi = [...avatars.values()].some((a) => a.state.kind === "ai" && a.state.ownerId === myId);
+		companionButton.hidden = !withAi;
 		const mine = myId ? avatars.get(myId) : undefined;
 		if (keys.size > 0) steer(t);
 		followStep(t);
+		if (companion && withAi) stopStep();
 		pickStep();
 		gateStep(t);
 		// stop at the edge of the walkable area instead of walking into walls

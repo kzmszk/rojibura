@@ -78,9 +78,16 @@ export interface BuildStore {
 	remove(id: BuildId): void;
 }
 
-/** Where your AIs walk with you (docs/prd.md 3.4.9): this far ahead, and this far to one side (m). */
-const COMPANION_AHEAD = 2;
-const COMPANION_ASIDE = 0.8;
+/**
+ * Where your AIs walk with you (docs/prd.md 3.4.9): this far ahead and this far to one side (m), far enough
+ * ahead to be in view from your own eyes (the first-person view).
+ */
+const COMPANION_WALKING: Vec2 = [2, 0.8];
+/**
+ * Where they stand when you stop: half a metre away, 25° to one side, so its face is still in view from your
+ * eyes and a second one on the other side does not stand in the first.
+ */
+const COMPANION_STANDING: Vec2 = [0.45, 0.21];
 /** How long after arriving an AI that took its owner somewhere waits for them before walking with them again. */
 const LEAD_GRACE_MS = 2 * 60_000;
 
@@ -726,7 +733,7 @@ export class RoomCore<C> {
 	/**
 	 * Moves the owner's AIs to keep just ahead of them, one to each side: along the owner's path shifted
 	 * sideways (or, walking with keys, to where the owner will be a few seconds on), at the speed that gets
-	 * there when the owner does, and to their places beside them when the owner stops.
+	 * there when the owner does, and, when the owner stops, up close in front of them.
 	 */
 	private accompany(owner: Member, now: number): void {
 		const move = owner.move;
@@ -839,14 +846,17 @@ export class RoomCore<C> {
 		}
 	}
 
-	/** Just ahead of `at` facing `ahead`, to the right (side 1) or the left (-1); `strict`: there or nowhere. */
-	private beside(at: Vec2, ahead: Vec2, side: number, strict = false): Vec2 | null {
+	/**
+	 * Just ahead of `at` facing `ahead`, to the right (side 1) or the left (-1), as far as `slot` says (walking
+	 * or standing); `strict`: there or nowhere.
+	 */
+	private beside(at: Vec2, ahead: Vec2, side: number, slot = COMPANION_WALKING, strict = false): Vec2 | null {
 		// facing +z the right hand is on -x: right = (-ahead.z, ahead.x)
 		const right: Vec2 = [-ahead[1], ahead[0]];
-		// far enough ahead to be in view from the owner's own eyes (the first-person view)
+		const [front, aside] = slot;
 		const p: Vec2 = [
-			at[0] + ahead[0] * COMPANION_AHEAD + right[0] * COMPANION_ASIDE * side,
-			at[1] + ahead[1] * COMPANION_AHEAD + right[1] * COMPANION_ASIDE * side,
+			at[0] + ahead[0] * front + right[0] * aside * side,
+			at[1] + ahead[1] * front + right[1] * aside * side,
 		];
 		if (this.walk.isWalkable(p)) return p;
 		return strict ? null : this.walk.closestPoint(p);
@@ -865,7 +875,7 @@ export class RoomCore<C> {
 				const d = dist(a, p);
 				const dir: Vec2 = d > 1e-3 ? [(p[0] - a[0]) / d, (p[1] - a[1]) / d] : ahead;
 				const last = i === rest.length - 2;
-				return (last ? this.beside(p, dir, side) : this.beside(p, dir, side, true)) ?? p;
+				return (last ? this.beside(p, dir, side) : this.beside(p, dir, side, COMPANION_WALKING, true)) ?? p;
 			});
 			path = [from, ...steps].slice(0, MAX_PATH_POINTS);
 			ms = (polylineLength(rest) / om.speed) * 1000;
@@ -885,7 +895,8 @@ export class RoomCore<C> {
 				}
 			}
 		} else {
-			const there = this.beside(this.positionOf(owner, now), ahead, side);
+			// the owner has stopped: it comes up close
+			const there = this.beside(this.positionOf(owner, now), ahead, side, COMPANION_STANDING);
 			if (there) path = [from, there];
 		}
 		// a fountain or a wall in the way: find a way round it to the same place, there at the same time
