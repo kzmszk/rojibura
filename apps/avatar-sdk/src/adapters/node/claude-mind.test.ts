@@ -33,6 +33,7 @@ describe("the resident's tools over MCP", () => {
 			"say",
 			"walk_to",
 			"gesture",
+			"turn",
 			"wait",
 			"move_body",
 			"practice",

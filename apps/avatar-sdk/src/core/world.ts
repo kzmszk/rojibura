@@ -19,6 +19,8 @@ export class World {
 	/** The owner this agent walks with now (docs/prd.md 3.4.9): the host moves it meanwhile. */
 	company: AvatarId | null = null;
 	private offset = 0;
+	/** Which way each avatar last walked or turned (a unit vector), for where it faces standing. */
+	private readonly lastDir = new Map<AvatarId, Vec2>();
 
 	/** Applies a state message (WELCOME, JOINED, MOVED...). False for anything else. */
 	apply(msg: HostToClient): boolean {
@@ -40,12 +42,12 @@ export class World {
 				return true;
 			case "MOVED": {
 				const a = this.avatars.get(msg.id);
-				if (a) a.move = msg.move;
+				if (a) this.setMove(a, msg.move);
 				return true;
 			}
 			case "CORRECT": {
 				const a = this.me ? this.avatars.get(this.me) : undefined;
-				if (a) a.move = msg.move;
+				if (a) this.setMove(a, msg.move);
 				return true;
 			}
 			case "STATUS_CHANGED": {
@@ -62,6 +64,47 @@ export class World {
 			default:
 				return false;
 		}
+	}
+
+	private setMove(a: AvatarState, move: AvatarState["move"]): void {
+		// the way it was going, kept for when it stands
+		const before = this.headingOf(a.id);
+		if (before) this.lastDir.set(a.id, before);
+		a.move = move;
+	}
+
+	/**
+	 * Which way an avatar faces (a unit vector), as every screen shows it: the way it walks, the way it chose
+	 * to face standing, else, for this agent by its owner within 5 m, towards them (screens turn an AI to its
+	 * owner), else the way it last went. Null if unknown.
+	 */
+	headingOf(id: AvatarId): Vec2 | null {
+		const a = this.avatars.get(id);
+		if (!a) return null;
+		const pose = poseAt(a.move, this.hostNow());
+		if (pose.moving) return pose.dir;
+		if (a.move.kind === "idle" && a.move.face) return a.move.face;
+		const owner = a.ownerId ? this.positionOf(a.ownerId) : null;
+		if (owner && a.kind === "ai") {
+			const d = dist(owner, pose.pos);
+			if (d > 0.1 && d <= 5) return [(owner[0] - pose.pos[0]) / d, (owner[1] - pose.pos[1]) / d];
+		}
+		return this.lastDir.get(id) ?? null;
+	}
+
+	/** Where `to` is as seen from avatar `from` (its facing): 前, 右前, 右, 右後ろ, 後ろ, 左後ろ, 左, 左前. */
+	directionTo(from: AvatarId, to: Vec2): string | null {
+		const here = this.positionOf(from);
+		const h = this.headingOf(from);
+		if (!here || !h) return null;
+		const v: Vec2 = [to[0] - here[0], to[1] - here[1]];
+		if (Math.hypot(v[0], v[1]) < 0.3) return null;
+		// facing +z, its right hand is on -x: right = (-h.z, h.x)
+		const ahead = v[0] * h[0] + v[1] * h[1];
+		const right = v[0] * -h[1] + v[1] * h[0];
+		const deg = (Math.atan2(right, ahead) * 180) / Math.PI;
+		const ways = ["前", "右前", "右", "右後ろ", "後ろ", "左後ろ", "左", "左前"];
+		return ways[((Math.round(deg / 45) % 8) + 8) % 8] ?? null;
 	}
 
 	/** Host time estimated from WELCOME.serverTime. */

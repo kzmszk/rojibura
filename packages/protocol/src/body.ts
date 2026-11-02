@@ -82,13 +82,17 @@ export interface BodyKey {
 	at: number;
 	right?: BodyHand | "rest";
 	left?: BodyHand | "rest";
-	look?: BodySpot | "ahead";
+	look?: BodySpot | LookWay;
 	/** Degrees, forward (negative: back). */
 	lean?: number;
 	/** Metres from standing: down to crouch, up to stand on tiptoe. */
 	height?: number;
 	smile?: boolean;
 }
+
+/** Looking a way rather than at a part: straight ahead, to its left or right, up or down. */
+export type LookWay = "ahead" | "left" | "right" | "up" | "down";
+export const LOOK_WAYS: readonly LookWay[] = ["ahead", "left", "right", "up", "down"];
 
 export const BODY_LEAN = [-20, 45] as const;
 export const BODY_HEIGHT = [-0.45, 0.06] as const;
@@ -167,9 +171,10 @@ export function parseBodyKeys(v: unknown): BodyKey[] | string {
 			key[side] = hand;
 		}
 		if (raw.look !== undefined) {
-			const look = raw.look === "ahead" ? "ahead" : parseSpot(raw.look, `${where}.look`);
-			if (typeof look === "string" && look !== "ahead") return look;
-			key.look = look as BodySpot | "ahead";
+			const way = LOOK_WAYS.find((w) => w === raw.look);
+			const look = way ?? parseSpot(raw.look, `${where}.look`);
+			if (typeof look === "string" && !way) return `${look}（または ${LOOK_WAYS.join(" / ")}）`;
+			key.look = look as BodySpot | LookWay;
 		}
 		if (raw.lean !== undefined) {
 			if (!isNum(raw.lean, BODY_LEAN[0], BODY_LEAN[1]))
@@ -205,7 +210,8 @@ export function bodyTouches(keys: readonly BodyKey[]): boolean {
 /** Whether a script points at the one it is for at all (touching, or looking at them). */
 export function bodyNeedsPartner(keys: readonly BodyKey[]): boolean {
 	return (
-		bodyTouches(keys) || keys.some((k) => k.look !== undefined && k.look !== "ahead" && k.look.of === "you")
+		bodyTouches(keys) ||
+		keys.some((k) => k.look !== undefined && typeof k.look !== "string" && k.look.of === "you")
 	);
 }
 

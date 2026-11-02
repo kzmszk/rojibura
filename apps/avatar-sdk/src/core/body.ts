@@ -77,7 +77,7 @@ export function bodyGuide(): string {
 		`  - of: me は自分の体（省略時）、you は to に入れた相手の体。手で触れられる相手は自分のオーナーだけで、部位は ${TOUCHABLE.join(", ")} だけ。`,
 		`  - off: その体の向きで、右・上・前へずらすメートル（自分は${BODY_OFFSET_MAX}まで、相手は${BODY_OFFSET_YOU_MAX}まで）。`,
 		`  - palm: ${PALMS.join(" / ")}（下 / 上 / 前 / 体の内側）。wiggle: { "dir": "side" か "up" か "front", "size": メートル（0.15まで）, "hz": 1秒の往復回数（4まで） }。`,
-		'- look: 見る所。{ "part": 部位, "of": ... } か "ahead"（前）。',
+		'- look: 見る所。{ "part": 部位, "of": ... } か、"ahead"（前）、"left"、"right"、"up"、"down"（首の向き）。体ごと向きを変えるのは turn。',
 		`- lean: 上体を前へ傾ける角度（${BODY_LEAN[0]}〜${BODY_LEAN[1]}度）。height: 腰の高さ（${BODY_HEIGHT[0]}でしゃがむ、${BODY_HEIGHT[1]}で背伸び）。smile: true で微笑む。`,
 		'- 書き方の例（右手を自分の胸に当てて、相手の顔を見る）: [{"at":0.8,"right":{"part":"chest","palm":"in"},"look":{"part":"face","of":"you"}},{"at":2.5}]',
 		"- 相手に触れるには、その人のすぐそば（0.9m以内）にいる必要があります。move_body の distance で、近づいてからできます。オーナーのそばでは、step で立つ位置を自分で変えられます。",

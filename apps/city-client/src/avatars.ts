@@ -393,6 +393,8 @@ export class AvatarView {
 
 	setMove(move: MoveState): void {
 		this.state.move = move;
+		// turned a way of its own choosing: that, not the last gesture's partner
+		if (move.kind === "idle" && move.face) this.faceTo = null;
 	}
 
 	setStatus(status: Status): void {
@@ -620,7 +622,10 @@ export class AvatarView {
 			this.script = null;
 			this.partner = null;
 			this.bodyLook = null;
+			this.faceTo = null;
 		}
+		// the way it chose to face, standing (docs/prd.md 3.4.11): it keeps to it and does not turn to its owner
+		const chosen = move.kind === "idle" && !pose.moving ? move.face : undefined;
 		const scripted = this.script !== null && hostNow >= this.script.at;
 		// a script for someone faces them while it plays
 		if (scripted && this.partner && this.script?.forSomeone && !pose.moving) {
@@ -630,7 +635,7 @@ export class AvatarView {
 				this.faceTo = Math.atan2(there.x - p.x, there.z - p.z);
 		}
 		// where whoever it attends to (or what the script looks at) is, as a heading
-		const focus = this.bodyLook ?? this.attention;
+		const focus = this.bodyLook ?? (chosen ? null : this.attention);
 		const attended = focus
 			? Math.atan2(focus.x - this.root.position.x, focus.z - this.root.position.z)
 			: null;
@@ -640,7 +645,10 @@ export class AvatarView {
 			this.turnTo(Math.atan2(pose.dir[0], pose.dir[1]), dt * 10);
 		} else if (this.faceTo !== null) {
 			this.turnTo(this.faceTo, dt * 6);
-		} else if (attended !== null && !posture0 && !gesturing) {
+		} else if (chosen) {
+			this.turnTo(Math.atan2(chosen[0], chosen[1]), dt * 4);
+		} else if (attended !== null && !posture0 && !gesturing && !scripted) {
+			// (while a script plays only the head turns to what it looks at: a way like "left" moves with the body)
 			this.turnTo(attended, dt * 3);
 		}
 		this.root.rotation.y = this.facing;

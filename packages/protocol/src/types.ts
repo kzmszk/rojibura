@@ -43,7 +43,8 @@ export type AvatarKind = "human" | "ai";
 
 /** `at` is always host time in milliseconds (the moment the state started). */
 export type MoveState =
-	| { kind: "idle"; pos: Vec2; at: number; posture?: Posture }
+	/** `face`: the way it chose to face, standing (a unit vector); otherwise it faces as it likes. */
+	| { kind: "idle"; pos: Vec2; at: number; posture?: Posture; face?: Vec2 }
 	| { kind: "path"; path: Vec2[]; speed: number; at: number }
 	| { kind: "vel"; pos: Vec2; dir: Vec2; speed: number; at: number };
 

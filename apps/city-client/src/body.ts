@@ -7,7 +7,14 @@
 // are taken off again before the next frame of the motion (`restore`): three.js's mixer leaves a bone alone
 // while its value stays the same, so anything left on would add up.
 
-import { BODY_SETTLE, type BodyHand, type BodyKey, type BodyPart, type BodySpot } from "@rojibura/protocol";
+import {
+	BODY_SETTLE,
+	type BodyHand,
+	type BodyKey,
+	type BodyPart,
+	type BodySpot,
+	type LookWay,
+} from "@rojibura/protocol";
 import * as THREE from "three";
 
 /** Where things are on a body, in the world. */
@@ -19,7 +26,7 @@ export interface BodyParts {
 }
 
 type Hand = BodyHand | "rest";
-type Look = BodySpot | "ahead";
+type Look = BodySpot | LookWay;
 
 /** One channel of a script: values reached at times (seconds), from rest at 0 back to rest at the end. */
 type Track<T> = [t: number, v: T][];
@@ -361,7 +368,19 @@ export class BodyRig {
 		this.short = result.short;
 
 		const look = s.look;
-		const lookAt = (v: Look) => (v === "ahead" ? null : spotOf(v));
+		const lookAt = (v: Look) => {
+			if (v === "ahead") return null;
+			if (typeof v !== "string") return spotOf(v);
+			// a way: two metres off from the face, that way (up and down a little ahead)
+			const face = me.spot("face");
+			const way = {
+				left: right.clone().negate(),
+				right,
+				up: up.clone().addScaledVector(front, 0.6),
+				down: up.clone().negate().addScaledVector(front, 0.8),
+			}[v];
+			return face ? face.addScaledVector(way.clone().normalize(), 2) : null;
+		};
 		const la = lookAt(look.a);
 		const lb = lookAt(look.b);
 		result.look = la && lb ? la.lerp(lb, look.u) : look.u < 0.5 ? la : lb;

@@ -54,6 +54,12 @@ export function residentTools(body: boolean): ResidentTool[] {
 				to: Type.Optional(Type.String()),
 			}),
 		),
+		tool(
+			"turn",
+			"その場で体の向きを変える。target は人かランドマークの id（その方を向く）、または left / right / back（今の向きから左・右・後ろ）。",
+			Type.Object({ target: Type.String() }),
+			false,
+		),
 		tool("wait", "何もしないで、次の出来事を待つ。", Type.Object({})),
 		...(body
 			? [

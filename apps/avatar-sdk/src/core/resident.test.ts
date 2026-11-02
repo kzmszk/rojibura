@@ -142,7 +142,7 @@ describe("Resident", () => {
 			{ t: "SAY", text: "こんばんは。", convId: "c_h_saki" },
 			{ t: "STATUS", status: "active" },
 		]);
-		expect(s.prompts[0]).toContain("サキ（id h_saki、人間、2m）があなたに話しかけた: 「こんばんは！」");
+		expect(s.prompts[0]).toContain("サキ（id h_saki、人間、2m、前）があなたに話しかけた: 「こんばんは！」");
 		expect(s.prompts[0]).toContain("街に入った。");
 	});
 
@@ -275,7 +275,7 @@ describe("Resident", () => {
 		release();
 		await until(() => s.prompts.length === 2);
 		expect(s.prompts[1]).toContain(
-			"サキ（id h_saki、人間、2m）がみんなに向かって言った: 「みんな、こんばんは」",
+			"サキ（id h_saki、人間、2m、前）がみんなに向かって言った: 「みんな、こんばんは」",
 		);
 		expect(s.prompts[1]).toContain("「ふたつめ」");
 		expect(s.prompts[1]).not.toContain("ひとつめ");
@@ -602,3 +602,31 @@ test("being patted by its owner is told in its own words, and answered soon", as
 	});
 	expect(touchedParts([{ at: 1, look: { part: "face", of: "you" } }])).toBeNull();
 }, 5000);
+
+test("turns to someone, a landmark, or left of where it faces, and sees where things are from there", async () => {
+	const s = setup([
+		{
+			calls: [
+				["turn", { target: "cafe" }],
+				["turn", { target: "left" }],
+				["turn", { target: "なにか" }],
+			],
+		},
+		{ calls: [["wait", {}]] },
+	]);
+	current = s.resident;
+	await s.resident.turnNow();
+	// it stands at (0, 0) facing its owner Saki at (2, 0); the cafe is at (10, 0)
+	expect(s.prompts[0]).toMatch(/オープンカフェ（10m、前）/);
+	expect(s.results[0]).toBe("オープンカフェの方を向いた。");
+	expect(s.sent.filter((m) => m.t === "MOVE_VEL")[0]).toMatchObject({ pos: [0, 0], dir: [1, 0], speed: 0 });
+	// the host says so; turned left from facing +x it faces -z, and what was ahead is on its right
+	s.resident.handle({ t: "MOVED", id: "a_haru", move: { kind: "idle", pos: [0, 0], at: 0, face: [1, 0] } });
+	expect(s.results[1]).toBe("左を向いた。");
+	expect(s.sent.filter((m) => m.t === "MOVE_VEL")[1]).toMatchObject({ dir: [0, -1] });
+	expect(s.results[2]).toMatch(/は知らない/);
+	s.resident.handle({ t: "MOVED", id: "a_haru", move: { kind: "idle", pos: [0, 0], at: 0, face: [0, -1] } });
+	await s.resident.turnNow();
+	expect(s.prompts[1]).toMatch(/サキ（id h_saki、人間、2m、右）/);
+	expect(s.prompts[1]).toMatch(/オープンカフェ（10m、右）/);
+});

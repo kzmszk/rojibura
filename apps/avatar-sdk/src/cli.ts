@@ -114,7 +114,13 @@ const persona = {
 	name,
 	personality: identity.persona ?? "好奇心旺盛で人懐っこい。街を散歩するのとカフェが好き。",
 };
-const city = await loadCity(base, args.area);
+// a host still starting answers without its files: wait for them rather than live in a city without places
+let city = await loadCity(base, args.area);
+for (let i = 0; i < 15 && city.landmarks.length === 0 && !city.hasNavmesh; i++) {
+	if (i === 0) log.warn("街の場所とナビメッシュを読めません。少し待って読み直します");
+	await new Promise((r) => setTimeout(r, 2000));
+	city = await loadCity(base, args.area);
+}
 let handle: ((m: HostToClient) => void) | null = null;
 const conn = new AgentConnection({
 	baseUrl: base.replace(/^http/, "ws"),

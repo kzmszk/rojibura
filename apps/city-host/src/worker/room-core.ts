@@ -699,7 +699,15 @@ export class RoomCore<C> {
 				if (msg.target && !this.byId.has(msg.target)) return;
 				// sitting and lying last until the avatar moves (docs/prd.md 3.4.5): it stops where it is
 				if (isPosture(msg.motion)) {
-					m.move = { kind: "idle", pos: this.positionOf(m, now), at: now, posture: msg.motion };
+					// sitting down keeps the way it turned to
+					const face = m.move.kind === "idle" ? m.move.face : undefined;
+					m.move = {
+						kind: "idle",
+						pos: this.positionOf(m, now),
+						at: now,
+						posture: msg.motion,
+						...(face ? { face } : {}),
+					};
 					this.transport.persist(conn, m);
 					this.broadcastAbout(m, { t: "MOVED", id: m.id, move: m.move });
 				}
@@ -898,7 +906,10 @@ export class RoomCore<C> {
 		now: number,
 	): boolean {
 		const owner = this.memberById(m.ownerId);
-		if (!owner || msg.t !== "MOVE_PATH" || poseAt(owner.move, now).moving) return false;
+		// turning where it stands (not while the host walks it along) is always its own
+		if (msg.t === "MOVE_VEL")
+			return msg.speed === 0 && !poseAt(m.move, now).moving && dist(msg.pos, this.positionOf(m, now)) <= 0.3;
+		if (!owner || poseAt(owner.move, now).moving) return false;
 		if (m.lead && now < m.lead.until) return false;
 		const end = msg.path[msg.path.length - 1] as Vec2;
 		return (
@@ -1186,10 +1197,14 @@ export class RoomCore<C> {
 			this.reject(conn, m, here, now);
 			return;
 		}
-		const stopped = msg.speed === 0 || (msg.dir[0] === 0 && msg.dir[1] === 0);
-		m.move = stopped
-			? { kind: "idle", pos: msg.pos, at: now }
-			: { kind: "vel", pos: msg.pos, dir: msg.dir, speed: msg.speed, at: now };
+		const still = msg.dir[0] === 0 && msg.dir[1] === 0;
+		// speed 0 with a direction: standing, turned that way (docs/prd.md 3.4.11)
+		m.move =
+			msg.speed === 0 && !still
+				? { kind: "idle", pos: msg.pos, at: now, face: msg.dir }
+				: msg.speed === 0 || still
+					? { kind: "idle", pos: msg.pos, at: now }
+					: { kind: "vel", pos: msg.pos, dir: msg.dir, speed: msg.speed, at: now };
 		this.transport.persist(conn, m);
 		this.broadcastAbout(m, { t: "MOVED", id: m.id, move: m.move });
 	}

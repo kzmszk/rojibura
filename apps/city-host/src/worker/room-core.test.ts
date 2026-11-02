@@ -908,4 +908,23 @@ describe("an AI moving its own body", () => {
 		ctx.room.handle(a, pat);
 		expect(last(a)).toMatchObject({ t: "NOTICE", message: "自分のAIのそばへ行ってください" });
 	});
+
+	test("standing, it turns a way of its own and keeps to it, even by its owner; sitting down keeps it too", () => {
+		const a = conn("a");
+		const bot = conn("bot");
+		place(a, human("alice"), [-10, -10]);
+		place(bot, ai("bot", "alice"), [-12, -10]);
+		ctx.room.handle(a, { t: "COMPANION", on: true });
+		ctx.clock.advance(3000);
+		const here = ctx.room.positionOf(ctx.room.members.get(bot) as never);
+		a.inbox.length = 0;
+		ctx.room.handle(bot, { t: "MOVE_VEL", pos: here, dir: [0, -1], speed: 0, seq: 1 });
+		expect(last(a)).toMatchObject({ t: "MOVED", id: "a_bot", move: { kind: "idle", face: [0, -1] } });
+		ctx.room.handle(bot, { t: "ACTION", motion: "sit" });
+		expect(ctx.room.members.get(bot)?.move).toMatchObject({ kind: "idle", posture: "sit", face: [0, -1] });
+		// a turn is not a walk: one from somewhere else is not taken
+		bot.inbox.length = 0;
+		ctx.room.handle(bot, { t: "MOVE_VEL", pos: [here[0] + 1, here[1]], dir: [1, 0], speed: 0, seq: 2 });
+		expect(types(bot)).toEqual(["CORRECT"]);
+	});
 });
