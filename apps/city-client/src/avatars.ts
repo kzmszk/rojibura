@@ -262,6 +262,8 @@ export class AvatarView {
 	private readonly tag: CSS2DObject;
 	/** Someone to look at (world, their eyes): an AI's owner close by (docs/prd.md 3.4.9). */
 	private attention: THREE.Vector3 | null = null;
+	/** Standing, the way it would rather face (radians), or null: an AI beside its owner (docs/prd.md 3.4.9). */
+	private rest: number | null = null;
 	/** How far the head is turned towards them (radians, eased). */
 	private headTurn = 0;
 	/**
@@ -668,7 +670,7 @@ export class AvatarView {
 			const want = Math.max(fly, (under ?? -Infinity) + 0.3) + Math.sin(hostNow / 700) * 0.08;
 			this.y += (want - this.y) * Math.min(1, dt * 5);
 		} else {
-			const ground = scene.heightAt(pose.pos[0], pose.pos[1]);
+			const ground = scene.heightAt(pose.pos[0], pose.pos[1], this.y);
 			if (ground !== null && this.landing) {
 				this.y += (ground - this.y) * Math.min(1, dt * 3);
 				if (Math.abs(ground - this.y) < 0.05) this.landing = false;
@@ -710,6 +712,9 @@ export class AvatarView {
 			this.turnTo(this.faceTo, dt * 6);
 		} else if (chosen) {
 			this.turnTo(Math.atan2(chosen[0], chosen[1]), dt * 4);
+		} else if (this.rest !== null && !posture0 && !gesturing && !scripted) {
+			// beside its owner it faces their way; only its head turns to them now and then
+			this.turnTo(this.rest, dt * 2);
 		} else if (attended !== null && !posture0 && !gesturing && !scripted) {
 			// (while a script plays only the head turns to what it looks at: a way like "left" moves with the body)
 			this.turnTo(attended, dt * 3);
@@ -849,6 +854,11 @@ export class AvatarView {
 	 */
 	attend(eyes: THREE.Vector3 | null): void {
 		this.attention = eyes;
+	}
+
+	/** Standing, the way to face (radians; 0 is +Z), or null to turn to whoever it attends to. */
+	standFacing(heading: number | null): void {
+		this.rest = heading;
 	}
 
 	/** Where the avatar faces (radians; 0 is +Z). */

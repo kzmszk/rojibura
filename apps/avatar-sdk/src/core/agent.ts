@@ -41,6 +41,7 @@ import {
 	systemPrompt,
 	userPrompt,
 } from "./prompt.ts";
+import { Stroll } from "./stroll.ts";
 import type { Decision, Landmark, LLM, Logger, Memory, Navigator, Persona } from "./types.ts";
 import { World } from "./world.ts";
 
@@ -154,9 +155,20 @@ export class Agent {
 	}
 	private readonly random: () => number;
 
+	/** Standing about with its owner: a step now and then (docs/prd.md 3.4.9). */
+	private readonly stroll: Stroll;
+
 	constructor(opts: AgentOptions) {
 		this.o = opts;
 		this.random = opts.random ?? Math.random;
+		this.stroll = new Stroll({
+			world: this.world,
+			nav: () => this.o.nav,
+			send: (m) => this.o.send(m),
+			seq: () => ++this.seq,
+			busy: () => this.busy || this.convs.size > 0 || this.going !== null,
+			random: this.random,
+		});
 	}
 
 	get id(): AvatarId | null {
@@ -166,6 +178,7 @@ export class Agent {
 	stop(): void {
 		if (this.wanderTimer) clearTimeout(this.wanderTimer);
 		this.wanderTimer = null;
+		this.stroll.stop();
 	}
 
 	/** Host time estimated from WELCOME.serverTime. */
@@ -178,7 +191,11 @@ export class Agent {
 	}
 
 	handle(msg: HostToClient): void {
-		if (this.world.apply(msg)) {
+		const applied = this.world.apply(msg);
+		// walking with its owner the host moves it: an errand it was on is over
+		if (msg.t === "COMPANY" && msg.on) this.going = null;
+		this.stroll.sync();
+		if (applied) {
 			if (msg.t === "WELCOME") {
 				this.o.logger.info(
 					`${msg.resumed ? "back" : "joined"} as ${msg.you}; ${msg.avatars.length} avatars here`,

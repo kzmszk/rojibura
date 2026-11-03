@@ -813,7 +813,7 @@ describe("wallets, work and study", () => {
 });
 
 describe("walking with your AIs", () => {
-	test("they come up close, walk along a little ahead to the right of where you go, and do not wander", () => {
+	test("they come to your side, walk along beside you to the right of where you go, and do not wander", () => {
 		const a = conn("a");
 		const bot = conn("bot");
 		place(a, human("alice"), [-10, -10]);
@@ -825,16 +825,15 @@ describe("walking with your AIs", () => {
 		})();
 		expect(w.avatars.find((x) => x.id === "a_bot")?.ownerId).toBe("h_alice");
 		ctx.room.handle(a, { t: "COMPANION", on: true });
-		// standing, facing +z (nothing walked yet): a metre off, in front to the right (-x)
+		// standing, facing +z (nothing walked yet): at her right (-x), a little forward
 		const first = last(a);
 		expect(first).toMatchObject({ t: "MOVED", id: "a_bot", move: { kind: "path" } });
 		const end = (m: HostToClient | undefined) =>
 			m?.t === "MOVED" && m.move.kind === "path" ? m.move.path.at(-1) : null;
 		const near = end(first) ?? [0, 0];
-		expect(near[0]).toBeCloseTo(-10.42, 3);
-		expect(near[1]).toBeCloseTo(-9.09, 3);
-		expect(Math.hypot(near[0] + 10, near[1] + 10)).toBeCloseTo(1, 2);
-		// alice walks 10 m along +z; the AI goes along, ending ahead to her right, and takes as long
+		expect(near[0]).toBeCloseTo(-10.8, 3);
+		expect(near[1]).toBeCloseTo(-9.85, 3);
+		// alice walks 10 m along +z; the AI goes along, ending beside her on the right, and takes as long
 		ctx.room.handle(a, {
 			t: "MOVE_PATH",
 			path: [
@@ -845,14 +844,14 @@ describe("walking with your AIs", () => {
 			seq: 1,
 		});
 		const along = last(a);
-		expect(end(along)?.[0]).toBeCloseTo(-10.8, 3);
-		expect(end(along)?.[1]).toBeCloseTo(2, 3);
-		// she is there and says she stopped: it comes back up close, in front of her
+		expect(end(along)?.[0]).toBeCloseTo(-10.9, 3);
+		expect(end(along)?.[1]).toBeCloseTo(0.3, 3);
+		// she is there and says she stopped: it comes to her side
 		ctx.clock.advance((10 / 1.4) * 1000 + 100);
 		ctx.room.handle(a, { t: "MOVE_VEL", pos: [-10, 0], dir: [0, 0], speed: 0, seq: 2 });
 		const close = last(a);
-		expect(end(close)?.[0]).toBeCloseTo(-10.42, 3);
-		expect(end(close)?.[1]).toBeCloseTo(0.91, 3);
+		expect(end(close)?.[0]).toBeCloseTo(-10.8, 3);
+		expect(end(close)?.[1]).toBeCloseTo(0.15, 3);
 		// its own steps are not taken meanwhile
 		bot.inbox.length = 0;
 		ctx.room.handle(bot, {
@@ -974,13 +973,20 @@ describe("an AI moving its own body", () => {
 		place(bot, ai("bot", "alice"), [-12, -10]);
 		ctx.room.handle(a, { t: "COMPANION", on: true });
 		ctx.clock.advance(3000);
-		// a metre from her: too far to touch
+		// it steps 2 m off: too far to touch
+		ctx.room.handle(bot, {
+			t: "MOVE_PATH",
+			path: [ctx.room.positionOf(ctx.room.members.get(bot) as never), [-12, -10]],
+			speed: 1.4,
+			seq: 1,
+		});
+		ctx.clock.advance(3000);
 		ctx.room.handle(bot, pat);
 		expect(last(bot)).toMatchObject({ t: "NOTICE", kind: "rejected" });
 		// it steps up to 40 cm in front of her by itself
 		const here = ctx.room.positionOf(ctx.room.members.get(bot) as never);
 		bot.inbox.length = 0;
-		ctx.room.handle(bot, { t: "MOVE_PATH", path: [here, [-10, -9.6]], speed: 1.4, seq: 1 });
+		ctx.room.handle(bot, { t: "MOVE_PATH", path: [here, [-10, -9.6]], speed: 1.4, seq: 2 });
 		expect(bot.inbox.map((m) => m.t)).toEqual(["MOVED"]);
 		ctx.clock.advance(2000);
 		a.inbox.length = 0;
@@ -1178,5 +1184,56 @@ describe("floating and warping (docs/prd.md 3.4.13, 3.4.14)", () => {
 		expect(last(a)).toMatchObject({ t: "NOTICE", kind: "rejected" });
 		ctx.room.handle(a, { t: "WARP", to: "nowhere" });
 		expect(last(a)).toMatchObject({ t: "NOTICE", kind: "rejected" });
+	});
+	test("the AIs walking with you come along at once", () => {
+		const a = conn("a");
+		const bot = conn("bot");
+		place(a, human("alice"), [-10, -10]);
+		place(bot, ai("bot", "alice"), [-14, -12]);
+		ctx.room.handle(a, { t: "COMPANION", on: true });
+		ctx.clock.advance(10_000);
+		ctx.room.handle(a, { t: "WARP", to: "cafe" });
+		const there = ctx.room.positionOf(ctx.room.members.get(a) as never);
+		const it = ctx.room.positionOf(ctx.room.members.get(bot) as never);
+		expect(Math.hypot(it[0] - there[0], it[1] - there[1])).toBeLessThan(1.2);
+	});
+
+	test("afloat one goes faster; on the ground no faster than a run", () => {
+		ctx = setup({ fly: true });
+		const a = conn("a");
+		place(a, human("alice"), [-10, -10]);
+		ctx.room.handle(a, { t: "MOVE_VEL", pos: [-10, -10], dir: [0, 1], speed: 15, seq: 1 });
+		expect(last(a)).toMatchObject({ t: "MOVED", move: { kind: "vel", speed: 6 } });
+		ctx.room.handle(a, { t: "FLY", alt: 10 });
+		const here = ctx.room.positionOf(ctx.room.members.get(a) as never);
+		ctx.room.handle(a, { t: "MOVE_VEL", pos: here, dir: [0, 1], speed: 15, seq: 2 });
+		expect(last(a)).toMatchObject({ t: "MOVED", move: { kind: "vel", speed: 15 } });
+	});
+});
+
+describe("a move never cuts through a wall", () => {
+	// the host thinks alice is just off the building's corner; her page thinks she is round it
+	const here: Vec2 = [-5.3, 4.2];
+	const there: Vec2 = [-4.2, 5.3];
+
+	test("a path from where her page thinks she is: the way from where she is goes through, so no", () => {
+		const a = conn("a");
+		place(a, human("alice"), here);
+		ctx.room.handle(a, {
+			t: "MOVE_PATH",
+			path: [there, [3, 5.3]],
+			speed: 1.4,
+			seq: 1,
+		});
+		expect(last(a)?.t).toBe("CORRECT");
+	});
+
+	test("walking with keys from there: no", () => {
+		const a = conn("a");
+		place(a, human("alice"), here);
+		ctx.room.handle(a, { t: "MOVE_VEL", pos: there, dir: [1, 0], speed: 1.4, seq: 1 });
+		expect(last(a)?.t).toBe("CORRECT");
+		ctx.room.handle(a, { t: "MOVE_VEL", pos: [-5.4, 4.3], dir: [0, 1], speed: 1.4, seq: 2 });
+		expect(last(a)).toMatchObject({ t: "MOVED", move: { kind: "vel" } });
 	});
 });

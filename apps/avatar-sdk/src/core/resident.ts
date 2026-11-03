@@ -59,6 +59,7 @@ import { dayOf, type Journal, jstDate, LIFE_MAX, searchJournal, tail } from "./j
 import { dayEntry, doneEntry, doneEvent, lifeGuide, lifeLines } from "./life-text.ts";
 import { PrivacyIndex } from "./privacy.ts";
 import { clean, cleanNote, FALLBACK_REPLIES } from "./prompt.ts";
+import { Stroll } from "./stroll.ts";
 import type { Landmark, Logger, Memory, Navigator, Persona } from "./types.ts";
 import { World } from "./world.ts";
 
@@ -217,9 +218,20 @@ export class Resident {
 	private readonly o: ResidentOptions;
 	private readonly random: () => number;
 
+	/** Standing about with its owner: a step now and then (docs/prd.md 3.4.9). */
+	private readonly stroll: Stroll;
+
 	constructor(opts: ResidentOptions) {
 		this.o = opts;
 		this.random = opts.random ?? Math.random;
+		this.stroll = new Stroll({
+			world: this.world,
+			nav: () => this.o.nav,
+			send: (m) => this.o.send(m),
+			seq: () => ++this.seq,
+			busy: () => this.busy || this.convs.size > 0 || this.stopped,
+			random: this.random,
+		});
 	}
 
 	get id(): AvatarId | null {
@@ -269,6 +281,7 @@ export class Resident {
 		if (this.arrivalTimer) clearTimeout(this.arrivalTimer);
 		if (this.bodyTimer) clearTimeout(this.bodyTimer);
 		this.tickTimer = this.arrivalTimer = this.bodyTimer = null;
+		this.stroll.stop();
 		if (this.turn) this.o.mind.abort();
 		this.o.mirror?.close?.();
 	}
@@ -278,7 +291,9 @@ export class Resident {
 		const leaving = msg.t === "LEFT" ? this.near(msg.id) : null;
 		// told again after a dropped connection that it walks with its owner: nothing new
 		const already = msg.t === "COMPANY" && msg.on && this.world.company === msg.owner;
-		if (this.world.apply(msg)) {
+		const applied = this.world.apply(msg);
+		if (!this.stopped) this.stroll.sync();
+		if (applied) {
 			switch (msg.t) {
 				case "WELCOME":
 					// back after a dropped connection (docs/prd.md 3.3): it never left; talks go on

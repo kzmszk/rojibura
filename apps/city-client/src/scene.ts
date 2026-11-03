@@ -231,9 +231,13 @@ export class CityScene {
 		this.ground = this.ground.filter((g) => g !== o);
 	}
 
-	/** Height of the walkable surface under (x, z), or null. */
-	heightAt(x: number, z: number): number | null {
-		const hint = this.heightHint?.(x, z) ?? null;
+	/**
+	 * Height of the walkable surface under (x, z), or null. Looked for from a little above the walkable area's
+	 * height there; off it, from a little above `near` (where one was a moment ago: on a mountain, high above a
+	 * fixed height), else from 30 m.
+	 */
+	heightAt(x: number, z: number, near?: number): number | null {
+		const hint = this.heightHint?.(x, z) ?? near ?? null;
 		this.down.set(new THREE.Vector3(x, hint === null ? 30 : hint + 2, z), new THREE.Vector3(0, -1, 0));
 		// colliders of built models are hidden but still in the scene
 		const hit = this.down.intersectObjects(this.ground, true).find((h) => h.object.visible);
