@@ -89,6 +89,11 @@ export const BUILD_LABEL_MAX = 24;
 /** An offset from the anchor may be at most this far (m). */
 export const BUILD_OFFSET_MAX = 50;
 
+// sitting on a seat (docs/prd.md 3.4.5): one stands at most this far from the seat to sit on it (m); the button
+// to sit shows within SEAT_NEAR
+export const SEAT_REACH = 1.2;
+export const SEAT_NEAR = 3;
+
 // doing things together (docs/prd.md 3.4.6)
 export const OFFER_REACH = 3; // m: how close someone must be to be asked
 export const OFFER_TTL_MS = 15_000;

@@ -186,8 +186,14 @@ export function parseClientMessage(raw: string | ArrayBuffer): Parsed<ClientToHo
 		case "ACTION": {
 			if (!MOTIONS.includes(v.motion as Motion)) return fail("bad motion");
 			if (v.target !== undefined && !isAvatarId(v.target)) return fail("bad target");
+			if (
+				v.seat !== undefined &&
+				(v.motion !== "sit" || !Number.isInteger(v.seat) || !isNum(v.seat, 0, 99_999))
+			)
+				return fail("bad seat");
 			const msg: ClientToHost = { t: "ACTION", motion: v.motion as Motion };
 			if (v.target !== undefined) msg.target = v.target as string;
+			if (v.seat !== undefined) msg.seat = v.seat as number;
 			return { ok: true, msg };
 		}
 		case "SAY": {

@@ -42,7 +42,12 @@ import {
 	pathLeg,
 	poseAt,
 	RUN_SPEED,
+	SEAT_NEAR,
+	SEAT_REACH,
+	type Seat,
+	type SeatsData,
 	SKILL_NAMES,
+	seatsOf,
 	TOGETHER_MS,
 	type Together,
 	travelReason,
@@ -54,7 +59,7 @@ import { AgentPanel } from "./agent-panel.ts";
 import { api, onApiUsage } from "./api.ts";
 import { AreaNature, SEASON_LABEL } from "./area-nature.ts";
 import { currentArea, DETAIL_KEY, savedDetail, sceneFiles, touchFirst, travelUrl } from "./areas.ts";
-import { AvatarView, TRAVEL } from "./avatars.ts";
+import { AvatarView, setSeats, TRAVEL } from "./avatars.ts";
 import { BuildPanel } from "./build-ui.ts";
 import { BuildsView, makeObject, modelsFromHost } from "./builds.ts";
 import { VIEW_LABEL, VIEWS, type View, ViewController } from "./camera.ts";
@@ -802,7 +807,13 @@ async function startCity(
 	stopJobButton.type = "button";
 	stopJobButton.hidden = true;
 	stopJobButton.onclick = () => conn.send({ t: "JOB", kind: null });
-	motionBar.append(pickButton, throwButton, dropButton, eatButton, ...jobButtons, stopJobButton);
+	// a bench, a sofa or a chair close by: sit on it (docs/prd.md 3.4.5), or get up from it
+	const seatButton = el("button", "", "🪑 腰かける");
+	seatButton.type = "button";
+	seatButton.title = "近くのベンチや椅子に座る（R）";
+	seatButton.hidden = true;
+	seatButton.onclick = () => seatOrStand();
+	motionBar.append(seatButton, pickButton, throwButton, dropButton, eatButton, ...jobButtons, stopJobButton);
 	// your own AI close by: pat its head (docs/prd.md 3.4.11)
 	const patButton = el("button", "", "🤚");
 	patButton.type = "button";
@@ -826,6 +837,15 @@ async function startCity(
 	// at a shop's counter: what it sells (docs/prd.md 3.8.6)
 	const shops = new ShopsUi((shop, goods) => conn.send({ t: "BUY", shop: shop.id, goods }));
 	void shops.load(area.dir);
+	// benches, sofas and chairs to sit on (docs/prd.md 3.4.5)
+	let areaSeats: Seat[] = [];
+	void fetch(`${area.dir}/seats.json`)
+		.then((r) => (r.ok ? (r.json() as Promise<SeatsData>) : null))
+		.catch(() => null)
+		.then((d) => {
+			areaSeats = seatsOf(d);
+			setSeats(areaSeats);
+		});
 	root.append(hud, chat, toast, travel, actsBar, offerBox, agentPanel.el, settings.el, shops.el, cityMap.el);
 
 	const avatars = new Map<AvatarId, AvatarView>();
@@ -1389,6 +1409,8 @@ async function startCity(
 			nextView();
 		} else if (!typing() && !panel.open && e.key.toLowerCase() === "e") {
 			pickNearest();
+		} else if (!typing() && !panel.open && e.key.toLowerCase() === "r") {
+			seatOrStand();
 		} else if (!typing() && !panel.open && e.key.toLowerCase() === "h") {
 			patMine();
 		} else if (!typing() && !panel.open && e.key.toLowerCase() === "t") {
@@ -1691,6 +1713,82 @@ async function startCity(
 		if (walkTo([thing.position.x, thing.position.z], WALK_SPEED)) pickAfter = id;
 		else showToast("そこへは行けません");
 	}
+	// ---- sitting on a seat (🪑 腰かける, docs/prd.md 3.4.5) ----
+	/** Stand this far in front of a seat to sit down on it. */
+	const SEAT_FRONT = 0.5;
+	/** The seat being walked to, to sit on once there. */
+	let seatAfter: number | null = null;
+	/** The seat you sit on now, if any. */
+	function mySeat(): number | undefined {
+		const move = myId ? avatars.get(myId)?.state.move : undefined;
+		return move?.kind === "idle" && move.posture === "sit" ? move.seat : undefined;
+	}
+	/**
+	 * The nearest free seat within SEAT_NEAR, facing your side of it (a bench with no back faces both ways), on
+	 * about your level; null if none.
+	 */
+	function nearestSeat(): number | null {
+		const mine = myId ? avatars.get(myId) : undefined;
+		if (!mine) return null;
+		const taken = new Set<number>();
+		for (const v of avatars.values()) {
+			const m = v.state.move;
+			if (v !== mine && m.kind === "idle" && m.seat !== undefined) taken.add(m.seat);
+		}
+		const here = poseAt(mine.state.move, conn.hostNow()).pos;
+		const y = mine.root.position.y;
+		let best: { i: number; d: number } | null = null;
+		areaSeats.forEach((s, i) => {
+			if (taken.has(i) || Math.abs(s.y - y - 0.45) > 1) return;
+			const dx = here[0] - s.pos[0];
+			const dz = here[1] - s.pos[1];
+			const d = Math.hypot(dx, dz);
+			if (d > SEAT_NEAR || dx * s.face[0] + dz * s.face[1] < -0.05) return;
+			if (!best || d < best.d) best = { i, d };
+		});
+		return (best as { i: number } | null)?.i ?? null;
+	}
+	/** Sits on the nearest free seat (walking up to it first), or gets up from the one you sit on. */
+	function seatOrStand(): void {
+		if (mySeat() !== undefined) {
+			act("sit");
+			return;
+		}
+		const i = nearestSeat();
+		const seat = i === null ? undefined : areaSeats[i];
+		const mine = myId ? avatars.get(myId) : undefined;
+		if (i === null || !seat || !mine) {
+			showToast("近くに座れる所がありません");
+			return;
+		}
+		stopGoing();
+		const front: Vec2 = [seat.pos[0] + seat.face[0] * SEAT_FRONT, seat.pos[1] + seat.face[1] * SEAT_FRONT];
+		const here = poseAt(mine.state.move, conn.hostNow()).pos;
+		if (dist(here, front) > 0.25 && walkTo(front, WALK_SPEED)) seatAfter = i;
+		else sitOn(i);
+	}
+	function sitOn(i: number): void {
+		const mine = myId ? avatars.get(myId) : undefined;
+		const seat = areaSeats[i];
+		if (!mine || !seat) return;
+		const now = conn.hostNow();
+		const { pos } = poseAt(mine.state.move, now);
+		if (dist(pos, seat.pos) > SEAT_REACH) {
+			showToast("そこには届きません");
+			return;
+		}
+		mine.setMove({ kind: "idle", pos, at: now, posture: "sit", face: seat.face, seat: i });
+		conn.send({ t: "ACTION", motion: "sit", seat: i });
+	}
+	function seatStep(): void {
+		if (seatAfter === null) return;
+		const mine = myId ? avatars.get(myId) : undefined;
+		if (!mine) return;
+		if (poseAt(mine.state.move, conn.hostNow()).moving) return;
+		const i = seatAfter;
+		seatAfter = null;
+		sitOn(i);
+	}
 	function pickStep(): void {
 		const mine = myId ? avatars.get(myId) : undefined;
 		const thing = pickAfter ? items.meshes.find((o) => o.userData.itemId === pickAfter) : undefined;
@@ -1875,6 +1973,7 @@ async function startCity(
 	function stopGoing(): void {
 		endFollow();
 		going = null;
+		seatAfter = null;
 	}
 	/** After your yes, your AI walks to a place and you follow behind it until it is there. */
 	function trail(id: AvatarId, to: Vec2, place: string): void {
@@ -2104,6 +2203,9 @@ async function startCity(
 		}
 		items.update(now);
 		pickButton.hidden = nearestThing() === null;
+		const seated = mySeat() !== undefined;
+		seatButton.hidden = !seated && (seatAfter !== null || nearestSeat() === null);
+		seatButton.textContent = seated ? "🧍 立つ" : "🪑 腰かける";
 		patButton.hidden = myAiToPat() === null;
 		const withAi = [...avatars.values()].some((a) => a.state.kind === "ai" && a.state.ownerId === myId);
 		companionRow.hidden = !withAi;
@@ -2130,6 +2232,7 @@ async function startCity(
 		followStep(t);
 		if (companion && withAi) stopStep();
 		pickStep();
+		seatStep();
 		goStep(t);
 		// stop at the edge of the walkable area instead of walking into walls
 		if (mine?.state.move.kind === "vel") {

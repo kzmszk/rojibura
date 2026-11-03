@@ -77,6 +77,17 @@ def write(out_dir):
     json.dump(shops, open(os.path.join(plan.AREA_DIR, 'shops.json'), 'w'), ensure_ascii=False, indent='\t')
 
 
+def write_seats():
+    """assets/areas/hajimari/seats.json: where one can sit (benches, sofas, chairs), collected while building."""
+    from . import geom
+    seats = [[*G(x, y), round(z, 3), *[round(v, 3) for v in G(fx, fy)]] for (x, y, z, fx, fy) in geom.SEATS]
+    with open(os.path.join(plan.AREA_DIR, 'seats.json'), 'w') as f:
+        f.write('{\n\t"format": ["X", "Z", "Y (the seat\'s top)", "faceX", "faceZ"],\n\t"seats": [\n')
+        f.write(',\n'.join('\t\t' + json.dumps(s) for s in seats))
+        f.write('\n\t]\n}\n')
+    return len(seats)
+
+
 GOODS = {
     'seven': [
         ('onigiri', 'おにぎり（鮭）', 3, '#f4f1e8'), ('sandwich', 'たまごサンド', 4, '#f3d77a'),

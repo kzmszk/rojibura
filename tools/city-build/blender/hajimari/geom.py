@@ -12,6 +12,25 @@ import numpy as np
 TILE = {}
 CHUNK = 120.0
 
+# where one can sit, collected while building (meta.write_seats writes them): (x, y, z, fx, fy), the hips over
+# (x, y), the seat's top at z, facing (fx, fy)
+SEATS = []
+SEAT_EVERY = 0.62
+
+
+def seats(cx, cy, z, tx, ty, length, fx, fy, both=False):
+    """Places to sit along a seat `length` long, centred at (cx, cy) and running along (tx, ty), its top at z,
+    facing (fx, fy), one every SEAT_EVERY or so (and facing the other way too if `both`: a seat with no back)."""
+    n = max(1, int((length + 0.1) / SEAT_EVERY))
+    tl = math.hypot(tx, ty)
+    fl = math.hypot(fx, fy)
+    for i in range(n):
+        u = (i - (n - 1) / 2) * length / n
+        x, y = cx + tx / tl * u, cy + ty / tl * u
+        SEATS.append((x, y, z, fx / fl, fy / fl))
+        if both:
+            SEATS.append((x, y, z, -fx / fl, -fy / fl))
+
 
 class Bucket:
     __slots__ = ('v', 'f', 'uv', 'col')

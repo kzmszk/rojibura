@@ -25,6 +25,7 @@ export type MoveName =
 	| "backroll"
 	| "backflip"
 	| "stepback"
+	| "perch"
 	| "handshake"
 	| "hug"
 	| "pick"
@@ -480,6 +481,29 @@ const KICK: Bones = {
  * line, 0.33 m ahead at waist height, where the other's right hand comes too.
  */
 const SHAKE: Bones = { spine: [4, 0, 0], rightUpperArm: [0, 110, 46], rightLowerArm: [0, 12, 0] };
+
+/**
+ * Sitting on a seat (a bench, a chair): the thighs nearly level, the shins straight down to the feet flat on the
+ * ground, the hands on the thighs. The buttocks are PERCH_H above the ground (the hips 0.34 m lower than
+ * standing), so on a seat that high the feet just reach the ground.
+ */
+const PERCHED: Frame = {
+	bones: {
+		spine: [4, 0, 0],
+		head: [4, 0, 0],
+		leftUpperArm: [-22, 0, -72],
+		rightUpperArm: [-22, 0, 72],
+		leftLowerArm: [0, -48, 0],
+		rightLowerArm: [0, 48, 0],
+		leftUpperLeg: [-82, 0, -4],
+		rightUpperLeg: [-82, 0, 4],
+		leftLowerLeg: [82, 0, 0],
+		rightLowerLeg: [82, 0, 0],
+	},
+	hips: [0, -0.34, 0],
+};
+/** How high the buttocks are above the feet sitting on a seat (PERCHED), on the reference rig (m). */
+export const PERCH_H = 0.46;
 
 /** Arms round someone 0.4 m away: the left over the shoulder, the right lower round the back; head aside. */
 const HUG: Bones = {
@@ -968,6 +992,34 @@ export const MOVES: {
 						),
 					],
 					[1.45, turn(-360, {})],
+				]),
+				"above",
+			),
+	},
+	{
+		// sitting down on a seat (a sit with a seat, docs/prd.md 3.4.5): held until one gets up
+		name: "perch",
+		play: "hold",
+		clip: () =>
+			sampled(
+				"perch",
+				1.1,
+				keyed([
+					[0, { bones: {} }],
+					[
+						0.5,
+						{
+							bones: {
+								spine: [16, 0, 0],
+								leftUpperLeg: [-45, 0, -4],
+								rightUpperLeg: [-45, 0, 4],
+								leftLowerLeg: [60, 0, 0],
+								rightLowerLeg: [60, 0, 0],
+							},
+							hips: [0, -0.16, 0],
+						},
+					],
+					[1.1, PERCHED],
 				]),
 				"above",
 			),

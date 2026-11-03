@@ -11,6 +11,7 @@ import {
 	type Motion,
 	type MoveState,
 	poseAt,
+	type Seat,
 	type Status,
 } from "@rojibura/protocol";
 import * as THREE from "three";
@@ -18,7 +19,15 @@ import { GLTFLoader, type GLTFParser } from "three/examples/jsm/loaders/GLTFLoad
 import { CSS2DObject } from "three/examples/jsm/renderers/CSS2DRenderer.js";
 import { clone as cloneSkinned } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { type BodyParts, BodyRig, BodyScript, type Bones, frameOf, roughSpot, spotOn } from "./body.ts";
-import { groundSpeed, legLength, MOVES, type MoveName, REFERENCE_LEG, referenceRig } from "./moves.ts";
+import {
+	groundSpeed,
+	legLength,
+	MOVES,
+	type MoveName,
+	PERCH_H,
+	REFERENCE_LEG,
+	referenceRig,
+} from "./moves.ts";
 import { retarget } from "./retarget.ts";
 import type { CityScene } from "./scene.ts";
 import { Bath, rigifyBones } from "./towel.ts";
@@ -27,7 +36,17 @@ import { Bath, rigifyBones } from "./towel.ts";
 interface Motions {
 	clips: THREE.AnimationClip[];
 	pace: Partial<Record<MoveName, number>>;
+	/** The legs' length to the reference rig's (the motions' heights scale by it). */
+	legs: number;
 }
+
+/** The area's seats (its seats.json): someone sitting on one is drawn on it (docs/prd.md 3.4.5). */
+let seats: Seat[] = [];
+export function setSeats(list: Seat[]): void {
+	seats = list;
+}
+/** Sitting down on a seat takes this long (ms): meanwhile the body goes from where it stood onto the seat. */
+const ONTO_SEAT_MS = 900;
 
 interface Template {
 	scene: THREE.Object3D;
@@ -78,6 +97,7 @@ function motionsFor(bones: Record<string, THREE.Object3D>): Motions {
 	return {
 		clips: clips.map((c) => retarget(rig, c, bones)),
 		pace: { walk: pace.walk * legs, run: pace.run * legs },
+		legs,
 	};
 }
 
@@ -247,6 +267,8 @@ export class AvatarView {
 	private disposed = false;
 	private mixer: THREE.AnimationMixer | null = null;
 	private actions: Record<string, THREE.AnimationAction> = {};
+	/** The legs' length to the reference rig's (VRMs; 1 for others). */
+	private legs = 1;
 	private pace: Motions["pace"] = {};
 	private current = "";
 	/** A gesture playing once, until this host time. */
@@ -360,6 +382,7 @@ export class AvatarView {
 		if (this.inside) this.seenFromInside(true);
 		this.setClips(new THREE.AnimationMixer(vrm.scene), moves.clips);
 		this.pace = moves.pace;
+		this.legs = moves.legs;
 		if (this.bathing) this.setBathing(true);
 	}
 
@@ -678,6 +701,21 @@ export class AvatarView {
 				this.y = Math.abs(ground - this.y) > 2 ? ground : this.y + (ground - this.y) * Math.min(1, dt * 12);
 		}
 		this.root.position.set(pose.pos[0], this.y, pose.pos[1]);
+		// on a seat: it goes from where it stood onto the seat as it sits down, the buttocks on the seat's top
+		const seat =
+			move.kind === "idle" && move.posture === "sit" && move.seat !== undefined
+				? seats[move.seat]
+				: undefined;
+		if (seat) {
+			const k = Math.min(1, Math.max(0, (hostNow - move.at) / ONTO_SEAT_MS));
+			const e = k * k * (3 - 2 * k);
+			const p = this.root.position;
+			p.x += (seat.pos[0] - p.x) * e;
+			p.z += (seat.pos[1] - p.z) * e;
+			// (no lower than the ground: a short seat for long legs)
+			const y = Math.max(this.y, seat.y - PERCH_H * this.legs);
+			p.y = this.y + (y - this.y) * e;
+		}
 		// a roll travels along its path without turning to it (a back roll goes backwards)
 		const rolling = this.gesture !== null && TRAVEL.has(this.gesture.name) && hostNow < this.gesture.until;
 		const posture0 = move.kind === "idle" ? move.posture : undefined;
@@ -739,10 +777,11 @@ export class AvatarView {
 		if (rolling && this.gesture) want = this.gesture.name;
 		else if (pose.moving && fly === undefined) want = speed > 2.5 && this.actions.run ? "run" : "walk";
 		else if (this.gesture && hostNow < this.gesture.until) want = this.gesture.name;
+		else if (seat && this.actions.perch) want = "perch";
 		else if (posture && this.actions[posture]) want = posture;
 		// a posture that began before this avatar was drawn (someone who came later) shows as it is now
-		const settled =
-			posture === want && hostNow - move.at > (this.actions[want]?.getClip().duration ?? 0) * 1000;
+		const held = posture === want || (seat !== undefined && want === "perch");
+		const settled = held && hostNow - move.at > (this.actions[want]?.getClip().duration ?? 0) * 1000;
 		this.play(want, settled);
 		// walk and run keep pace with the ground, so the feet do not slide
 		const pace = this.pace[want as MoveName];

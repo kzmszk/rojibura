@@ -658,6 +658,52 @@ describe("doing things together", () => {
 	});
 });
 
+describe("sitting on a seat", () => {
+	const seats = [
+		{ pos: [-10, -9.4] as Vec2, y: 0.46, face: [0, -1] as Vec2 },
+		{ pos: [-30, -30] as Vec2, y: 0.46, face: [0, -1] as Vec2 },
+	];
+	beforeEach(() => {
+		ctx = setup({ seats });
+	});
+
+	test("on one close by and free; not one far off, nor one someone sits on", () => {
+		const a = conn("a");
+		const b = conn("b");
+		place(a, human("alice"), [-10, -10]);
+		place(b, human("bob"), [-10.3, -10]);
+		ctx.room.handle(a, { t: "ACTION", motion: "sit", seat: 0 });
+		expect(ctx.room.members.get(a)?.move).toMatchObject({ kind: "idle", posture: "sit", seat: 0, face: [0, -1] });
+		ctx.room.handle(b, { t: "ACTION", motion: "sit", seat: 0 });
+		expect(last(b)).toMatchObject({ t: "NOTICE", kind: "rejected" });
+		ctx.room.handle(b, { t: "ACTION", motion: "sit", seat: 1 });
+		expect(last(b)).toMatchObject({ t: "NOTICE", kind: "rejected" });
+		// without asking for one a person sits on the ground
+		ctx.room.handle(b, { t: "ACTION", motion: "sit" });
+		const move = ctx.room.members.get(b)?.move;
+		expect(move?.kind === "idle" && move.seat).toBeUndefined();
+		// she walks on: the seat is free again
+		ctx.room.handle(a, {
+			t: "MOVE_PATH",
+			path: [
+				[-10, -10],
+				[-12, -10],
+			],
+			speed: 1.4,
+			seq: 1,
+		});
+		ctx.room.handle(b, { t: "ACTION", motion: "sit", seat: 0 });
+		expect(ctx.room.members.get(b)?.move).toMatchObject({ seat: 0 });
+	});
+
+	test("an AI sitting down next to a free seat sits on it", () => {
+		const bot = conn("bot");
+		place(bot, ai("bot", "alice"), [-10, -10]);
+		ctx.room.handle(bot, { t: "ACTION", motion: "sit" });
+		expect(ctx.room.members.get(bot)?.move).toMatchObject({ posture: "sit", seat: 0 });
+	});
+});
+
 describe("small things", () => {
 	const ball: Vec2 = [-9, -10];
 	let saves: Item[][];

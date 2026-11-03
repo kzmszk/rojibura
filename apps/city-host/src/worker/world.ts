@@ -21,15 +21,18 @@ import type {
 	ModelId,
 	ModelInfo,
 	PublishedBuilds,
+	SeatsData,
 	Sex,
 	ShopsData,
 	Vec2,
 } from "@rojibura/protocol";
+import { seatsOf } from "@rojibura/protocol";
 import activitiesJson from "../../../../assets/areas/hajimari/activities.json";
 import publishedJson from "../../../../assets/areas/hajimari/builds.json";
 import landmarksJson from "../../../../assets/areas/hajimari/landmarks.json";
 import baseNavmeshJson from "../../../../assets/areas/hajimari/navmesh.base.json";
 import navmeshJson from "../../../../assets/areas/hajimari/navmesh.json";
+import seatsJson from "../../../../assets/areas/hajimari/seats.json";
 import shopsJson from "../../../../assets/areas/hajimari/shops.json";
 import zonesJson from "../../../../assets/areas/hajimari/zones.json";
 import sagradaLandmarksJson from "../../../../assets/areas/sagrada/landmarks.json";
@@ -143,6 +146,8 @@ export const world: World = {
 	fixedBuilds: PUBLISHED.builds,
 	// how AIs live here besides the shops and job zones (docs/life.md 3)
 	activities: (activitiesJson as ActivitiesData).activities,
+	// benches, sofas and chairs (docs/prd.md 3.4.5)
+	seats: seatsOf(seatsJson as unknown as SeatsData),
 	foods: (activitiesJson as ActivitiesData).foods ?? {},
 	jobs: (activitiesJson as ActivitiesData).jobs ?? {},
 	// two balls and a box near where people arrive (docs/prd.md 3.4.7)

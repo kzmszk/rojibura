@@ -91,16 +91,18 @@ import {
 	poseAt,
 	RATE_VIOLATIONS_BEFORE_CLOSE,
 	realMs,
+	SEAT_REACH,
+	type Seat,
 	type Sex,
 	SHOP_REACH,
 	type Shop,
 	type SpatialContext,
+	STEP_BACK,
+	STEP_BACK_S,
 	type Status,
 	THROW_MS,
 	THROW_RANGE,
 	THROW_RELEASE_MS,
-	STEP_BACK,
-	STEP_BACK_S,
 	TOGETHER_GAP,
 	TOGETHER_MS,
 	type Together,
@@ -204,6 +206,8 @@ export interface World {
 	keepOut?: Partial<Record<Sex, KeepOut[]>>;
 	/** What can be done where (assets/<area>/activities.json, docs/life.md 3). */
 	activities?: Activity[];
+	/** Places to sit (benches, sofas, chairs: assets/<area>/seats.json, docs/prd.md 3.4.5). */
+	seats?: Seat[];
 	/** What eating the shops' goods does, and what working or studying at each job zone is like. */
 	foods?: Record<string, Food>;
 	jobs?: Record<string, JobInfo>;
@@ -798,7 +802,7 @@ export class RoomCore<C> {
 		this.stats.inbound++;
 		switch (msg.t) {
 			case "MOVE_PATH":
-			case "MOVE_VEL":
+			case "MOVE_VEL": {
 				if (!this.moveToken(v, now)) {
 					this.violation(conn, v, now);
 					return;
@@ -821,6 +825,7 @@ export class RoomCore<C> {
 				// walking out of where one works or studies ends it
 				if (m.job && !this.inJobZone(m, m.job.zone, now)) this.stopJob(m, now);
 				return;
+			}
 			case "FLY":
 			case "WARP": {
 				if (!this.moveToken(v, now)) {
@@ -864,14 +869,26 @@ export class RoomCore<C> {
 				if (msg.target && !this.byId.has(msg.target)) return;
 				// sitting and lying last until the avatar moves (docs/prd.md 3.4.5): it stops where it is
 				if (isPosture(msg.motion)) {
-					// sitting down keeps the way it turned to
-					const face = m.move.kind === "idle" ? m.move.face : undefined;
+					// on a seat close by, if one is asked for (an AI sitting next to a free one takes it)
+					const seat = msg.motion === "sit" ? this.seatFor(m, msg.seat, now) : undefined;
+					if (msg.seat !== undefined && seat === undefined) {
+						this.notice(conn, "rejected", "そこには座れません（遠いか、ほかの人が座っています）");
+						return;
+					}
+					// sitting down keeps the way it turned to (on a seat, the seat's way)
+					const face =
+						seat !== undefined
+							? this.world.seats?.[seat]?.face
+							: m.move.kind === "idle"
+								? m.move.face
+								: undefined;
 					m.move = {
 						kind: "idle",
 						pos: this.positionOf(m, now),
 						at: now,
 						posture: msg.motion,
 						...(face ? { face } : {}),
+						...(seat !== undefined ? { seat } : {}),
 					};
 					this.transport.persist(conn, m);
 					this.broadcastAbout(m, { t: "MOVED", id: m.id, move: m.move });
@@ -1007,6 +1024,32 @@ export class RoomCore<C> {
 			text: msg.text,
 			...(msg.days ? { days: msg.days } : {}),
 		});
+	}
+
+	// ---- sitting on a seat (docs/prd.md 3.4.5) ----------------------------------
+
+	/**
+	 * The seat `m` sits down on: `asked` if it is close and nobody sits on it, or undefined. With none asked, an
+	 * AI takes the nearest free one within reach (a person sits on the ground unless they ask for a seat).
+	 */
+	private seatFor(m: Member, asked: number | undefined, now: number): number | undefined {
+		const seats = this.world.seats ?? [];
+		const here = this.positionOf(m, now);
+		const taken = new Set<number>();
+		for (const o of this.members.values())
+			if (o.id !== m.id && o.move.kind === "idle" && o.move.seat !== undefined) taken.add(o.move.seat);
+		const free = (i: number) => {
+			const s = seats[i];
+			return !!s && !taken.has(i) && dist(s.pos, here) <= SEAT_REACH;
+		};
+		if (asked !== undefined) return free(asked) ? asked : undefined;
+		if (m.kind !== "ai") return undefined;
+		let best: number | undefined;
+		seats.forEach((s, i) => {
+			if (free(i) && (best === undefined || dist(s.pos, here) < dist((seats[best] as Seat).pos, here)))
+				best = i;
+		});
+		return best;
 	}
 
 	// ---- doing things together (docs/prd.md 3.4.6) ---------------------------

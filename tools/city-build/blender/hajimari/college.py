@@ -238,6 +238,7 @@ def common_room(W):
             geom.box(W, F0, x0, x1, y0, y1, 0, 0.45, 'cloth', (0.35, 0.22, 0.16), 'college_in')
             # the back away from the fire (east side)
             geom.box(W, F0, x1 - 0.25, x1, y0, y1, 0.45, 0.95, 'cloth', (0.32, 0.2, 0.15), 'college_in')
+            geom.seats((x0 + x1 - 0.25) / 2, (y0 + y1) / 2, 0.45, 0, 1, y1 - y0, -1, 0)
         elif kind == 'table':
             geom.box(W, F0, x0, x1, y0, y1, 0.38, 0.45, 'wood', (0.5, 0.35, 0.25), 'college_in')
             geom.box(W, F0, x0 + 0.1, x1 - 0.1, y0 + 0.1, y1 - 0.1, 0, 0.38, 'wood', (0.4, 0.28, 0.2), 'college_in')
@@ -301,6 +302,8 @@ def library(W):
                          'college_in')
                 geom.box(W, F0, m + s * 0.85 - 0.15, m + s * 0.85 + 0.15, by0 + 0.2, by1 - 0.2, 0, 0.42, 'wood',
                          (0.42, 0.3, 0.22), 'college_in', skip=('top',))
+                # facing the table
+                geom.seats(m + s * 0.85, (by0 + by1) / 2, 0.47, 0, 1, by1 - by0, -s, 0)
             geom.box(W, F0, m - 0.12, m + 0.12, (by0 + by1) / 2 - 0.12, (by0 + by1) / 2 + 0.12, 0.8, 1.2, 'lamp',
                      (1, 0.9, 0.7), 'college_in')
 

@@ -2,7 +2,7 @@
 // Shared by the host (validation, context) and clients (interpolation) so both agree.
 
 import { MAX_PATH_LENGTH, MAX_PATH_POINTS } from "./limits.ts";
-import type { MoveState, Vec2 } from "./types.ts";
+import type { MoveState, Seat, SeatsData, Vec2 } from "./types.ts";
 
 /** Whether `p` is inside the polygon (even-odd rule). */
 export function insidePolygon(p: Vec2, poly: Vec2[]): boolean {
@@ -103,4 +103,9 @@ export function poseAt(move: MoveState, now: number, clamp?: (p: Vec2) => Vec2):
 
 export function positionAt(move: MoveState, now: number, clamp?: (p: Vec2) => Vec2): Vec2 {
 	return poseAt(move, now, clamp).pos;
+}
+
+/** An area's seats from its seats.json. */
+export function seatsOf(data: SeatsData | null | undefined): Seat[] {
+	return (data?.seats ?? []).map(([x, z, y, fx, fz]) => ({ pos: [x, z], y, face: [fx, fz] }));
 }

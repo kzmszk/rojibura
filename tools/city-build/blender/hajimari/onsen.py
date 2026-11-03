@@ -138,6 +138,8 @@ def inn(W, rnd):
                   (0.3, 0.35, 0.5), 'onsen', seg=8, r1=0.06)
     xs, ys = [p[0] for p in benchp], [p[1] for p in benchp]
     geom.box(W, f0, min(xs), max(xs), min(ys), max(ys), FLOOR + 0.4, FLOOR + 0.46, 'wood', (0.7, 0.55, 0.4), 'onsen')
+    # a long low bench with no back: one sits on either side of it
+    geom.seats((min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2, FLOOR + 0.46, 1, 0, max(xs) - min(xs), 0, 1, both=True)
     for x in (min(xs) + 0.1, max(xs) - 0.1):
         geom.box(W, f0, x - 0.05, x + 0.05, min(ys) + 0.05, max(ys) - 0.05, FLOOR, FLOOR + 0.4, 'wood', DARK, 'onsen')
     # entrance porch with a curved-looking gable roof, the noren, lanterns and the sign
@@ -225,6 +227,7 @@ def changing_room(W, rnd, sex):
     # a bench down the middle
     geom.box(W, f0, cx - 2.2, cx + 2.2, (b + d) / 2 - 0.25, (b + d) / 2 + 0.25, FLOOR + 0.38, FLOOR + 0.44,
              'wood_hinoki', (1, 1, 1), 'onsen')
+    geom.seats(cx, (b + d) / 2, FLOOR + 0.44, 1, 0, 4.4, 0, 1, both=True)
     for x in (cx - 2.0, cx + 2.0):
         geom.box(W, f0, x - 0.05, x + 0.05, (b + d) / 2 - 0.2, (b + d) / 2 + 0.2, FLOOR, FLOOR + 0.38, 'wood', DARK,
                  'onsen')
