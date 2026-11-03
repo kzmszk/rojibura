@@ -697,3 +697,27 @@ test("turns to someone, a landmark, or left of where it faces, and sees where th
 	expect(s.prompts[1]).toMatch(/サキ（id h_saki、人間、2m、右）/);
 	expect(s.prompts[1]).toMatch(/オープンカフェ（10m、右）/);
 });
+
+test("sees the balls and boxes near it, picks one up, and throws it to someone", async () => {
+	const s = setup([
+		{ calls: [["pick_up", { thing: "i_ball" }]] },
+		{ calls: [["pick_up", { thing: "i_box" }]] },
+		{ calls: [["throw", { to: "h_saki" }]] },
+		{ calls: [["wait", {}]] },
+	]);
+	current = s.resident;
+	s.resident.handle({ t: "ITEM", item: { id: "i_ball", kind: "ball", pos: [0.5, 0] } });
+	s.resident.handle({ t: "ITEM", item: { id: "i_box", kind: "box", pos: [0, 6] } });
+	await s.resident.turnNow();
+	expect(s.prompts[0]).toMatch(/近くの物: i_ball=ボール（1m.*i_box=箱（6m/);
+	expect(s.results[0]).toBe("ボールを拾った。");
+	expect(s.sent).toContainEqual({ t: "PICK", item: "i_ball" });
+	s.resident.handle({ t: "ITEM", item: { id: "i_ball", kind: "ball", pos: [0.5, 0], holder: "a_haru" } });
+	await s.resident.turnNow();
+	expect(s.prompts[1]).toMatch(/手に持っている物: ボール/);
+	expect(String(s.results[1])).toMatch(/もう何か持っている/);
+	await s.resident.turnNow();
+	// Saki is at (2, 0): it throws along +x
+	expect(s.sent).toContainEqual({ t: "THROW", dir: [1, 0] });
+	expect(s.results[2]).toBe("サキの方へボールを投げた。");
+});

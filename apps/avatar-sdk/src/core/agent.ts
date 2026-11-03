@@ -17,6 +17,8 @@ import {
 	type Food,
 	type HostToClient,
 	HUNGRY,
+	ITEM_REACH,
+	type ItemId,
 	insidePolygon,
 	type JobKind,
 	type JobZone,
@@ -116,6 +118,13 @@ type Errand = (
 ) & { to?: Vec2; legs?: number };
 /** Legs of a long way before it gives up (one leg is up to MAX_PATH_LENGTH m). */
 const MAX_LEGS = 8;
+/**
+ * Playing with a ball or a box (docs/prd.md 3.4.7): one this close may catch its eye (now and then, PLAY_CHANCE
+ * of its idle moments); it throws it to someone within THROW_TO, or puts it down after a while.
+ */
+const PLAY_NEAR = 12;
+const PLAY_CHANCE = 0.25;
+const THROW_TO = 8;
 
 /** The area's life, for an agent that moved to another area. */
 export type AreaLife = Pick<AgentOptions, "activities" | "shops" | "foods" | "jobZones">;
@@ -143,6 +152,8 @@ export class Agent {
 	/** What it did today ("07:30 原っぱで体操"), and where it is walking to. */
 	private doneToday: string[] = [];
 	private going: Errand | null = null;
+	/** The thing it walks to, to pick it up there. */
+	private fetching: { id: ItemId; timer: ReturnType<typeof setTimeout> } | null = null;
 	private readonly o: AgentOptions;
 
 	/** In another area now (following its owner, docs/prd.md 3.8.2): its places and walkable ground. */
@@ -179,6 +190,7 @@ export class Agent {
 
 	stop(): void {
 		if (this.wanderTimer) clearTimeout(this.wanderTimer);
+		if (this.fetching) clearTimeout(this.fetching.timer);
 		this.wanderTimer = null;
 		this.stroll.stop();
 	}
@@ -697,6 +709,53 @@ export class Agent {
 		return true;
 	}
 
+	/**
+	 * Plays with small things (docs/prd.md 3.4.7): holding one, it throws it to someone close (its owner first),
+	 * or puts it down; else now and then it walks to one lying near and picks it up. True if it did something.
+	 */
+	private play(here: Vec2): boolean {
+		const held = this.world.held();
+		if (held && held.kind !== "goods") {
+			const people = [...this.world.avatars.values()]
+				.filter((a) => a.id !== this.world.me)
+				.map((a) => ({ a, pos: poseAt(a.move, this.hostNow()).pos }))
+				.map((x) => ({ ...x, d: dist(x.pos, here) }))
+				.filter((x) => x.d > 1 && x.d <= THROW_TO)
+				.sort(
+					(x, y) =>
+						Number(y.a.id === this.world.company) - Number(x.a.id === this.world.company) || x.d - y.d,
+				);
+			const to = people[0];
+			if (to) {
+				this.o.send({ t: "THROW", dir: [(to.pos[0] - here[0]) / to.d, (to.pos[1] - here[1]) / to.d] });
+				this.o.logger.info(`throwing the ${held.kind} to ${to.a.name}`);
+			} else {
+				this.o.send({ t: "DROP" });
+				this.o.logger.info(`putting the ${held.kind} down`);
+			}
+			return true;
+		}
+		if (held || this.fetching || this.random() >= PLAY_CHANCE) return false;
+		// walking with its owner the host moves it: only what is at hand
+		const thing = this.world.thingsNear(here, this.world.company ? ITEM_REACH - 0.2 : PLAY_NEAR)[0];
+		if (!thing) return false;
+		const pick = () => {
+			this.fetching = null;
+			this.o.send({ t: "PICK", item: thing.item.id });
+			// it throws it (or puts it down) a few seconds later
+			this.scheduleWander(4000 + this.random() * 5000);
+		};
+		if (thing.distance <= ITEM_REACH - 0.2) {
+			pick();
+			return true;
+		}
+		if (!this.walkTo(thing.item.pos)) return false;
+		this.o.logger.info(`going to pick up the ${thing.item.kind}`);
+		const timer = setTimeout(pick, (thing.distance / WALK_SPEED) * 1000 * 1.3 + 600);
+		this.fetching = { id: thing.item.id, timer };
+		return true;
+	}
+
 	walkTo(to: Vec2): boolean {
 		const from = this.world.me ? this.positionOf(this.world.me) : null;
 		if (!from) return false;
@@ -749,6 +808,8 @@ export class Agent {
 			void this.initiate(near.a, near.d, here);
 			return;
 		}
+		// a ball or a box: it plays with it (walking with its owner, only what is at hand)
+		if (this.play(here)) return;
 		// walking with its owner: no strolling off alone, but it eats, and now and then it would like to go somewhere
 		if (this.world.company) {
 			if (this.eatAlong(here)) return;

@@ -8,6 +8,8 @@ import {
 	decay,
 	dist,
 	type HostToClient,
+	type Item,
+	type ItemId,
 	type LifeState,
 	poseAt,
 	type Vec2,
@@ -24,6 +26,8 @@ export class World {
 	life: LifeState | null = null;
 	/** Coins in its wallet as the host last told it (WALLET); null before that. */
 	coins: number | null = null;
+	/** Small things in the area (balls, boxes, what was bought; docs/prd.md 3.4.7). */
+	readonly items = new Map<ItemId, Item>();
 	private offset = 0;
 	/** Which way each avatar last walked or turned (a unit vector), for where it faces standing. */
 	private readonly lastDir = new Map<AvatarId, Vec2>();
@@ -39,6 +43,8 @@ export class World {
 				if (!msg.resumed) this.company = null;
 				this.avatars.clear();
 				for (const a of msg.avatars) this.avatars.set(a.id, a);
+				this.items.clear();
+				for (const i of msg.items ?? []) this.items.set(i.id, i);
 				this.life = msg.life ?? null;
 				return true;
 			case "JOINED":
@@ -83,6 +89,12 @@ export class World {
 				}
 				return true;
 			// these the agent hears of too (false)
+			case "ITEM":
+				this.items.set(msg.item.id, msg.item);
+				return false;
+			case "ITEM_GONE":
+				this.items.delete(msg.id);
+				return false;
 			case "WALLET":
 				this.coins = msg.coins;
 				return false;
@@ -145,6 +157,25 @@ export class World {
 		const deg = (Math.atan2(right, ahead) * 180) / Math.PI;
 		const ways = ["前", "右前", "右", "右後ろ", "後ろ", "左後ろ", "左", "左前"];
 		return ways[((Math.round(deg / 45) % 8) + 8) % 8] ?? null;
+	}
+
+	/** What this agent holds, if anything. */
+	held(): Item | undefined {
+		for (const i of this.items.values()) if (i.holder && i.holder === this.me) return i;
+		return undefined;
+	}
+
+	/**
+	 * Balls and boxes lying within `r` of `p` (not held, not in the air; not what someone bought), nearest
+	 * first, with how far each is.
+	 */
+	thingsNear(p: Vec2, r: number): { item: Item; distance: number }[] {
+		const now = this.hostNow();
+		return [...this.items.values()]
+			.filter((i) => i.kind !== "goods" && !i.holder && !(i.flight && now < i.flight.at + i.flight.dur))
+			.map((item) => ({ item, distance: dist(item.pos, p) }))
+			.filter((x) => x.distance <= r)
+			.sort((a, b) => a.distance - b.distance);
 	}
 
 	/** Host time estimated from WELCOME.serverTime. */
