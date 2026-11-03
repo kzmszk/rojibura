@@ -26,6 +26,8 @@ export interface NatureOptions {
 	texBase?: string;
 	/** The leaf atlas, drawn beforehand (atlas.ts leafAtlas()); drawn here when not given. */
 	atlas?: THREE.DataTexture;
+	/** Broadleaf trees by the camera draw their leaves one by one (default yes; not on phones). */
+	closeLeaves?: boolean;
 }
 
 export interface NatureStats {
@@ -60,7 +62,7 @@ export class Nature {
 		this.scene = scene;
 		this.season = opts.season;
 		const texBase = opts.texBase ?? "/tex/nature/";
-		this.trees = new Trees(opts.trees, opts.heightAt, texBase, opts.atlas);
+		this.trees = new Trees(opts.trees, opts.heightAt, texBase, opts.atlas, opts.closeLeaves ?? true);
 		this.cover = new GroundCover(this.trees.crowns(), opts.heightAt, this.trees.atlas);
 		this.falling = new Falling(this.trees.atlas, (x, z, r) => this.trees.near(x, z, r), opts.heightAt);
 		this.snow = new Snowfall();

@@ -2,7 +2,7 @@
 // one chosen with the season button), the winter's snow glb, and the season's sky and light on the scene.
 
 import type * as THREE from "three";
-import type { Area } from "./areas.ts";
+import { type Area, sceneFiles } from "./areas.ts";
 import { leafAtlas, Nature, type Season, type Species, seasonFor } from "./nature/index.ts";
 import type { CityScene } from "./scene.ts";
 
@@ -107,7 +107,9 @@ export class AreaNature {
 		const asked = params.get("season") as Season | null;
 		const season = asked && SEASON_ORDER.includes(asked) ? asked : seasonFor(new Date());
 		const trees = prepared.trees.map(([sp, x, z, s, rot]) => ({ sp, x, z, s, r: rot }));
-		const nature = new Nature(scene.scene, { trees, heightAt, season, atlas });
+		// on phones (the lighter 3D) the trees by you keep their leaf cards
+		const closeLeaves = !sceneFiles(area, params).lite;
+		const nature = new Nature(scene.scene, { trees, heightAt, season, atlas, closeLeaves });
 		const made = new AreaNature(scene, area, roots, nature, season);
 		if (season === "winter") await made.loadWinter();
 		return made;
