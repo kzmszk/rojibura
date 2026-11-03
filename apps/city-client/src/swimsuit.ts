@@ -573,7 +573,9 @@ function suitOf(
 			[a, 1 - t],
 			[b, t],
 		] as const)
-			v.j.forEach((j, c) => sum.set(j, (sum.get(j) ?? 0) + (v.w[c] as number) * k));
+			v.j.forEach((j, c) => {
+				sum.set(j, (sum.get(j) ?? 0) + (v.w[c] as number) * k);
+			});
 		const top = [...sum].sort((x, y) => y[1] - x[1] || x[0] - y[0]).slice(0, 4);
 		while (top.length < 4) top.push([0, 0]);
 		const total = top.reduce((m, [, w]) => m + w, 0) || 1;

@@ -673,7 +673,12 @@ describe("sitting on a seat", () => {
 		place(a, human("alice"), [-10, -10]);
 		place(b, human("bob"), [-10.3, -10]);
 		ctx.room.handle(a, { t: "ACTION", motion: "sit", seat: 0 });
-		expect(ctx.room.members.get(a)?.move).toMatchObject({ kind: "idle", posture: "sit", seat: 0, face: [0, -1] });
+		expect(ctx.room.members.get(a)?.move).toMatchObject({
+			kind: "idle",
+			posture: "sit",
+			seat: 0,
+			face: [0, -1],
+		});
 		ctx.room.handle(b, { t: "ACTION", motion: "sit", seat: 0 });
 		expect(last(b)).toMatchObject({ t: "NOTICE", kind: "rejected" });
 		ctx.room.handle(b, { t: "ACTION", motion: "sit", seat: 1 });
