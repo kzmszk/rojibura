@@ -446,6 +446,7 @@ async function startCity(
 				items.group,
 			]),
 		(p) => warpTo(p),
+		(p) => walkToPlace(p),
 	);
 	// the rest of the area's 3D (farther from where you arrive) loads now that you are in, one file after another
 	void (async () => {
@@ -1873,13 +1874,13 @@ async function startCity(
 	/** Stops following someone or going to a portal (the person moves on their own). */
 	function stopGoing(): void {
 		endFollow();
-		toGate = null;
+		going = null;
 	}
 	/** After your yes, your AI walks to a place and you follow behind it until it is there. */
 	function trail(id: AvatarId, to: Vec2, place: string): void {
 		const them = avatars.get(id);
 		if (!them) return;
-		toGate = null;
+		going = null;
 		following = { id, until: performance.now() + LEAD_FOLLOW_MAX_MS, plannedAt: 0, lead: { to, place } };
 		showToast(`${them.state.name}について${place}へ向かいます`);
 	}
@@ -1940,50 +1941,88 @@ async function startCity(
 		}
 	}
 
-	// ---- going to a portal (🚪 門へ) ----
-	/** Run while farther than this, plan the next leg this often, and give up after this long. */
+	// ---- going somewhere on foot: a portal (🚪 門へ), or a place on the map (🚶 歩いて行く) ----
+	/** Run to a gate while farther than this, plan the next leg this often, and give up after this long. */
 	const GATE_RUN_M = 10;
 	const GATE_REPLAN_MS = 1000;
 	const GATE_MAX_MS = 5 * 60_000;
+	/** A place on the map is reached this close (a gate at PORTAL_REACH, where its button shows). */
+	const PLACE_REACH_M = 3;
+	const PLACE_MAX_MS = 15 * 60_000;
 	/** `from`: where the last leg started, to notice when it took us nowhere. */
-	let toGate: { gate: Portal; until: number; plannedAt: number; from: Vec2 | null } | null = null;
+	let going: {
+		to: Vec2;
+		name: string;
+		gate: boolean;
+		run: boolean;
+		until: number;
+		plannedAt: number;
+		from: Vec2 | null;
+	} | null = null;
 	/** Walks to `gate` (the nearest one if not given), in as many legs as the way needs. */
 	function goToGate(gate?: Portal): void {
 		const mine = myId ? avatars.get(myId) : undefined;
 		const to = gate ?? (mine ? portals.nearest(poseAt(mine.state.move, conn.hostNow()).pos) : null);
 		if (!to) return;
 		stopGoing();
-		toGate = { gate: to, until: performance.now() + GATE_MAX_MS, plannedAt: 0, from: null };
+		going = {
+			to: to.pos,
+			name: to.name,
+			gate: true,
+			run: true,
+			until: performance.now() + GATE_MAX_MS,
+			plannedAt: 0,
+			from: null,
+		};
 		showToast(`${to.name}へ向かいます`);
 	}
-	function gateStep(t: number): void {
-		if (!toGate) return;
+	/**
+	 * Walks to a place on the map (docs/prd.md 3.4.14) instead of warping: at a walk, so one can talk on the
+	 * way (your AI walks beside you), looking about as one likes.
+	 */
+	function walkToPlace(p: MapPlace): void {
+		const gate = p.gate ? portals.byId(p.id) : undefined;
+		stopGoing();
+		going = {
+			to: gate?.pos ?? p.pos,
+			name: p.name,
+			gate: !!gate,
+			run: false,
+			until: performance.now() + PLACE_MAX_MS,
+			plannedAt: 0,
+			from: null,
+		};
+		showToast(`${p.name}へ歩いて向かいます`);
+	}
+	function goStep(t: number): void {
+		if (!going) return;
 		const mine = myId ? avatars.get(myId) : undefined;
-		if (!mine || t > toGate.until) {
-			toGate = null;
+		if (!mine || t > going.until) {
+			going = null;
 			return;
 		}
 		const pose = poseAt(mine.state.move, conn.hostNow());
 		// still walking a leg
 		if (pose.moving) return;
-		const d = dist(pose.pos, toGate.gate.pos);
-		// there: the button to go through shows
-		if (d <= PORTAL_REACH) {
-			toGate = null;
+		const d = dist(pose.pos, going.to);
+		// there (at a gate, the button to go through shows)
+		if (d <= (going.gate ? PORTAL_REACH : PLACE_REACH_M)) {
+			if (!going.gate && !going.run) showToast(`${going.name}に着きました`);
+			going = null;
 			return;
 		}
-		if (t - toGate.plannedAt < GATE_REPLAN_MS) return;
+		if (t - going.plannedAt < GATE_REPLAN_MS) return;
 		// the last leg took us nowhere (no way there, or the host did not take it)
-		if (toGate.from && dist(pose.pos, toGate.from) < 0.5) {
+		if (going.from && dist(pose.pos, going.from) < 0.5) {
 			showToast("そこへは行けません");
-			toGate = null;
+			going = null;
 			return;
 		}
-		toGate.plannedAt = t;
-		toGate.from = pose.pos;
-		if (!walkTo(toGate.gate.pos, d > GATE_RUN_M ? RUN_SPEED : WALK_SPEED)) {
+		going.plannedAt = t;
+		going.from = pose.pos;
+		if (!walkTo(going.to, going.run && d > GATE_RUN_M ? RUN_SPEED : WALK_SPEED)) {
 			showToast("そこへは行けません");
-			toGate = null;
+			going = null;
 		}
 	}
 
@@ -2091,7 +2130,7 @@ async function startCity(
 		followStep(t);
 		if (companion && withAi) stopStep();
 		pickStep();
-		gateStep(t);
+		goStep(t);
 		// stop at the edge of the walkable area instead of walking into walls
 		if (mine?.state.move.kind === "vel") {
 			const move = mine.state.move;
@@ -2135,7 +2174,8 @@ async function startCity(
 				};
 			}
 		}
-		if (mine && followCamera) view.update(mine, poseAt(mine.state.move, now).moving, dt);
+		// (walking somewhere in legs counts as walking all the way, also where one leg ends and the next begins)
+		if (mine && followCamera) view.update(mine, poseAt(mine.state.move, now).moving || going !== null, dt);
 		else scene.controls.update();
 		scene.render();
 		requestAnimationFrame(frame);

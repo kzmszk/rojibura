@@ -32,6 +32,10 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #bfd6e8; }
 .rj-map-list button:hover { background: #eef4fb; }
 .rj-map-head { font-weight: bold; margin-bottom: 2px; }
 .rj-map-note { color: #666; font-size: 12px; }
+.rj-map-choice { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; background: #fff7ec; border: 1px solid #ecd3b0; }
+.rj-map-choice b { margin-right: auto; }
+.rj-map-choice button { font-size: 14px; padding: 6px 12px; border-radius: 8px; border: 1px solid #d5d0c4; background: #fff; cursor: pointer; }
+.rj-map-choice button:hover { background: #eef4fb; }
 .rj-map-place { position: absolute; transform: translate(-50%, -50%); width: 9px; height: 9px; padding: 0; border-radius: 50%;
   border: 1.5px solid #fff; background: #7a6a55; cursor: pointer; line-height: 1; }
 .rj-map-place.major { width: 11px; height: 11px; background: #c4561e; }

@@ -1,5 +1,5 @@
 // The map (docs/prd.md 3.4.14): the area from straight above, where you are and which way you face, the main
-// places and the gates; clicking one takes you there at once (WARP).
+// places and the gates; clicking one asks whether to walk there (talking on the way) or be there at once (WARP).
 
 import type { Vec2 } from "@rojibura/protocol";
 
@@ -33,16 +33,20 @@ export class MapView {
 	private readonly draw: () => HTMLCanvasElement;
 	private drawn = false;
 	private readonly onWarp: (place: MapPlace) => void;
+	private readonly onWalk: (place: MapPlace) => void;
+	/** The place chosen, and how to go there. */
+	private readonly choice = el("div", "rj-map-choice");
 
 	/**
 	 * `bounds`: what the map shows (x0, z0, x1, z1, metres); `draw` makes its picture (the first time it opens);
-	 * `onWarp` takes you to a place.
+	 * `onWarp` takes you to a place at once, `onWalk` walks you there.
 	 */
 	constructor(
 		title: string,
 		bounds: [number, number, number, number],
 		draw: () => HTMLCanvasElement,
 		onWarp: (place: MapPlace) => void,
+		onWalk: (place: MapPlace) => void,
 	) {
 		this.bounds = bounds;
 		this.draw = draw;
@@ -56,29 +60,36 @@ export class MapView {
 		const body = el("div", "rj-map-body");
 		this.stage.append(this.people, this.me);
 		body.append(this.stage, this.list);
-		this.el.append(head, body, el("div", "rj-map-note", "場所を押すと、そこへ瞬間移動します"));
+		this.choice.hidden = true;
+		this.el.append(
+			head,
+			body,
+			this.choice,
+			el("div", "rj-map-note", "場所を押して、歩いて行くか瞬間移動するかを選びます"),
+		);
 		this.onWarp = onWarp;
+		this.onWalk = onWalk;
 	}
 
 	/** The places to show (they may arrive after the map is made). */
 	setPlaces(places: MapPlace[]): void {
 		for (const m of this.stage.querySelectorAll(".rj-map-place")) m.remove();
-		this.list.replaceChildren(el("div", "rj-map-head", "瞬間移動"));
+		this.list.replaceChildren(el("div", "rj-map-head", "行き先"));
 		for (const p of places) {
 			const [left, top] = this.at(p.pos);
 			const mark = el("button", `rj-map-place${p.major ? " major" : ""}${p.gate ? " gate" : ""}`);
 			mark.type = "button";
 			mark.style.left = `${left}%`;
 			mark.style.top = `${top}%`;
-			mark.title = `${p.name}へ瞬間移動`;
+			mark.title = p.name;
 			if (p.major) mark.append(el("span", "", p.name));
-			mark.onclick = () => this.warp(p);
+			mark.onclick = () => this.choose(p);
 			this.stage.insertBefore(mark, this.people);
 		}
 		for (const p of [...places].filter((x) => x.major).sort((a, b) => Number(!!b.gate) - Number(!!a.gate))) {
 			const b = el("button", "", `${p.gate ? "🚪" : "📍"} ${p.name}`);
 			b.type = "button";
-			b.onclick = () => this.warp(p);
+			b.onclick = () => this.choose(p);
 			this.list.append(b);
 		}
 	}
@@ -127,6 +138,7 @@ export class MapView {
 
 	hide(): void {
 		this.el.hidden = true;
+		this.choice.hidden = true;
 	}
 
 	toggle(): void {
@@ -156,9 +168,24 @@ export class MapView {
 		});
 	}
 
-	private warp(p: MapPlace): void {
-		this.hide();
-		this.onWarp(p);
+	/** A place chosen: walk there, or be there at once. */
+	private choose(p: MapPlace): void {
+		const walk = el("button", "", "🚶 歩いて行く");
+		walk.type = "button";
+		walk.title = "地面を歩いて行きます（話しながら、まわりを見ながら）";
+		walk.onclick = () => {
+			this.hide();
+			this.onWalk(p);
+		};
+		const warp = el("button", "", "✨ 瞬間移動");
+		warp.type = "button";
+		warp.onclick = () => {
+			this.hide();
+			this.onWarp(p);
+		};
+		this.choice.replaceChildren(el("b", "", `${p.gate ? "🚪" : "📍"} ${p.name}`), walk, warp);
+		this.choice.hidden = false;
+		walk.focus();
 	}
 
 	/** A point as percentages of the map (left, top). */
