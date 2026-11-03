@@ -15,7 +15,7 @@
 			"winter": ["hajimari_snow.glb"],
 			"build": true,
 			"fly": true,
-			"view": { "sky": "#c4d9ea", "fog": [160, 900], "far": 1200, "shadow": 60 },
+			"view": { "sky": "#c4d9ea", "fog": [160, 900], "far": 1200, "shadow": 60, "rich": true },
 			"credit": "3D（教会の外観）：SAGRADA FAMÍLIA（demos.polynous.io/sagrada-familia、出典の一覧：/areas/sagrada/credits.html） ｜ テクスチャ：Poly Haven・ambientCG（CC0）",
 			"portals": [
 				{ "id": "gate_sagrada", "name": "サグラダ・ファミリアの入口（生誕の門）", "pos": [-81.65, -0.02], "to": "sagrada", "at": "crossing", "quiet": true },

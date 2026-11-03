@@ -37,7 +37,8 @@ SETS = {
     'rough_plaster_brick_04': 'house walls: plaster fallen off the brick',
     'red_bricks_04': 'house walls: bare brick',
     'marble_01': 'Istrian stone: window and door frames, string courses, balconies, the walls\' feet',
-    'worn_shutter': 'shutters (persiane), tinted',
+    'worn_shutter': 'shutters (persiane): the slats (normal map)',
+    'wood_peeling_paint_weathered': 'shutters: paint peeling off (colour), tinted',
     'weathered_planks': 'altane (roof terraces), doors',
     'clay_roof_tiles_03': 'old coppi roofs',
     # the onsen
@@ -73,5 +74,28 @@ def main():
         print('fetched', sid)
 
 
+def shutters():
+    """tex/shutter_venice: the shutters' paint, light where it has chalked and chipped (wood_peeling_paint_weathered),
+    with the slats' lines (worn_shutter), grey to be tinted green by the vertex colours; the slats' normal map."""
+    d = os.path.join(OUT, 'shutter_venice')
+    if os.path.exists(os.path.join(d, 'diff.jpg')):
+        return
+    from PIL import Image, ImageChops, ImageOps
+    os.makedirs(d, exist_ok=True)
+    peel = Image.open(os.path.join(OUT, 'wood_peeling_paint_weathered', 'diff.jpg')).convert('RGB').resize((1024, 1024))
+    slats = ImageOps.autocontrast(Image.open(os.path.join(OUT, 'worn_shutter', 'diff.jpg')).convert('L').resize((1024, 1024)))
+    r, g, b = peel.split()
+    # where the wood shows (warmer than the blue-grey paint): chips
+    chips = ImageOps.autocontrast(ImageChops.subtract(r, b)).point(lambda v: 255 if v > 90 else int(v * 2.2))
+    paint = Image.new('L', (1024, 1024), 178)
+    out = Image.composite(Image.new('L', (1024, 1024), 245), paint, chips)
+    out = ImageChops.multiply(out, slats.point(lambda v: 150 + v * 105 // 255))
+    out.convert('RGB').save(os.path.join(d, 'diff.jpg'), quality=90)
+    with open(os.path.join(OUT, 'worn_shutter', 'nor.jpg'), 'rb') as f, open(os.path.join(d, 'nor.jpg'), 'wb') as g:
+        g.write(f.read())
+    print('made shutter_venice')
+
+
 if __name__ == '__main__':
     main()
+    shutters()

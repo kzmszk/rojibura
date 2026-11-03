@@ -234,6 +234,11 @@ export interface AreaInfo {
 }
 
 export interface AreaView {
+	/**
+	 * The fuller look (はじまりの街): filmic tone mapping, a sky that lights the shadows and is reflected, ambient
+	 * occlusion (not on phones and tablets).
+	 */
+	rich?: boolean;
 	/** "#rrggbb" */
 	sky?: string;
 	/** Fog from, to (metres). */

@@ -165,13 +165,47 @@ class Facade:
 
     def __init__(self, W, f, n, out):
         self.W, self.f, self.n, self.out = W, f, n, out
+        # openings cut through this wall (outlines in (u, z)): wall() leaves them out
+        self.holes = []
+        self.top = None
+
+    def wall(self, u0, u1, z0, z1, mat, col):
+        """The wall from u0 to u1 and z0 to z1, with the holes that lie within it cut out."""
+        from mathutils import Vector, geometry
+        holes = [h for h in self.holes if min(p[1] for p in h) >= z0 - 1e-6 and max(p[1] for p in h) <= z1 + 1e-6
+                 and min(p[0] for p in h) >= u0 and max(p[0] for p in h) <= u1]
+        if not holes:
+            self.poly([(u0, z0), (u1, z0), (u1, z1), (u0, z1)], 0.0, mat, col)
+            return
+        loops = [[(u0, z0), (u1, z0), (u1, z1), (u0, z1)]] + holes
+        pts = [p for loop in loops for p in loop]
+        for tri in geometry.tessellate_polygon([[Vector((u, z, 0.0)) for (u, z) in loop] for loop in loops]):
+            t = [pts[i] for i in tri]
+            if (t[1][0] - t[0][0]) * (t[2][1] - t[0][1]) - (t[1][1] - t[0][1]) * (t[2][0] - t[0][0]) < 0:
+                t = t[::-1]
+            self.poly(t, 0.0, mat, [tuple(c * self.grime(u, z, self.top) for c in col) for (u, z) in t])
 
     def p(self, u, z, d=0.0):
         return self.f.p(u, self.n + self.out * d, z)
 
     def poly(self, uz, d, mat, col=(1, 1, 1), name='houses'):
         pts = [self.p(u, z, d) for (u, z) in uz]
+        if isinstance(col[0], (tuple, list)) and self.out > 0:
+            col = col[::-1]
         self.W.face(pts if self.out < 0 else pts[::-1], mat, col, name)
+
+    def grime(self, u, z, top):
+        """How dirty the wall is at (u, z): darker under the sills (rain off the stone runs down the wall) and
+        under the cornice (`top`)."""
+        k = 1.0
+        for h in self.holes:
+            hz = min(p[1] for p in h)
+            hu0, hu1 = min(p[0] for p in h), max(p[0] for p in h)
+            if hu0 - 0.15 <= u <= hu1 + 0.15 and abs(z - hz) < 1e-3:
+                k = min(k, 0.72)
+        if abs(z - top) < 1e-3:
+            k = min(k, 0.8)
+        return k
 
     def _outward(self, pts, ref):
         v = np.cross(np.array(pts[1]) - pts[0], np.array(pts[2]) - pts[0])
@@ -233,25 +267,36 @@ def plain_window(F, u, z0, w, h, rnd, shutters=None, fr=0.11):
             F.block(ua, ub, z0, zs, 0.05, 'shutter', shutters, sides=False)
 
 
+REVEAL = 0.24   # how deep in the wall the glass and the doors stand
+
+
 def opening(F, u, z0, w, h, kind, rnd, shutters=None, fr=0.13, deep=0.1, sill=True, glass='glass'):
-    """A window or a door of Istrian stone: the glass (or door) set back, a stone frame round it standing out
-    `deep`, a sill, and green shutters folded back against the wall (or, now and then, closed)."""
+    """A window of Istrian stone: a hole through the wall (Facade.wall leaves it out) with the glass set back
+    REVEAL in it and stone reveals round it, a stone frame standing out `deep`, a sill, and green shutters folded
+    back against the wall (or, now and then, closed in the opening)."""
     zs = z0 + h - arch_height(w, kind)
     head = arch(u, zs, w, kind)
     # head is left -> right over the top; the opening's outline counter-clockwise: bottom left, bottom right, up
     # the right jamb, over the head right to left
     inner = [(u - w / 2, z0), (u + w / 2, z0)] + list(reversed(head))
+    F.holes.append(inner)
     closed = shutters is not None and rnd.random() < 0.18
-    # the glass (or the closed shutters) in the opening, a little in front of the wall
+    back = -REVEAL
+    # the glass (or the closed shutters) deep in the opening, the reveals round it
     if closed:
-        F.poly(inner, 0.02, 'shutter', shutters)
+        F.poly(inner, back + 0.06, 'shutter', shutters)
     else:
-        F.poly(inner, 0.02, glass)
+        F.poly(inner, back, glass)
         if glass == 'glass':
-            # glazing bars: a cross
-            F.block(u - 0.025, u + 0.025, z0, zs, 0.035, 'paint', (0.92, 0.9, 0.85), d0=0.02, sides=False)
-            F.block(u - w / 2, u + w / 2, z0 + (zs - z0) * 0.6, z0 + (zs - z0) * 0.6 + 0.05, 0.035, 'paint',
-                    (0.92, 0.9, 0.85), d0=0.02, sides=False)
+            # the window's frame and glazing bars: a cross
+            fw = 0.05
+            for (a, b, c, d) in ((u - w / 2, u - w / 2 + fw, z0, zs), (u + w / 2 - fw, u + w / 2, z0, zs),
+                                 (u - w / 2, u + w / 2, z0, z0 + fw), (u - 0.025, u + 0.025, z0, zs),
+                                 (u - w / 2, u + w / 2, z0 + (zs - z0) * 0.6, z0 + (zs - z0) * 0.6 + 0.05)):
+                F.block(a, b, c, d, back + 0.03, 'paint', (0.92, 0.9, 0.85), d0=back, sides=False)
+    F.mid = (u, (z0 + zs) / 2)
+    for i in range(len(inner)):
+        F.edge(inner[i], inner[(i + 1) % len(inner)], back, 0.0, 'trim_istrian', (0.86, 0.85, 0.82), -1)
     # the frame: jambs, and a band round the head (its own outline a frame's width out)
     F.block(u - w / 2 - fr, u - w / 2, z0, zs, deep, 'trim_istrian', ISTRIAN)
     F.block(u + w / 2, u + w / 2 + fr, z0, zs, deep, 'trim_istrian', ISTRIAN)
@@ -267,7 +312,7 @@ def opening(F, u, z0, w, h, kind, rnd, shutters=None, fr=0.13, deep=0.1, sill=Tr
             a, b = head[i], head[i + 1]
             A, B = outer[i], outer[i + 1]
             F.poly([a, b, B, A], deep, 'trim_istrian', ISTRIAN)
-            F.edge(a, b, 0.02, deep, 'trim_istrian', ISTRIAN, -1)
+            F.edge(a, b, 0.0, deep, 'trim_istrian', ISTRIAN, -1)
         if kind == 'pointed':
             # a little keystone flame at the point
             tu, tz = outer[len(outer) // 2]
@@ -335,10 +380,15 @@ def portal(F, u, w, h, kind, door_col):
     """The front door: wooden leaves in a stone portal, a step."""
     zs = h - (w / 2 if kind == 'round' else 0)
     head = arch(u, zs, w, 'round' if kind == 'round' else 'flat')
-    inner = [(u - w / 2, 0.0), (u + w / 2, 0.0)] + list(reversed(head))
-    F.poly(inner, 0.03, 'wood_door', door_col)
-    F.block(u - 0.02, u + 0.02, 0.0, zs, 0.045, 'wood_door', tuple(c * 0.7 for c in door_col), d0=0.03,
+    inner = [(u - w / 2, 0.02), (u + w / 2, 0.02)] + list(reversed(head))
+    F.holes.append(inner)
+    back = -REVEAL
+    F.poly(inner, back, 'wood_door', door_col)
+    F.block(u - 0.02, u + 0.02, 0.02, zs, back + 0.015, 'wood_door', tuple(c * 0.7 for c in door_col), d0=back,
             sides=False)
+    F.mid = (u, zs / 2)
+    for i in range(len(inner)):
+        F.edge(inner[i], inner[(i + 1) % len(inner)], back, 0.0, 'trim_istrian', (0.86, 0.85, 0.82), -1)
     fr = 0.22
     F.block(u - w / 2 - fr, u - w / 2, 0.0, zs, 0.14, 'trim_istrian', ISTRIAN)
     F.block(u + w / 2, u + w / 2 + fr, 0.0, zs, 0.14, 'trim_istrian', ISTRIAN)
@@ -348,17 +398,17 @@ def portal(F, u, w, h, kind, door_col):
         for i in range(len(head) - 1):
             F.poly([head[i], head[i + 1], outer[i + 1], outer[i]], 0.14, 'trim_istrian', ISTRIAN)
             F.edge(outer[i], outer[i + 1], 0.0, 0.14, 'trim_istrian', ISTRIAN, 1)
-            F.edge(head[i], head[i + 1], 0.03, 0.14, 'trim_istrian', ISTRIAN, -1)
+            F.edge(head[i], head[i + 1], 0.0, 0.14, 'trim_istrian', ISTRIAN, -1)
         # keystone
         F.block(u - 0.12, u + 0.12, zs + w / 2 - 0.05, zs + w / 2 + fr + 0.08, 0.18, 'trim_istrian', ISTRIAN)
     else:
         F.block(u - w / 2 - fr, u + w / 2 + fr, zs, zs + 0.3, 0.16, 'trim_istrian', ISTRIAN)
     F.mid = (u, zs / 2)
-    F.edge((u - w / 2, 0.0), (u - w / 2, zs), 0.03, 0.14, 'trim_istrian', ISTRIAN, -1)
-    F.edge((u + w / 2, zs), (u + w / 2, 0.0), 0.03, 0.14, 'trim_istrian', ISTRIAN, -1)
+    F.edge((u - w / 2, 0.0), (u - w / 2, zs), 0.0, 0.14, 'trim_istrian', ISTRIAN, -1)
+    F.edge((u + w / 2, zs), (u + w / 2, 0.0), 0.0, 0.14, 'trim_istrian', ISTRIAN, -1)
     F.block(u - w / 2 - 0.15, u + w / 2 + 0.15, 0.0, 0.14, 0.42, 'trim_istrian', (0.9, 0.89, 0.86))
     # a brass handle
-    F.block(u + 0.12, u + 0.18, 1.0, 1.08, 0.08, 'metal', (1, 1, 1), d0=0.03)
+    F.block(u + 0.12, u + 0.18, 1.0, 1.08, back + 0.05, 'metal', (1, 1, 1), d0=back)
 
 
 def hip_roof(W, f, u0, u1, n0, n1, zb, pitch, mat, ov=0.55):
@@ -454,7 +504,7 @@ def look(hs):
     return {
         'wall': wall, 'col': col,
         # the ground floor: the same plaster, or the plaster fallen off its brick
-        'ground': 'wall_peel' if wall != 'wall_brick' and rnd.random() < 0.35 else wall,
+        'ground': 'wall_peel' if wall != 'wall_brick' and rnd.random() < 0.12 else wall,
         'kind': 'round' if k < 0.42 else 'pointed' if k < 0.68 else 'flat',
         'shutters': rnd.choice(SHUTTER) if rnd.random() < 0.85 else None,
         'door': rnd.choice(DOOR),
@@ -490,15 +540,14 @@ def house(W, hs):
         if k == 0 and hs.get('shop_ground'):
             continue   # shops.py builds the ground storey, with its inside
         m = L['ground'] if k == 0 else wall
-        wall_face(W, f, 0.0, u0, u1, z0, z1, m, col, -1)
-        wall_face(W, f, d, u0, u1, z0, z1, m, col, 1)
+        wall_face(W, f, d, u0, u1, z0, z1, m, col, 1)   # the front is drawn once its openings are known
     zb = H0 if hs.get('shop_ground') else 0.0
     side_face(W, f, u0, 0.0, d, zb, top, wall, col, -1)
     side_face(W, f, u1, 0.0, d, zb, top, wall, col, 1)
     if not hs.get('shop_ground'):
         # the foot of Istrian stone and the corners' quoins
         for F in (front, back):
-            F.block(u0, u1, 0.0, 0.45, 0.05, 'trim_istrian', (0.86, 0.85, 0.82))
+            F.base = (u0, u1)   # drawn after the doors (round them)
     # string courses at each floor, and the cornice
     for F in (front, back):
         for k in range(1, F_):
@@ -561,6 +610,22 @@ def house(W, hs):
             nm = d / 2 + rnd.uniform(-1.0, 1.0)
             side.mid = (0, 0)
             plain_window(side, -nm if out < 0 else nm, z0 + 0.95, 0.75, 1.3, rnd)
+    # the front wall, storey by storey, with its openings cut out; the foot of Istrian stone round the doors
+    front.top = top
+    for k in range(F_):
+        z0, z1 = zs[k], zs[k + 1] if k + 1 < F_ else top
+        if k == 0 and hs.get('shop_ground'):
+            continue
+        front.wall(u0, u1, z0, z1, L['ground'] if k == 0 else wall, col)
+    for F in (front, back):
+        if getattr(F, 'base', None):
+            doors = sorted((min(p[0] for p in h) - 0.24, max(p[0] for p in h) + 0.24) for h in F.holes
+                           if min(p[1] for p in h) < 0.1)
+            a = u0
+            for (g0, g1) in doors + [(u1, u1)]:
+                if g0 - a > 0.05:
+                    F.block(a, g0, 0.0, 0.45, 0.05, 'trim_istrian', (0.86, 0.85, 0.82))
+                a = max(a, g1)
     # the roof
     zr = hip_roof(W, f, u0, u1, 0.0, d, top, rnd.uniform(18, 24), L['roof'])
     # chimneys, one to three, near the walls
