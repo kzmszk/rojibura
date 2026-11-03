@@ -201,6 +201,11 @@ export interface AreaInfo {
 	assets?: string;
 	/** glb files drawn as the area, relative to `assets`. */
 	scene: string[];
+	/**
+	 * The same, lighter (smaller textures), drawn instead of `scene` on phones and tablets or when the settings ask
+	 * for it (docs/prd.md 3.8.1).
+	 */
+	sceneLite?: string[];
 	/** glb files drawn only in winter (the snow lying on everything), relative to `assets`. */
 	winter?: string[];
 	/** Free play builds here (docs/prd.md 3.7). */
