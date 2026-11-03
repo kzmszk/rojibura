@@ -12,6 +12,7 @@ import { Falling, Snowfall } from "./particles.ts";
 import { type Season, type SeasonView, VIEWS } from "./season.ts";
 import { type TreeSpec, Trees } from "./trees.ts";
 
+export { leafAtlas } from "./atlas.ts";
 export { type Season, type SeasonView, seasonFor } from "./season.ts";
 export { SPECIES_NAMES, type Species } from "./species.ts";
 export type { TreeSpec } from "./trees.ts";
@@ -23,6 +24,8 @@ export interface NatureOptions {
 	season: Season;
 	/** Where the nature textures are served (assets/tex/nature). */
 	texBase?: string;
+	/** The leaf atlas, drawn beforehand (atlas.ts leafAtlas()); drawn here when not given. */
+	atlas?: THREE.DataTexture;
 }
 
 export interface NatureStats {
@@ -57,7 +60,7 @@ export class Nature {
 		this.scene = scene;
 		this.season = opts.season;
 		const texBase = opts.texBase ?? "/tex/nature/";
-		this.trees = new Trees(opts.trees, opts.heightAt, texBase);
+		this.trees = new Trees(opts.trees, opts.heightAt, texBase, opts.atlas);
 		this.cover = new GroundCover(this.trees.crowns(), opts.heightAt, this.trees.atlas);
 		this.falling = new Falling(this.trees.atlas, (x, z, r) => this.trees.near(x, z, r), opts.heightAt);
 		this.snow = new Snowfall();

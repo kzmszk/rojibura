@@ -1,9 +1,11 @@
 // Places with a rule of their own (an area's zones.json, docs/prd.md 3.8.6): indoors, where the camera looks from
-// your eyes (it would be above the ceiling otherwise); the onsen, where everyone wears a bath towel.
+// your eyes (it would be above the ceiling otherwise); the onsen, where everyone wears a bath towel; its changing
+// rooms, which only men or only women go into.
 
-import type { Vec2 } from "@rojibura/protocol";
+import { type KeepOut, roomsKeptOut } from "@rojibura/nav";
+import type { Sex, Vec2 } from "@rojibura/protocol";
 
-export type ZoneKind = "indoor" | "bath" | "water" | "work" | "study";
+export type ZoneKind = "indoor" | "bath" | "water" | "work" | "study" | "changing";
 
 export interface Zone {
 	id: string;
@@ -12,6 +14,8 @@ export interface Zone {
 	poly: Vec2[];
 	/** water: the surface's height. */
 	y?: number;
+	/** changing: who goes in. */
+	sex?: Sex;
 }
 
 function inside(p: Vec2, poly: Vec2[]): boolean {
@@ -47,6 +51,13 @@ export class Zones {
 				p[1] < Math.max(...zs) + margin
 			);
 		});
+	}
+
+	/** The rooms someone of this sex keeps out of (none without a sex). */
+	keepOut(sex: Sex | undefined): KeepOut[] {
+		if (!sex) return [];
+		const rooms = this.zones.filter((z): z is Zone & { sex: Sex } => z.kind === "changing" && !!z.sex);
+		return roomsKeptOut(rooms)[sex] ?? [];
 	}
 
 	/** The first zone of this kind at `p`, or null. */

@@ -65,8 +65,9 @@ def park(W):
     H = H - pond_depth(X, Y)
     # under the onsen's bath the ground goes down below its floor (it would show through the water)
     from .walk import offset_poly
-    pool = plan._inside_poly(X, Y, offset_poly(np.array(plan.ONSEN['pool'], float), 1.0))
-    H = np.where(pool, plan.ONSEN['floor'] - 0.1, H)
+    for p in plan.ONSEN['pools']:
+        pool = plan._inside_poly(X, Y, offset_poly(np.array(p['outline'], float), 1.0))
+        H = np.where(pool, plan.ONSEN['floor'] - 0.1, H)
     ny, nx = X.shape
     V = np.stack([X.ravel(), Y.ravel(), H.ravel()], 1)
     # colour: lawns fresh, woods and the mountain browner and darker, a little mottled
@@ -223,6 +224,9 @@ def far(W):
     inside = (X > plan.X0 + 3) & (X < plan.X1 - 3) & (Y > plan.Y0 + 3) & (Y < plan.Y1 - 3)
     keep = ~(inside[:-1, :-1] & inside[1:, 1:] & inside[:-1, 1:] & inside[1:, :-1])
     H = np.where(inside, H - 0.15, H)
+    # well down under the onsen's garden: its 10 m cells reach in from the edge and would show in the clear bath
+    a, b, c, d = plan.ONSEN['deck']
+    H = np.where((X > a - 6) & (X < c + 6) & (Y > b - 1) & (Y < d + 6), -1.5, H)
     ny, nx = X.shape
     V = np.stack([X.ravel(), Y.ravel(), H.ravel()], 1)
     # fields: a patchwork of greens and straw; forests dark on the hills

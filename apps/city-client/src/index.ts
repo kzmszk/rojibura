@@ -1,6 +1,13 @@
 // rojibura city client (docs/prd.md 3.4): login, the 3D city, click-to-move, chat.
 
-import { applyBuilds, NavMesh, type NavMeshData, validatePath } from "@rojibura/nav";
+import {
+	applyBuilds,
+	type KeepOut,
+	keepingOut,
+	NavMesh,
+	type NavMeshData,
+	validatePath,
+} from "@rojibura/nav";
 import {
 	ACTIVITY_REACH,
 	type ActivitiesData,
@@ -182,16 +189,25 @@ function mapBounds(data: NavMeshData): [number, number, number, number] {
 	return [x0 - m, z0 - m, x1 + m, z1 + m];
 }
 
-function navigatorFor(mesh: NavMesh): Navigator {
+/** Walking on the navmesh, kept out of the rooms in `out()` (the other sex's changing room, docs/prd.md 3.8.6). */
+function navigatorFor(mesh: NavMesh, out: () => KeepOut[]): Navigator {
+	const queries = {
+		isWalkable: (p: Vec2) => mesh.isWalkable(p),
+		validatePath: (path: Vec2[]) => validatePath(mesh, path).ok,
+		closestPoint: (p: Vec2) => mesh.closestPoint(p),
+		findPath: (from: Vec2, to: Vec2) => mesh.findPath(from, to),
+	};
+	const walk = () => keepingOut(queries, out());
 	return {
 		findPath: (from, to) => {
-			const start = mesh.closestPoint(from);
-			const end = mesh.closestPoint(to);
+			const w = walk();
+			const start = w.closestPoint(from);
+			const end = w.closestPoint(to);
 			// clicking on a building: walk to the nearest walkable point if it is close
 			if (Math.hypot(end[0] - to[0], end[1] - to[1]) > 3) return null;
-			return mesh.findPath(start, end);
+			return w.findPath?.(start, end) ?? null;
 		},
-		isWalkable: (p) => mesh.isWalkable(p),
+		isWalkable: (p) => walk().isWalkable(p),
 	};
 }
 
@@ -374,21 +390,43 @@ async function startCity(
 	scene.applyView(area.view);
 	const loading = el("div", "rj-toast show", `${area.name}を読み込んでいます…`);
 	root.append(loading);
-	const base = await loadNavMesh(area.dir, building);
-	let mesh = NavMesh.fromJSON(base);
-	let nav = navigatorFor(mesh);
-	scene.heightHint = (x, z) => mesh.heightAt([x, z]);
-	const sceneUrls = sceneFiles(area, params).files.map(
-		(f) => new URL(f, new URL(area.assetBase, location.href)).href,
-	);
-	const cityRoots = await scene.loadCity(sceneUrls, (n) => {
-		loading.textContent = `${area.name}を読み込んでいます…（${n}/${sceneUrls.length}）`;
-	});
-	// trees and seasons, where the area has them (docs/prd.md 3.8.6)
-	const nature = await AreaNature.create(scene, area, cityRoots, params);
-	// places with rules of their own: indoors, the onsen
+	// what is needed to enter, fetched together: the walkable area, the 3D near where you arrive, the trees (their
+	// leaves are drawn in a worker meanwhile) and the places with rules of their own (indoors, the onsen)
+	// the area's places, and where you arrive: at the portal you came through, else where everyone arrives
+	const landmarksFile = fetch(`${area.dir}/landmarks.json`)
+		.then((r) =>
+			r.ok
+				? (r.json() as Promise<{
+						landmarks: { id: string; name: string; pos: Vec2; major?: boolean }[];
+						spawn?: { pos: Vec2 };
+					}>)
+				: null,
+		)
+		.catch(() => null);
+	const arriving = area.bounds
+		? ((area.portals ?? []).find((p) => p.id === params.get("at"))?.pos ??
+			(await landmarksFile)?.spawn?.pos ??
+			null)
+		: null;
+	const files = sceneFiles(area, params, arriving);
+	const urlOf = (f: string) => new URL(f, new URL(area.assetBase, location.href)).href;
+	const sceneUrls = files.files.map(urlOf);
 	const zones = new Zones();
-	await zones.load(area.dir);
+	const [base, prepared, cityRoots] = await Promise.all([
+		loadNavMesh(area.dir, building),
+		AreaNature.prepare(area),
+		scene.loadCity(sceneUrls, (n) => {
+			loading.textContent = `${area.name}を読み込んでいます…（${n}/${sceneUrls.length}）`;
+		}),
+		zones.load(area.dir),
+	]);
+	let mesh = NavMesh.fromJSON(base);
+	// the changing room of the other sex is not walked into (your look's sex, once the host has said who you are)
+	const keepOut = () => zones.keepOut(myId ? avatars.get(myId)?.state.assets.sex : undefined);
+	let nav = navigatorFor(mesh, keepOut);
+	scene.heightHint = (x, z) => mesh.heightAt([x, z]);
+	// trees and seasons, where the area has them (docs/prd.md 3.8.6)
+	const nature = await AreaNature.create(scene, area, cityRoots, params, prepared);
 	loading.remove();
 	const portals = new PortalsView(
 		scene.scene,
@@ -407,6 +445,17 @@ async function startCity(
 			]),
 		(p) => warpTo(p),
 	);
+	// the rest of the area's 3D (farther from where you arrive) loads now that you are in, one file after another
+	void (async () => {
+		for (const url of files.later.map(urlOf)) {
+			const roots = await scene.loadCity([url]).catch((e: unknown) => {
+				console.warn("could not load", url, e);
+				return [];
+			});
+			nature?.addCity(roots);
+			cityMap.stale();
+		}
+	})();
 	// what can be done where (docs/life.md 3): the area's activities, and its places
 	let activities: Activity[] = [];
 	const places = new Map<string, Vec2>();
@@ -414,13 +463,7 @@ async function startCity(
 		fetch(`${area.dir}/activities.json`)
 			.then((r) => (r.ok ? (r.json() as Promise<ActivitiesData>) : null))
 			.catch(() => null),
-		fetch(`${area.dir}/landmarks.json`)
-			.then((r) =>
-				r.ok
-					? (r.json() as Promise<{ landmarks: { id: string; name: string; pos: Vec2; major?: boolean }[] }>)
-					: null,
-			)
-			.catch(() => null),
+		landmarksFile,
 	]).then(([a, l]) => {
 		activities = Array.isArray(a?.activities) ? a.activities : [];
 		for (const x of l?.landmarks ?? []) places.set(x.id, [x.pos[0], x.pos[1]]);
@@ -466,7 +509,7 @@ async function startCity(
 		void builds.placed().then((placed) => {
 			if (v !== navVersion) return;
 			mesh = NavMesh.fromJSON(placed.length > 0 ? applyBuilds(base, placed) : base);
-			nav = navigatorFor(mesh);
+			nav = navigatorFor(mesh, keepOut);
 		});
 	});
 	// published builds are part of the city everyone sees (docs/prd.md 3.7.8)

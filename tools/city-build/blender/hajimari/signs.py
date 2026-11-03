@@ -142,6 +142,35 @@ def noren():
     return im.filter(ImageFilter.GaussianBlur(0.6))
 
 
+def noren_sex(sex):
+    """The changing rooms' noren: indigo with 男 for the men's, deep red with 女 for the women's, and a small ゆ."""
+    def make():
+        w, h = 512, 512
+        im = Image.new('RGB', (w, h), (34, 52, 98) if sex == 'm' else (150, 34, 40))
+        d = ImageDraw.Draw(im)
+        centered(d, (0, 30, w, 380), '男' if sex == 'm' else '女', font(SERIF, 300), (245, 242, 235))
+        centered(d, (0, 370, w, 500), 'ゆ', font(SERIF, 100), (245, 242, 235))
+        for x in (w // 3, 2 * w // 3):
+            d.line([(x, 0), (x, h)], fill=(20, 30, 60) if sex == 'm' else (90, 18, 22), width=6)
+        return im.filter(ImageFilter.GaussianBlur(0.6))
+    return make
+
+
+def onsen_board_sex(sex):
+    """A board by a changing room's doors: 男湯 or 女湯, the character in indigo or red."""
+    def make():
+        w, h = 512, 1024
+        im = wood_board(w, h, (205, 180, 140), 10).rotate(90, expand=True).resize((w, h))
+        d = ImageDraw.Draw(im)
+        f = font(SERIF, 200)
+        col = (30, 44, 96) if sex == 'm' else (150, 30, 36)
+        for i, ch in enumerate('男湯' if sex == 'm' else '女湯'):
+            centered(d, (0, 140 + i * 380, w, 460 + i * 380), ch, f, col)
+        border(d, w, h, (90, 60, 36), 8, 12)
+        return im
+    return make
+
+
 def onsen_board():
     w, h = 512, 1024
     im = wood_board(w, h, (205, 180, 140), 10).rotate(90, expand=True).resize((w, h))
@@ -283,6 +312,8 @@ def make():
     for name, fn in [('seven', seven), ('seven_hanging', seven_hanging), ('books', books),
                      ('books_hanging', books_hanging), ('bakery', bakery), ('bakery_hanging', bakery_hanging),
                      ('onsen', onsen), ('noren', noren), ('onsen_board', onsen_board), ('spines', spines),
+                     ('noren_m', noren_sex('m')), ('noren_w', noren_sex('w')),
+                     ('onsen_board_m', onsen_board_sex('m')), ('onsen_board_w', onsen_board_sex('w')),
                      ('goods', goods), ('breads', breads), ('crest', crest),
                      ('library', college_sign('図書館', 'THE LIBRARY')),
                      ('dorm', college_sign('寮', 'HALL OF RESIDENCE')), ('lawn', lawn_sign)]:

@@ -401,31 +401,57 @@ POND = [(186, 100), (196, 92), (212, 88), (224, 96), (226, 112), (218, 128), (20
 
 # ---------------------------------------------------------------- the onsen inn
 
+def _pool(cx, cy, rx, ry, seed, n=16):
+    """An open-air bath's outline: a lumpy oval, counter-clockwise."""
+    rnd = random.Random(seed)
+    out = []
+    for i in range(n):
+        a = 2 * math.pi * i / n
+        k = 1 + 0.09 * math.sin(3 * a + seed) + 0.06 * math.sin(5 * a + 2 * seed) + rnd.uniform(-0.03, 0.03)
+        out.append((round(cx + math.cos(a) * rx * k, 2), round(cy + math.sin(a) * ry * k, 2)))
+    return out
+
+
 ONSEN = {
     'inn': (12.0, -132.0, 44.0, -114.0),       # building, entrance on the north side
     'door_x': 28.0,
     'lobby': (14.0, -130.0, 42.0, -116.0),     # inside, walkable
-    'changing': (30.0, -140.0, 42.0, -132.0),  # changing room (脱衣所), off the lobby to the south
-    'deck': (8.0, -158.0, 64.0, -140.0),       # stone paving round the bath
-    'pool': [(14, -144), (24, -142.5), (40, -143), (54, -142), (60, -146), (61, -152), (54, -156.5), (38, -156),
-             (24, -156.5), (14, -154), (11, -149)],
+    # the changing rooms (脱衣所), off the lobby to the south, each with its own passage and door onto the baths:
+    # men's (男湯) to the west, women's (女湯) to the east; nobody goes into the other one (zones.json "changing")
+    'changing_m': (16.5, -140.0, 28.0, -132.0),
+    'changing_w': (32.0, -140.0, 43.5, -132.0),
+    'deck': (8.0, -158.0, 64.0, -140.0),       # the open-air baths' garden: pebbles, stepping stones, trees
+    # three baths edged with rocks: a big milky one, a clear one (you see yourself under the water) and a small
+    # milky one under the arbour. kind: 'milky' | 'clear'; steps: x range of the steps down on the north side
+    'pools': [
+        {'id': 'milky', 'kind': 'milky', 'outline': _pool(19.5, -150.6, 7.0, 4.5, 1), 'steps': (18.0, 21.0)},
+        {'id': 'clear', 'kind': 'clear', 'outline': _pool(43.5, -150.2, 6.6, 4.3, 2), 'steps': (42.0, 45.0)},
+        {'id': 'small', 'kind': 'milky', 'outline': _pool(57.2, -151.6, 3.5, 3.0, 3, 12), 'steps': (56.0, 58.4)},
+    ],
     'water': 0.0,      # water surface
     'floor': -0.52,    # bath floor: sitting, the water comes up to the shoulders
     'deck_h': 0.12,
 }
 
 
-ONSEN_LANTERNS = [(62.0, -141.6), (62.0, -156.8), (45.0, -141.4), (26.0, -141.4)]
-ONSEN_BUCKETS = (39.0, -141.3)
-ONSEN_POSTS = [(9.0, -141.0), (22.5, -141.0), (22.5, -157.6), (9.0, -157.6)]   # the arbour
+def changing_door(sex):
+    """x of the changing room's doors (to its passage from the lobby, and onto the baths)."""
+    a, _, c, _ = ONSEN['changing_' + sex]
+    return (a + c) / 2
+
+
+ONSEN_LANTERNS = [(9.5, -141.6), (62.5, -141.6), (30.0, -157.0), (50.5, -157.0), (33.6, -144.4)]
+ONSEN_BUCKETS = (26.0, -141.2)
+ONSEN_POSTS = [(53.0, -147.6), (61.4, -147.6), (61.4, -155.6), (53.0, -155.6)]   # the arbour over the small bath
+# rocks standing in the garden, and stepping stones: (x, y, radius)
+ONSEN_GARDEN_ROCKS = [(29.8, -149.0, 0.9), (32.2, -153.5, 0.7), (10.0, -156.3, 0.8), (51.8, -143.4, 0.55)]
 
 
 def onsen_zone():
-    """Where an avatar is in its towel: the changing room, the deck and the bath."""
-    c = ONSEN['changing']
-    d = ONSEN['deck']
-    return [(c[0], c[3]), (c[2], c[3]), (c[2], d[3]), (d[2], d[3]), (d[2], d[1]), (d[0], d[1]), (d[0], d[3]),
-            (c[0], d[3])]
+    """Where an avatar is in its towel: both changing rooms and the open-air baths' garden."""
+    m, w, d = ONSEN['changing_m'], ONSEN['changing_w'], ONSEN['deck']
+    return [(m[0], m[3]), (m[2], m[3]), (m[2], d[3]), (w[0], d[3]), (w[0], w[3]), (w[2], w[3]), (w[2], d[3]),
+            (d[2], d[3]), (d[2], d[1]), (d[0], d[1]), (d[0], d[3]), (m[0], d[3])]
 
 
 # ---------------------------------------------------------------- landmarks
@@ -461,8 +487,10 @@ def landmarks():
         ('trailhead', '登山口', 80.0, 14.0),
         ('summit', '山頂の展望台', MOUNT[0] - 4.0, MOUNT[1] + 4.0),
         ('onsen', '温泉宿「ゆのはな」の玄関', ONSEN['door_x'], -110.0),
-        ('changing', '温泉の脱衣所', 36.0, -136.0),
-        ('bath', '露天風呂', 34.0, -150.0),
+        ('changing_m', '温泉の脱衣所（男湯）', changing_door('m'), -136.0),
+        ('changing_w', '温泉の脱衣所（女湯）', changing_door('w'), -136.0),
+        ('bath', '露天風呂（乳白色のお湯）', 20.0, -151.0),
+        ('bath_clear', '露天風呂（透きとおったお湯）', 44.0, -150.5),
     ]
 
 
@@ -572,10 +600,12 @@ def trees():
     from . import lots
     for (sp, x, y, s) in lots.park_trees():
         add(sp, x, y, s)
-    # onsen: maples round the bath, a pine by the gate
-    for (x, y) in [(10, -140), (62, -139), (66, -150), (6, -154), (66, -158), (48, -110), (20, -110)]:
-        add('momiji', x, y, 0.9)
-    add('matsu', 44, -111, 0.9)
+    # onsen: maples and pines in the baths' garden and round it, a pine by the gate
+    for (x, y) in [(66, -150), (6, -154), (66, -158), (48, -110), (20, -110), (9.6, -144.5), (31.2, -146.2),
+                   (63.0, -144.2), (36.5, -156.6), (9.4, -147.8)]:
+        add('momiji', x, y, 0.85)
+    for (x, y) in [(44, -111), (31.0, -155.2), (27.5, -156.8)]:
+        add('matsu', x, y, 0.8)
     # the woods in the park's north-west, the mountain forest, scattered park trees
     def free(x, y, r):
         """Not on a path, a trail, the lawn, the pond or the onsen."""

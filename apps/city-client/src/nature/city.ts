@@ -1,7 +1,9 @@
 // Seasonal looks for the city glb, by material (or mesh) name prefix:
 //   grass, moss, hedge   tinted by season (patchy in autumn)
 //   water_pond           moving ripples, sky reflected by Fresnel, the sun's glint
-//   water_onsen          milky pale jade, gentle ripples, steam rising softly over it
+//   water_onsen          milky white (乳白色), gentle ripples, steam rising softly over it
+//   water_onsen_clear    clear hot water: see-through (the bathers' bodies and the pebbles under it show), more
+//                        so looking down into it than across it, with the same ripples and steam
 //   snow_soft            deep fresh snow (meshes snow_soft_*): bright, bluish in shade, fine grain, glints
 //   snow_trod            trampled snow on streets and paths (meshes snow_trod_*): greyer, footprints, wet patches
 // snow_* meshes show only in winter. In winter every other up-facing surface (roofs, stone, timber, wood, ...)
@@ -13,7 +15,17 @@ import { NOISE, patch } from "./glsl.ts";
 import { Rng } from "./rng.ts";
 import { type Season, VIEWS } from "./season.ts";
 
-type Kind = "grass" | "moss" | "hedge" | "pond" | "onsen" | "snowSoft" | "snowTrod" | "dust" | "keep";
+type Kind =
+	| "grass"
+	| "moss"
+	| "hedge"
+	| "pond"
+	| "onsen"
+	| "onsenClear"
+	| "snowSoft"
+	| "snowTrod"
+	| "dust"
+	| "keep";
 
 /** Shared, live values: time, sun, sky. */
 export interface Env {
@@ -33,6 +45,7 @@ export function kindOf(meshName: string, matName: string): Kind {
 	if (o.startsWith("snow_trod") || m.startsWith("snow_trod")) return "snowTrod";
 	if (o.startsWith("snow_soft") || m.startsWith("snow_soft") || o.startsWith("snow_") || m.startsWith("snow"))
 		return "snowSoft";
+	if (m.startsWith("water_onsen_clear")) return "onsenClear";
 	if (m.startsWith("water_onsen")) return "onsen";
 	if (m.startsWith("water_pond")) return "pond";
 	if (m.startsWith("grass")) return "grass";
@@ -169,13 +182,27 @@ function seasonal(orig: THREE.Material, grade: Grade | null, dust: number, dustL
 }
 
 /** Water: ripples by moving noise, Fresnel sky, the sun's glint (standard specular on the rippled normal). */
-function water(env: Env, onsen: boolean): { mat: THREE.MeshStandardMaterial; rip: { value: number } } {
+function water(
+	env: Env,
+	onsen: boolean,
+	clear = false,
+): { mat: THREE.MeshStandardMaterial; rip: { value: number } } {
 	const rip = { value: onsen ? 0.05 : 0.07 };
 	const mat = new THREE.MeshStandardMaterial({
-		color: onsen ? new THREE.Color(0.2, 0.46, 0.38) : new THREE.Color(0.035, 0.07, 0.07),
+		color: clear
+			? new THREE.Color(0.28, 0.52, 0.52)
+			: onsen
+				? new THREE.Color(0.74, 0.77, 0.7)
+				: new THREE.Color(0.035, 0.07, 0.07),
 		roughness: onsen ? 0.16 : 0.05,
 		metalness: 0,
 	});
+	if (clear) {
+		// drawn after what is under it, which shows through
+		mat.transparent = true;
+		mat.depthWrite = false;
+		mat.defines = { RJ_CLEAR: "" };
+	}
 	mat.onBeforeCompile = (shader) => {
 		Object.assign(shader.uniforms, env, { uRip: rip, uReflect: { value: onsen ? 0.5 : 0.75 } });
 		shader.vertexShader = patchWorldVertex(shader.vertexShader);
@@ -216,12 +243,16 @@ function water(env: Env, onsen: boolean): { mat: THREE.MeshStandardMaterial; rip
 				// the far shore and its trees darken the low reflections; the sky shows higher up
 				vec3 sky = mix(uSkyHorizon * 0.45, uSkyZenith, smoothstep(0.02, 0.5, R.y));
 				outgoingLight = mix(outgoingLight, sky, fr * uReflect);
+				#ifdef RJ_CLEAR
+				// looking down into it one sees through; across it, mostly the sky
+				diffuseColor.a = mix(0.34, 0.92, fr);
+				#endif
 			}
 			#include <opaque_fragment>`,
 		);
 		shader.fragmentShader = f;
 	};
-	mat.customProgramCacheKey = () => `nature-water-${onsen}`;
+	mat.customProgramCacheKey = () => `nature-water-${onsen}-${clear}`;
 	return { mat, rip };
 }
 
@@ -488,6 +519,7 @@ export class CityLooks {
 	private readonly tex: Record<string, THREE.Texture>;
 	private readonly pond: ReturnType<typeof water>;
 	private readonly onsen: ReturnType<typeof water>;
+	private readonly onsenClear: ReturnType<typeof water>;
 	private readonly snowSoft: THREE.MeshStandardMaterial;
 	private readonly snowTrod: THREE.MeshStandardMaterial;
 	private readonly puff = makePuff();
@@ -517,6 +549,7 @@ export class CityLooks {
 		};
 		this.pond = water(env, false);
 		this.onsen = water(env, true);
+		this.onsenClear = water(env, true, true);
 		this.snowSoft = snowMaterial(env, this.tex, false);
 		this.snowTrod = snowMaterial(env, this.tex, true);
 	}
@@ -530,7 +563,7 @@ export class CityLooks {
 			const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
 			const kinds = mats.map((m) => kindOf(mesh.name, m.name));
 			this.entries.push({ mesh, orig: mesh.material, kinds });
-			if (kinds.includes("onsen")) {
+			if (kinds.includes("onsen") || kinds.includes("onsenClear")) {
 				mesh.geometry.computeBoundingBox();
 				const b = (mesh.geometry.boundingBox as THREE.Box3).clone().applyMatrix4(mesh.matrixWorld);
 				onsenBoxes.push(b);
@@ -558,6 +591,8 @@ export class CityLooks {
 				return this.pond.mat;
 			case "onsen":
 				return this.onsen.mat;
+			case "onsenClear":
+				return this.onsenClear.mat;
 			case "keep":
 				return orig;
 			default:
@@ -613,6 +648,7 @@ export class CityLooks {
 		for (const t of Object.values(this.tex)) t.dispose();
 		this.pond.mat.dispose();
 		this.onsen.mat.dispose();
+		this.onsenClear.mat.dispose();
 		this.snowSoft.dispose();
 		this.snowTrod.dispose();
 		this.puff.dispose();

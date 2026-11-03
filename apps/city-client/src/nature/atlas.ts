@@ -859,12 +859,19 @@ function mipChain(base: Uint8Array, size: number): { data: Uint8Array; width: nu
 	return levels;
 }
 
-/** The leaf atlas texture (2048 px with its mip chain). */
-export function makeLeafAtlas(): THREE.DataTexture {
-	const size = C * N;
-	const base = drawAtlas();
-	const tex = new THREE.DataTexture(base, size, size, THREE.RGBAFormat);
-	tex.mipmaps = mipChain(base, size);
+/** The leaf atlas's pixels: the 2048 px image and its mip chain (the first level is the image). */
+export type AtlasLevels = { data: Uint8Array; width: number; height: number }[];
+
+/** Draws the leaf atlas (about 1.5 s): leafAtlas() does it in a worker. */
+export function leafAtlasLevels(): AtlasLevels {
+	return mipChain(drawAtlas(), C * N);
+}
+
+/** The leaf atlas texture from its pixels. */
+export function atlasTexture(levels: AtlasLevels): THREE.DataTexture {
+	const base = levels[0] as AtlasLevels[number];
+	const tex = new THREE.DataTexture(base.data, base.width, base.height, THREE.RGBAFormat);
+	tex.mipmaps = levels;
 	tex.generateMipmaps = false;
 	tex.minFilter = THREE.LinearMipmapLinearFilter;
 	tex.magFilter = THREE.LinearFilter;
@@ -873,6 +880,35 @@ export function makeLeafAtlas(): THREE.DataTexture {
 	tex.colorSpace = THREE.NoColorSpace;
 	tex.needsUpdate = true;
 	return tex;
+}
+
+/** The leaf atlas texture (2048 px with its mip chain), drawn here and now. */
+export function makeLeafAtlas(): THREE.DataTexture {
+	return atlasTexture(leafAtlasLevels());
+}
+
+let drawing: Promise<THREE.DataTexture> | null = null;
+
+/**
+ * The leaf atlas drawn in a worker, so the page goes on loading meanwhile (on this thread where there are no
+ * workers or no OffscreenCanvas). Started once: call it early, await it when the trees are made.
+ */
+export function leafAtlas(): Promise<THREE.DataTexture> {
+	drawing ??= new Promise<AtlasLevels>((resolve) => {
+		const here = () => resolve(leafAtlasLevels());
+		if (typeof Worker === "undefined" || typeof OffscreenCanvas === "undefined") return here();
+		const worker = new Worker(new URL("./atlas.worker.ts", import.meta.url), { type: "module" });
+		worker.onmessage = (e: MessageEvent<AtlasLevels | null>) => {
+			worker.terminate();
+			if (e.data) resolve(e.data);
+			else here();
+		};
+		worker.onerror = () => {
+			worker.terminate();
+			here();
+		};
+	}).then(atlasTexture);
+	return drawing;
 }
 
 /** Soft round puffs for steam (R = density, as alpha). */

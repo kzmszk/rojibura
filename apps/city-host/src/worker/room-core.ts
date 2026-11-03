@@ -1,7 +1,16 @@
 // Area logic of CityRoomDO, independent of the Workers runtime so it can be tested in Node
 // (docs/prd.md 3.2, 3.3). The Durable Object adapter (room.ts) owns sockets, hibernation and auth.
 
-import { boxNav, claimed, type ModelNav, occupied, overlaps, type PlacedModel } from "@rojibura/nav";
+import {
+	boxNav,
+	claimed,
+	type KeepOut,
+	keepingOut,
+	type ModelNav,
+	occupied,
+	overlaps,
+	type PlacedModel,
+} from "@rojibura/nav";
 import {
 	ACTIVITY_REACH,
 	type Activity,
@@ -79,6 +88,7 @@ import {
 	poseAt,
 	RATE_VIOLATIONS_BEFORE_CLOSE,
 	realMs,
+	type Sex,
 	SHOP_REACH,
 	type Shop,
 	type SpatialContext,
@@ -183,6 +193,8 @@ export interface World {
 	shops?: Shop[];
 	/** Where one can work or study to earn coins. */
 	jobZones?: JobZone[];
+	/** Rooms each sex keeps out of (the onsen's changing rooms: men not in the women's, nor women in the men's). */
+	keepOut?: Partial<Record<Sex, KeepOut[]>>;
 	/** What can be done where (assets/<area>/activities.json, docs/life.md 3). */
 	activities?: Activity[];
 	/** What eating the shops' goods does, and what working or studying at each job zone is like. */
@@ -360,6 +372,8 @@ export class RoomCore<C> {
 	private readonly store: BuildStore | undefined;
 	/** The walkable area: the city's, with the builds on it. */
 	private walk: Walkable;
+	/** The walkable area for each sex (without the rooms it keeps out of), made from `walk` when first needed. */
+	private walkBySex = new WeakMap<Walkable, Map<Sex, Walkable>>();
 	/** Offers to do something together, by "from to" (docs/prd.md 3.4.6); they lapse after OFFER_TTL_MS. */
 	private readonly offers = new Map<string, { kind: Together; at: number }>();
 	/** An AI's open ask to its owner to come along, by the AI (docs/prd.md 3.4.10); lapses after OFFER_TTL_MS. */
@@ -950,7 +964,7 @@ export class RoomCore<C> {
 		const half = TOGETHER_GAP[offer.kind] / 2;
 		const pa: Vec2 = [mid[0] - u[0] * half, mid[1] - u[1] * half];
 		const pb: Vec2 = [mid[0] + u[0] * half, mid[1] + u[1] * half];
-		const fits = d <= OFFER_REACH + 1 && this.walk.isWalkable(pa) && this.walk.isWalkable(pb);
+		const fits = d <= OFFER_REACH + 1 && this.walkOf(from).isWalkable(pa) && this.walkOf(m).isWalkable(pb);
 		this.transport.send(fc, { t: "ANSWERED", by: m.id, kind: offer.kind, accept: accept && fits });
 		if (!accept || !fits) return;
 		const ms = Math.max(this.stepTo(fc, from, a, pa, now), this.stepTo(mc, m, b, pb, now));
@@ -967,7 +981,7 @@ export class RoomCore<C> {
 	private stepTo(conn: C, m: Member, here: Vec2, to: Vec2, now: number): number {
 		this.stopDoing(conn, m, now);
 		const d = dist(here, to);
-		const walk = d > 0.05 && this.walk.validatePath([here, to]);
+		const walk = d > 0.05 && this.walkOf(m).validatePath([here, to]);
 		m.move = walk
 			? { kind: "path", path: [here, to], speed: WALK_SPEED, at: now }
 			: { kind: "idle", pos: to, at: now };
@@ -1022,7 +1036,7 @@ export class RoomCore<C> {
 					const u: Vec2 = [(there[0] - here[0]) / d, (there[1] - here[1]) / d];
 					const spot: Vec2 = [here[0] + u[0] * BODY_CALLED_TO, here[1] + u[1] * BODY_CALLED_TO];
 					const ac = this.byId.get(to.id);
-					if (ac === undefined || !this.walk.isWalkable(spot)) return "そこには来られません";
+					if (ac === undefined || !this.walkOf(to).isWalkable(spot)) return "そこには来られません";
 					at = now + this.stepTo(ac, to, there, spot, now) + 200;
 				} else if (d > BODY_REACH) return `もっと近くに行ってください（いま${Math.round(d * 10) / 10}m）`;
 			} else if (d > BODY_LOOK_REACH) return "その人は遠すぎます";
@@ -1108,7 +1122,14 @@ export class RoomCore<C> {
 			if (ai.kind !== "ai" || ai.ownerId !== owner.id) continue;
 			const side = slot++ % 2 === 0 ? 1 : -1;
 			this.stopDoing(conn, ai, now);
-			const there = this.beside(at, owner.heading ?? [0, 1], side, COMPANION_STANDING);
+			const there = this.beside(
+				at,
+				owner.heading ?? [0, 1],
+				side,
+				COMPANION_STANDING,
+				false,
+				this.walkOf(ai),
+			);
 			this.land(conn, ai, there ?? at, now);
 		}
 	}
@@ -1123,11 +1144,11 @@ export class RoomCore<C> {
 	// ---- an AI taking its owner somewhere (docs/prd.md 3.4.10) -----------------
 
 	/** The way from `from` to `to` as one move, or null; a way of more points ends where one move does. */
-	private leadPath(from: Vec2, to: Vec2): Vec2[] | null {
-		const way = this.walk.findPath?.(this.walk.closestPoint(from), to) ?? [from, to];
+	private leadPath(from: Vec2, to: Vec2, walk = this.walk): Vec2[] | null {
+		const way = walk.findPath?.(walk.closestPoint(from), to) ?? [from, to];
 		if (way.length < 2) return null;
 		const path = [from, ...way.slice(1)].slice(0, MAX_PATH_POINTS);
-		return polylineLength(path) <= MAX_PATH_LENGTH && this.walk.validatePath(path) ? path : null;
+		return polylineLength(path) <= MAX_PATH_LENGTH && walk.validatePath(path) ? path : null;
 	}
 
 	/** An AI walking with its owner asks them to come along to a place; the owner's page asks them. */
@@ -1139,9 +1160,9 @@ export class RoomCore<C> {
 			return "さっき誘ったばかりです";
 		const here = this.positionOf(m, now);
 		if (dist(here, this.positionOf(owner, now)) > LEAD_REACH) return "オーナーが遠すぎます";
-		const to = this.walk.closestPoint(msg.to);
+		const to = this.walkOf(m).closestPoint(msg.to);
 		if (dist(here, to) < LEAD_MIN_DISTANCE) return "そこはすぐそばです";
-		if (!this.leadPath(here, to)) return "そこへは歩いて行けません";
+		if (!this.leadPath(here, to, this.walkOf(m))) return "そこへは歩いて行けません";
 		m.leadAskedAt = now;
 		this.transport.persist(conn, m);
 		this.leads.set(m.id, { owner: owner.id, to, place: msg.place, at: now });
@@ -1168,7 +1189,10 @@ export class RoomCore<C> {
 		const ac = this.byId.get(to);
 		const mc = this.byId.get(m.id);
 		if (!ai || ac === undefined || mc === undefined || now - lead.at > OFFER_TTL_MS) return true;
-		const path = accept && this.accompanying(ai) ? this.leadPath(this.positionOf(ai, now), lead.to) : null;
+		const path =
+			accept && this.accompanying(ai)
+				? this.leadPath(this.positionOf(ai, now), lead.to, this.walkOf(ai))
+				: null;
 		if (accept && !path) this.notice(mc, "rejected", "そこへは行けなくなりました");
 		const ms = path ? (polylineLength(path) / WALK_SPEED) * 1000 : 0;
 		this.transport.send(ac, {
@@ -1204,7 +1228,14 @@ export class RoomCore<C> {
 	 * Just ahead of `at` facing `ahead`, to the right (side 1) or the left (-1), as far as `slot` says (walking
 	 * or standing); `strict`: there or nowhere.
 	 */
-	private beside(at: Vec2, ahead: Vec2, side: number, slot = COMPANION_WALKING, strict = false): Vec2 | null {
+	private beside(
+		at: Vec2,
+		ahead: Vec2,
+		side: number,
+		slot = COMPANION_WALKING,
+		strict = false,
+		walk = this.walk,
+	): Vec2 | null {
 		// facing +z the right hand is on -x: right = (-ahead.z, ahead.x)
 		const right: Vec2 = [-ahead[1], ahead[0]];
 		const [front, aside] = slot;
@@ -1212,13 +1243,14 @@ export class RoomCore<C> {
 			at[0] + ahead[0] * front + right[0] * aside * side,
 			at[1] + ahead[1] * front + right[1] * aside * side,
 		];
-		if (this.walk.isWalkable(p)) return p;
-		return strict ? null : this.walk.closestPoint(p);
+		if (walk.isWalkable(p)) return p;
+		return strict ? null : walk.closestPoint(p);
 	}
 
 	private companionStep(conn: C, ai: Member, owner: Member, side: number, ahead: Vec2, now: number): void {
 		const from = this.positionOf(ai, now);
 		const om = owner.move;
+		const walk = this.walkOf(ai);
 		let path: Vec2[] | null = null;
 		let ms = 0;
 		if (om.kind === "path" && poseAt(om, now).moving) {
@@ -1229,7 +1261,11 @@ export class RoomCore<C> {
 				const d = dist(a, p);
 				const dir: Vec2 = d > 1e-3 ? [(p[0] - a[0]) / d, (p[1] - a[1]) / d] : ahead;
 				const last = i === rest.length - 2;
-				return (last ? this.beside(p, dir, side) : this.beside(p, dir, side, COMPANION_WALKING, true)) ?? p;
+				return (
+					(last
+						? this.beside(p, dir, side, COMPANION_WALKING, false, walk)
+						: this.beside(p, dir, side, COMPANION_WALKING, true, walk)) ?? p
+				);
 			});
 			path = [from, ...steps].slice(0, MAX_PATH_POINTS);
 			ms = (polylineLength(rest) / om.speed) * 1000;
@@ -1240,8 +1276,8 @@ export class RoomCore<C> {
 				const go = om.speed * (walked + s);
 				// where the owner's own way is still clear that far on
 				const ahead: Vec2 = [om.pos[0] + om.dir[0] * go, om.pos[1] + om.dir[1] * go];
-				if (!this.walk.validatePath([this.positionOf(owner, now), ahead])) continue;
-				const there = this.beside(ahead, om.dir, side);
+				if (!this.walkOf(owner).validatePath([this.positionOf(owner, now), ahead])) continue;
+				const there = this.beside(ahead, om.dir, side, COMPANION_WALKING, false, walk);
 				if (there) {
 					path = [from, there];
 					ms = s * 1000;
@@ -1250,16 +1286,16 @@ export class RoomCore<C> {
 			}
 		} else {
 			// the owner has stopped: it comes to their side
-			const there = this.beside(this.positionOf(owner, now), ahead, side, COMPANION_STANDING);
+			const there = this.beside(this.positionOf(owner, now), ahead, side, COMPANION_STANDING, false, walk);
 			if (there) path = [from, there];
 		}
 		// a fountain or a wall in the way: find a way round it to the same place, there at the same time
-		if (path && path.length >= 2 && !this.walk.validatePath(path)) {
+		if (path && path.length >= 2 && !walk.validatePath(path)) {
 			const to = path[path.length - 1] as Vec2;
-			const round = this.walk.findPath?.(this.walk.closestPoint(from), this.walk.closestPoint(to));
+			const round = walk.findPath?.(walk.closestPoint(from), walk.closestPoint(to));
 			path = round && round.length >= 2 ? [from, ...round.slice(1)].slice(0, MAX_PATH_POINTS) : null;
 		}
-		if (!path || path.length < 2 || polylineLength(path) > MAX_PATH_LENGTH || !this.walk.validatePath(path))
+		if (!path || path.length < 2 || polylineLength(path) > MAX_PATH_LENGTH || !walk.validatePath(path))
 			return;
 		const length = polylineLength(path);
 		if (length < 0.15) return;
@@ -1676,7 +1712,7 @@ export class RoomCore<C> {
 		const start = msg.path[0] as Vec2;
 		const fromHere = dist(start, here) <= this.tolerance(m);
 		const clear = (path: Vec2[]) =>
-			m.fly !== undefined ? path.every((p) => this.inSky(p)) : this.walk.validatePath(path);
+			m.fly !== undefined ? path.every((p) => this.inSky(p)) : this.walkOf(m).validatePath(path);
 		// start exactly where the host thinks the avatar is, so everyone interpolates the same line; that way is
 		// checked too (from a little elsewhere it could cut through a wall)
 		const mine: Vec2[] = [here, ...msg.path.slice(1)];
@@ -1685,7 +1721,7 @@ export class RoomCore<C> {
 		// a path through something built (a client or AI that does not know about it yet), or from here through
 		// a wall: plan it again
 		if (!path && fromHere && m.fly === undefined && (this.builds.size > 0 || clear(msg.path)))
-			path = this.replan(here, msg.path[msg.path.length - 1] as Vec2);
+			path = this.replan(here, msg.path[msg.path.length - 1] as Vec2, this.walkOf(m));
 		if (!path) {
 			this.reject(conn, m, here, now);
 			return;
@@ -1702,8 +1738,8 @@ export class RoomCore<C> {
 		const open =
 			m.fly !== undefined
 				? this.inSky(msg.pos)
-				: this.walk.isWalkable(msg.pos) &&
-					(dist(msg.pos, here) < 0.05 || this.walk.validatePath([here, msg.pos]));
+				: this.walkOf(m).isWalkable(msg.pos) &&
+					(dist(msg.pos, here) < 0.05 || this.walkOf(m).validatePath([here, msg.pos]));
 		if (dist(msg.pos, here) > this.tolerance(m) || !open) {
 			this.reject(conn, m, here, now);
 			return;
@@ -1753,19 +1789,20 @@ export class RoomCore<C> {
 
 	/** Stands `m` still on the walkable ground nearest `p` (where one lands, or warps to). */
 	private land(conn: C, m: Member, p: Vec2, now: number): void {
-		let at: Vec2 = this.walk.isWalkable(p) ? p : this.walk.closestPoint(p);
+		const walk = this.walkOf(m);
+		let at: Vec2 = walk.isWalkable(p) ? p : walk.closestPoint(p);
 		// rings round it, then the spawn point, if the nearest point is not quite on the ground
-		for (let r = 1; r <= 30 && !this.walk.isWalkable(at); r++)
+		for (let r = 1; r <= 30 && !walk.isWalkable(at); r++)
 			for (let k = 0; k < 16; k++) {
 				const q: Vec2 = [p[0] + Math.cos((k * Math.PI) / 8) * r, p[1] + Math.sin((k * Math.PI) / 8) * r];
-				if (this.walk.isWalkable(q)) {
+				if (walk.isWalkable(q)) {
 					at = q;
 					break;
 				}
 			}
-		if (!this.walk.isWalkable(at)) at = this.world.spawn;
+		if (!walk.isWalkable(at)) at = this.world.spawn;
 		m.move = { kind: "idle", pos: [round1(at[0]), round1(at[1])], at: now };
-		if (!this.walk.isWalkable(m.move.pos)) m.move = { kind: "idle", pos: at, at: now };
+		if (!walk.isWalkable(m.move.pos)) m.move = { kind: "idle", pos: at, at: now };
 		this.transport.persist(conn, m);
 		this.broadcastAbout(m, { t: "MOVED", id: m.id, move: m.move });
 	}
@@ -2156,11 +2193,11 @@ export class RoomCore<C> {
 	}
 
 	/** A path from here to (near) `to` on the walkable area with builds, within the protocol's limits. */
-	private replan(here: Vec2, to: Vec2): Vec2[] | null {
-		const path = this.walk.findPath?.(this.walk.closestPoint(here), this.walk.closestPoint(to));
+	private replan(here: Vec2, to: Vec2, walk = this.walk): Vec2[] | null {
+		const path = walk.findPath?.(walk.closestPoint(here), walk.closestPoint(to));
 		if (!path || path.length < 2 || path.length > MAX_PATH_POINTS) return null;
 		path[0] = here;
-		return polylineLength(path) <= MAX_PATH_LENGTH && this.walk.validatePath(path) ? path : null;
+		return polylineLength(path) <= MAX_PATH_LENGTH && walk.validatePath(path) ? path : null;
 	}
 
 	/** Someone walking a path that now runs into something built stops where they are. */
@@ -2181,6 +2218,24 @@ export class RoomCore<C> {
 	}
 
 	// ---- spatial ------------------------------------------------------------
+
+	/** Where `m` may walk: the walkable area without the rooms its sex keeps out of (docs/prd.md 3.8.6). */
+	private walkOf(m: { assets: AvatarAssets }): Walkable {
+		const sex = m.assets.sex;
+		const out = sex ? this.world.keepOut?.[sex] : undefined;
+		if (!sex || !out?.length) return this.walk;
+		let made = this.walkBySex.get(this.walk);
+		if (!made) {
+			made = new Map();
+			this.walkBySex.set(this.walk, made);
+		}
+		let w = made.get(sex);
+		if (!w) {
+			w = keepingOut(this.walk, out);
+			made.set(sex, w);
+		}
+		return w;
+	}
 
 	positionOf(m: Member, now = this.clock()): Vec2 {
 		return poseAt(m.move, now, (p) => (this.walk.isWalkable(p) ? p : this.walk.closestPoint(p))).pos;

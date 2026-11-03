@@ -7,6 +7,7 @@ import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.j
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { CSS2DRenderer } from "three/examples/jsm/renderers/CSS2DRenderer.js";
 import { applyTriplanar, wantsTriplanar } from "./triplanar.ts";
+import { applyWeathering, wantsWeathering } from "./weathering.ts";
 
 /** The sun's direction (from the target) and the default reach of its shadow (metres around the camera). */
 const SUN_OFFSET = new THREE.Vector3(30, 50, 20);
@@ -32,6 +33,11 @@ export class CityScene {
 	private readonly sun: THREE.DirectionalLight;
 	private readonly hemi: THREE.HemisphereLight;
 	private water: THREE.Mesh | null = null;
+	/**
+	 * The area's materials by name and look: an area in several files (はじまりの街's town and park) shares one
+	 * material, its textures uploaded and its shader compiled once.
+	 */
+	private readonly materials = new Map<string, THREE.Material>();
 	private shadowHalf = SHADOW_HALF;
 
 	constructor(root: HTMLElement) {
@@ -192,8 +198,15 @@ export class CityScene {
 						// trees' crowns, water and the winter's snow (feet sink into it) are not ground
 						if (!/^(tree_crown|snow_|water_)/.test(o.name) && !o.name.includes("fountain_water"))
 							this.ground.push(o);
-						const m = (o as THREE.Mesh).material;
+						const mesh = o as THREE.Mesh;
+						if (!Array.isArray(mesh.material)) mesh.material = this.shared(mesh.material);
+						const m = mesh.material;
 						if (!Array.isArray(m) && wantsTriplanar(m)) applyTriplanar(m as THREE.MeshStandardMaterial);
+						// the old town's walls (issue 42); a material shared by many meshes is patched once
+						else if (!Array.isArray(m) && wantsWeathering(m) && !m.userData.rjWeathered) {
+							applyWeathering(m as THREE.MeshStandardMaterial);
+							m.userData.rjWeathered = true;
+						}
 					}
 				});
 				this.scene.add(gltf.scene);
@@ -201,6 +214,19 @@ export class CityScene {
 				return gltf.scene;
 			}),
 		);
+	}
+
+	/** The material already loaded with this one's name and look, or this one (kept for the next file). */
+	private shared(m: THREE.Material): THREE.Material {
+		const s = m as THREE.MeshStandardMaterial;
+		const key = `${m.name}|${s.color?.getHexString() ?? ""}|${(s.map?.image as { width?: number } | undefined)?.width ?? 0}|${m.transparent}`;
+		const had = this.materials.get(key);
+		if (had && had !== m) {
+			m.dispose();
+			return had;
+		}
+		this.materials.set(key, m);
+		return m;
 	}
 
 	/** The sky, fog and light of a season (nature/season.ts); the fog keeps to the area's view distance. */

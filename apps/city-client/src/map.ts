@@ -87,6 +87,13 @@ export class MapView {
 		return !this.el.hidden;
 	}
 
+	/** The area has changed (more of it has loaded): the picture is drawn again the next time the map opens. */
+	stale(): void {
+		if (this.open) return;
+		this.drawn = false;
+		this.stage.querySelector(".rj-map-picture")?.remove();
+	}
+
 	show(): void {
 		if (!this.drawn) {
 			this.drawn = true;

@@ -34,14 +34,25 @@ def write(out_dir):
     zones = {'zones': [
         {'id': 'onsen', 'kind': 'bath', 'name': '温泉宿「ゆのはな」の脱衣所と露天風呂',
          'poly': [G(x, y) for (x, y) in plan.onsen_zone()]},
-        {'id': 'onsen_water', 'kind': 'water', 'name': '露天風呂のお湯', 'y': plan.ONSEN['water'],
-         'poly': [G(x, y) for (x, y) in plan.ONSEN['pool']]},
     ]}
+    # the changing rooms: only men go into the men's, only women into the women's (docs/prd.md 3.8.6)
+    for sex, name in (('m', '温泉の脱衣所（男湯）'), ('w', '温泉の脱衣所（女湯）')):
+        a, b, c, d = plan.ONSEN['changing_' + sex]
+        zones['zones'].append({'id': 'changing_' + sex, 'kind': 'changing', 'sex': 'f' if sex == 'w' else 'm',
+                               'name': name, 'poly': [G(a, b), G(c, b), G(c, d), G(a, d)]})
+    names = {'milky': '露天風呂のお湯（乳白色）', 'clear': '露天風呂のお湯（透明）'}
+    for pool in plan.ONSEN['pools']:
+        zones['zones'].append({'id': 'onsen_water_' + pool['id'], 'kind': 'water', 'name': names[pool['kind']],
+                               'y': plan.ONSEN['water'], 'poly': [G(x, y) for (x, y) in pool['outline']]})
     # indoors: the camera looks from your eyes there (it would be above the ceiling)
     rects = [('shop_' + s['id'], s['name'], s['lot']) for s in plan.SHOPS]
-    rects += [('inn_lobby', '温泉宿のロビー', plan.ONSEN['lobby']), ('inn_changing', '温泉宿の脱衣所', plan.ONSEN['changing'])]
-    cx = (plan.ONSEN['changing'][0] + plan.ONSEN['changing'][2]) / 2
-    rects += [('inn_passage', '脱衣所への廊下', (cx - 1.2, plan.ONSEN['changing'][3] - 0.5, cx + 1.2, plan.ONSEN['lobby'][1] + 0.5))]
+    rects += [('inn_lobby', '温泉宿のロビー', plan.ONSEN['lobby'])]
+    for sex, name in (('m', '男湯'), ('w', '女湯')):
+        r = plan.ONSEN['changing_' + sex]
+        cx = plan.changing_door(sex)
+        rects += [('inn_changing_' + sex, '温泉宿の脱衣所（%s）' % name, r),
+                  ('inn_passage_' + sex, '脱衣所（%s）への廊下' % name, (cx - 1.2, r[3] - 0.5, cx + 1.2,
+                                                                   plan.ONSEN['lobby'][1] + 0.5))]
     co = plan.COLLEGE
     rects += [('college_library', 'カレッジの図書館', co['reading']), ('college_common', '寮の談話室', co['common'])]
     rect = lambda a, b, c, d: [G(a, b), G(c, b), G(c, d), G(a, d)]

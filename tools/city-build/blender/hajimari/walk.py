@@ -170,29 +170,35 @@ def build():
            (dx - 1.6, on['inn'][3] + 0.5)], 0.15)
     for poly in inn_furniture():
         R.block(poly)
-    a, b, c, d = on['changing']
-    R.block([(a - 0.3, b - 0.3), (c + 0.3, b - 0.3), (c + 0.3, d), (a - 0.3, d)])
-    R.set([(a, b), (c, b), (c, d), (a, d)], 0.15)
-    cx = (a + c) / 2   # a doorway to the lobby
-    R.set([(cx - 1.0, d - 0.2), (cx + 1.0, d - 0.2), (cx + 1.0, on['lobby'][1] + 0.2), (cx - 1.0, on['lobby'][1] + 0.2)],
-          0.15)
-    for poly in changing_furniture():
-        R.block(poly)
+    # the changing rooms, each with a doorway from the lobby (a short passage) and one onto the baths
+    for sex in ('m', 'w'):
+        a, b, c, d = on['changing_' + sex]
+        R.block([(a - 0.3, b - 0.3), (c + 0.3, b - 0.3), (c + 0.3, d), (a - 0.3, d)])
+        R.set([(a, b), (c, b), (c, d), (a, d)], 0.15)
+        cx = plan.changing_door(sex)
+        R.set([(cx - 1.0, d - 0.2), (cx + 1.0, d - 0.2), (cx + 1.0, on['lobby'][1] + 0.2),
+               (cx - 1.0, on['lobby'][1] + 0.2)], 0.15)
+        for poly in changing_furniture(sex):
+            R.block(poly)
+    # the baths' garden, fenced
     a, b, c, d = on['deck']
     R.block([(a - 2.0, b - 2.0), (c + 2.0, b - 2.0), (c + 2.0, d + 0.3), (a - 2.0, d + 0.3)])
     R.set([(a, b), (c, b), (c, d), (a, d)], on['deck_h'])
-    # the changing room's door onto the deck
-    cx = (on['changing'][0] + on['changing'][2]) / 2
-    R.set([(cx - 1.0, d - 0.3), (cx + 1.0, d - 0.3), (cx + 1.0, on['changing'][1] + 0.2),
-           (cx - 1.0, on['changing'][1] + 0.2)], 0.15)
-    # the bath: a rim of rocks, the floor inside, steps down on the north side
-    pool = np.array(on['pool'], float)
-    R.block(offset_poly(pool, 0.7))
-    R.set(offset_poly(pool, -0.55), on['floor'])
-    for i, (y0, y1, h) in enumerate(bath_steps()):
-        sx0, sx1 = BATH_STEP_X
-        R.set([(sx0, y0), (sx1, y0), (sx1, y1), (sx0, y1)], h)
+    # each changing room's door onto it
+    for sex in ('m', 'w'):
+        cx = plan.changing_door(sex)
+        R.set([(cx - 1.0, d - 0.3), (cx + 1.0, d - 0.3), (cx + 1.0, d + 0.2), (cx - 1.0, d + 0.2)], 0.15)
+    # the baths: a rim of rocks, the floor inside, steps down on the north side
+    for pool in on['pools']:
+        P = np.array(pool['outline'], float)
+        R.block(offset_poly(P, 0.7))
+        R.set(offset_poly(P, -0.55), on['floor'])
+        sx0, sx1 = pool['steps']
+        for (y0, y1, h) in bath_steps(pool):
+            R.set([(sx0, y0), (sx1, y0), (sx1, y1), (sx0, y1)], h)
     for (x, y, r) in bath_rocks():
+        R.block(circle(x, y, r))
+    for (x, y, r) in plan.ONSEN_GARDEN_ROCKS:
         R.block(circle(x, y, r))
     for (x, y) in plan.ONSEN_LANTERNS:
         R.block(circle(x, y, 0.45))
@@ -200,31 +206,37 @@ def build():
         R.block(circle(x, y, 0.2))
     bx, by = plan.ONSEN_BUCKETS
     R.block([(bx - 0.25, by - 0.25), (bx + 0.7, by - 0.25), (bx + 0.7, by + 0.25), (bx - 0.25, by + 0.25)])
-    R.block(circle(10.2, -149.0, 1.0))   # the rock with the spout
+    sx, sy = SPOUT
+    R.block(circle(sx - 1.0, sy, 1.0))   # the rock with the spout
     for s in (-1, 1):                    # the entrance porch's posts
         R.block(circle(on['door_x'] + s * 1.9, on['inn'][3] + 1.2, 0.2))
     return R
 
 
-BATH_STEP_X = (33.0, 37.0)
+# the spout of hot water: a bamboo pipe out of a rock at the west end of the big bath
+SPOUT = (11.4, -150.6)
 
 
-def bath_steps():
-    """(y0, y1, height) of the steps from the deck down into the bath (north side)."""
+def bath_steps(pool):
+    """(y0, y1, height) of the steps from the garden down into a bath, on its north side: from the rim (the
+    outline's northernmost point within the steps' x range) inwards."""
     on = plan.ONSEN
+    P = np.array(pool['outline'], float)
+    sx0, sx1 = pool['steps']
+    near = P[(P[:, 0] > sx0 - 2.0) & (P[:, 0] < sx1 + 2.0)]
+    y = float(near[:, 1].max()) + 0.75
     top = on['deck_h']
-    hs = [top - 0.18 * (i + 1) for i in range(3)]
     out = []
-    y = -142.0
-    for h in hs:
+    for i in range(4):
+        h = top - 0.16 * (i + 1)
         out.append((y - 0.5, y, h))
         y -= 0.5
     return out
 
 
 def bath_rocks():
-    """Big rocks set in the bath (x, y, radius): somewhere to lean on, and they shape the pool."""
-    return [(52.0, -149.5, 1.3), (20.0, -152.5, 1.0), (44.0, -154.0, 0.8)]
+    """Big rocks set in the baths (x, y, radius): somewhere to lean on, and they shape the pools."""
+    return [(23.5, -153.6, 0.9), (15.8, -148.0, 0.7), (47.5, -152.6, 0.8)]
 
 
 def offset_poly(poly, d):
@@ -318,9 +330,9 @@ def inn_furniture():
             [(38.5, -126.0), (41.5, -126.0), (41.5, -125.2), (38.5, -125.2)]]
 
 
-def changing_furniture():
-    """Shelves with baskets along the changing room's walls."""
-    a, b, c, d = plan.ONSEN['changing']
+def changing_furniture(sex):
+    """Shelves with baskets along a changing room's side walls."""
+    a, b, c, d = plan.ONSEN['changing_' + sex]
     return [[(a + 0.3, b + 1.0), (a + 0.9, b + 1.0), (a + 0.9, d - 1.0), (a + 0.3, d - 1.0)],
             [(c - 0.9, b + 1.0), (c - 0.3, b + 1.0), (c - 0.3, d - 1.0), (c - 0.9, d - 1.0)]]
 

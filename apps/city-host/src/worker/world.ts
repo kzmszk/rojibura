@@ -3,10 +3,12 @@
 
 import {
 	applyBuilds,
+	type KeepOut,
 	type LandmarksData,
 	type ModelNav,
 	NavMesh,
 	type NavMeshData,
+	roomsKeptOut,
 	validatePath,
 } from "@rojibura/nav";
 import type {
@@ -14,10 +16,12 @@ import type {
 	AreaId,
 	AreaInfo,
 	AreasData,
+	AvatarAssets,
 	JobZone,
 	ModelId,
 	ModelInfo,
 	PublishedBuilds,
+	Sex,
 	ShopsData,
 	Vec2,
 } from "@rojibura/protocol";
@@ -120,6 +124,15 @@ function areaOf(id: AreaId): AreaInfo {
 
 const [sx, sz] = city.spawn.pos;
 
+/** The onsen's changing rooms (zones.json kind "changing"): only their sex goes in (docs/prd.md 3.8.6). */
+export function keepOutOf(
+	zones: { kind: string; sex?: Sex; poly: Vec2[] }[],
+): Partial<Record<Sex, KeepOut[]>> {
+	return roomsKeptOut(
+		zones.filter((z): z is { kind: string; sex: Sex; poly: Vec2[] } => z.kind === "changing" && !!z.sex),
+	);
+}
+
 /** The main area as everyone sees it: published builds are part of it (fixed). */
 export const world: World = {
 	walk,
@@ -143,6 +156,8 @@ export const world: World = {
 	jobZones: (zonesJson as unknown as { zones: JobZone[] }).zones.filter(
 		(z) => z.kind === "work" || z.kind === "study",
 	),
+	// men do not go into the women's changing room at the onsen, nor women into the men's
+	keepOut: keepOutOf((zonesJson as unknown as { zones: { kind: string; sex?: Sex; poly: Vec2[] }[] }).zones),
 };
 
 const worlds = new Map<AreaId, World>([[MAIN_AREA, world]]);
@@ -190,14 +205,14 @@ export const ALL_LANDMARK_IDS = [
 export interface Preset {
 	id: string;
 	name: string;
-	assets: { thumb: string; lod: string; vrm: string };
+	assets: AvatarAssets;
 }
 
 /** Preset avatars served as static assets (repo assets/ is Vite's publicDir). */
 export const DEFAULT_PRESET: Preset = {
 	id: "saki",
 	name: "サキ",
-	assets: { thumb: "", lod: "/avatars/saki.glb", vrm: "/avatars/saki.glb" },
+	assets: { thumb: "", lod: "/avatars/saki.glb", vrm: "/avatars/saki.glb", sex: "f" },
 };
 
 export const PRESETS: Record<string, Preset> = {
@@ -205,14 +220,15 @@ export const PRESETS: Record<string, Preset> = {
 	// VRoid's models, slimmed with tools/city-build/src/avatar-cli.ts (docs/prd.md 3.4.4):
 	// 千駄ヶ谷 渋 (casual clothes), her older sister 篠 (Welcome School Uniform 2019), their cousin 桜田 史利矢
 	// (school uniform), and AvatarSample_C, who has no name of his own and is 神宮 礼 here
-	shibu: { id: "shibu", name: "シブ", assets: { thumb: "", lod: "", vrm: "/avatars/shibu.vrm" } },
-	shino: { id: "shino", name: "シノ", assets: { thumb: "", lod: "", vrm: "/avatars/shino.vrm" } },
+	// (the onsen's changing rooms go by `sex`; the capsule has none and may use either)
+	shibu: { id: "shibu", name: "シブ", assets: { thumb: "", lod: "", vrm: "/avatars/shibu.vrm", sex: "f" } },
+	shino: { id: "shino", name: "シノ", assets: { thumb: "", lod: "", vrm: "/avatars/shino.vrm", sex: "f" } },
 	fumiriya: {
 		id: "fumiriya",
 		name: "フミリヤ",
-		assets: { thumb: "", lod: "", vrm: "/avatars/fumiriya.vrm" },
+		assets: { thumb: "", lod: "", vrm: "/avatars/fumiriya.vrm", sex: "m" },
 	},
-	rei: { id: "rei", name: "レイ", assets: { thumb: "", lod: "", vrm: "/avatars/rei.vrm" } },
+	rei: { id: "rei", name: "レイ", assets: { thumb: "", lod: "", vrm: "/avatars/rei.vrm", sex: "m" } },
 	capsule: { id: "capsule", name: "カプセル", assets: { thumb: "", lod: "", vrm: "" } },
 };
 

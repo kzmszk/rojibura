@@ -4,8 +4,14 @@
 		"main": {
 			"name": "はじまりの街",
 			"dir": "/areas/hajimari",
-			"scene": ["hajimari.glb", "sagrada_exterior.glb"],
-			"sceneLite": ["hajimari.glb", "sagrada_exterior_lite.glb"],
+			"scene": ["hajimari_town_e.glb", "hajimari_town_w.glb", "hajimari_park.glb", "sagrada_exterior.glb"],
+			"sceneLite": ["hajimari_town_e.glb", "hajimari_town_w.glb", "hajimari_park.glb", "sagrada_exterior_lite.glb"],
+			"bounds": {
+				"hajimari_town_w.glb": [-240, -200, -120, 160],
+				"hajimari_town_e.glb": [-120, -200, 0, 160],
+				"hajimari_park.glb": [0, -200, 240, 160]
+			},
+			"first": 0,
 			"winter": ["hajimari_snow.glb"],
 			"build": true,
 			"fly": true,

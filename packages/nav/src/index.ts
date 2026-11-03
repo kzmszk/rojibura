@@ -29,6 +29,14 @@ export {
 	type Vec3,
 	xz,
 } from "./carve.ts";
+export {
+	entersPoly,
+	insidePoly,
+	type KeepOut,
+	keepingOut,
+	roomsKeptOut,
+	type WalkQueries,
+} from "./keep-out.ts";
 export type { Landmark, LandmarksData, SpawnPoint } from "./landmarks.ts";
 export {
 	NAVMESH_VERSION,

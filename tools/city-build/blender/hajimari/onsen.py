@@ -1,6 +1,9 @@
 """The onsen inn 「ゆのはな」 at the edge of town: a two-storey wooden inn with a tiled hip roof, noren and
-lanterns at the entrance, a lobby, the changing room (脱衣所) with shelves of baskets, and the open-air bath: a
-large rock-edged pool in stone paving, an arbour over one end, bamboo fences, stone lanterns and a spout."""
+lanterns at the entrance, a lobby, two changing rooms (脱衣所, the men's with an indigo 男 noren, the women's with a
+red 女 one) with shelves of baskets, and the open-air baths in a garden (issue 42): three pools edged with mossy
+boulders (a big milky one, a clear one whose pebbly bottom shows through, a small milky one under an arbour),
+pebbles and stepping stones, maples and pines, bamboo screens, a low stone wall towards the mountain, stone
+lanterns and a spout."""
 import math, random
 
 import numpy as np
@@ -60,7 +63,7 @@ def hip_roof(W, x0, y0, x1, y1, zb, pitch, ov, mat='roof_kawara', snow=True, nam
 def japanese_wall(W, f, L, z0, z1, rnd, windows=True, shoji=True):
     """A wall of frame f from u=0 to L facing -n: posts, dark boards below, white plaster above, lattice windows."""
     geom.box(W, f, 0, L, 0, 0.2, z0, z1, 'plaster', (0.96, 0.95, 0.92), 'onsen')
-    geom.box(W, f, 0, L, -0.03, 0.0, z0, z0 + 1.0, 'wood', DARK, 'onsen')
+    geom.box(W, f, 0, L, -0.03, 0.0, z0, z0 + 1.0, 'wood_cedar', (0.55, 0.45, 0.38), 'onsen')
     n = max(1, int(round(L / 1.8)))
     for i in range(n + 1):
         u = L * i / n
@@ -90,9 +93,9 @@ def inn(W, rnd):
            (0.75, 0.62, 0.5), 'onsen')
     # walls of both storeys on the four sides (the door gap on the north, the passage to the changing room south)
     dx = ON['door_x']
-    cx = (ON['changing'][0] + ON['changing'][2]) / 2
+    cm, cw = plan.changing_door('m'), plan.changing_door('w')
     sides = [((BX0, BY1), (BX1, BY1), [(dx - 1.6, dx + 1.6)]),     # north, facing north
-             ((BX1, BY0), (BX0, BY0), [(cx - 1.0, cx + 1.0)]),     # south
+             ((BX1, BY0), (BX0, BY0), [(cm - 1.0, cm + 1.0), (cw - 1.0, cw + 1.0)]),     # south
              ((BX1, BY1), (BX1, BY0), []), ((BX0, BY0), (BX0, BY1), [])]
     for (a, b, gaps) in sides:
         a, b = np.array(a, float), np.array(b, float)
@@ -171,41 +174,46 @@ def inn(W, rnd):
     return zr
 
 
-def changing_room(W, rnd):
-    a, b, c, d = ON['changing']
+def changing_room(W, rnd, sex):
+    """A changing room (脱衣所) off the lobby: tatami, cypress walls, shelves of baskets, a noren at each door (男 in
+    indigo for the men's, 女 in red for the women's) and a board saying which it is."""
+    a, b, c, d = ON['changing_' + sex]
     f0 = geom.Frame((0, 0, 0), (1, 0))
     t = 0.25
-    cx = (a + c) / 2
+    cx = plan.changing_door(sex)
     H = 3.0
-    W.face([(a, b, FLOOR - 0.01), (c, b, FLOOR - 0.01), (c, d, FLOOR - 0.01), (a, d, FLOOR - 0.01)], 'tatami',
-           (1, 1, 1), 'onsen')
-    # walls: west, east, south (door to the bath), north (door to the passage)
-    geom.box(W, f0, a - t, a, b - t, d + t, 0, H, 'plaster', (0.96, 0.95, 0.92), 'onsen')
-    geom.box(W, f0, c, c + t, b - t, d + t, 0, H, 'plaster', (0.96, 0.95, 0.92), 'onsen')
+    WALL = (0.96, 0.95, 0.92)
+    W.face([(a, b, FLOOR - 0.01), (c, b, FLOOR - 0.01), (c, d, FLOOR - 0.01), (a, d, FLOOR - 0.01)], 'tatami_mat',
+           (1, 1, 1), 'onsen', tile=1.82)
+    # walls: west, east, south (door onto the baths), north (door to the passage)
+    geom.box(W, f0, a - t, a, b - t, d + t, 0, H, 'plaster', WALL, 'onsen')
+    geom.box(W, f0, c, c + t, b - t, d + t, 0, H, 'plaster', WALL, 'onsen')
     for (y0, y1) in ((b - t, b), (d, d + t)):
-        geom.box(W, f0, a, cx - 1.0, y0, y1, 0, H, 'plaster', (0.96, 0.95, 0.92), 'onsen')
-        geom.box(W, f0, cx + 1.0, c, y0, y1, 0, H, 'plaster', (0.96, 0.95, 0.92), 'onsen')
-        geom.box(W, f0, cx - 1.0, cx + 1.0, y0, y1, 2.4, H, 'plaster', (0.96, 0.95, 0.92), 'onsen')
+        geom.box(W, f0, a, cx - 1.0, y0, y1, 0, H, 'plaster', WALL, 'onsen')
+        geom.box(W, f0, cx + 1.0, c, y0, y1, 0, H, 'plaster', WALL, 'onsen')
+        geom.box(W, f0, cx - 1.0, cx + 1.0, y0, y1, 2.4, H, 'plaster', WALL, 'onsen')
+    # cypress wainscot inside
+    for (x0, x1, y0, y1) in ((a, c, b, b + 0.03), (a, c, d - 0.03, d), (a, a + 0.03, b, d), (c - 0.03, c, b, d)):
+        geom.box(W, f0, x0, x1, y0, y1, 0, FLOOR + 1.1, 'wood_hinoki', (1, 1, 1), 'onsen')
     # the passage from the lobby
     for x in (cx - 1.25, cx + 1.0):
-        geom.box(W, f0, x, x + 0.25, d + t, BY0, 0, H1, 'plaster', (0.96, 0.95, 0.92), 'onsen')
+        geom.box(W, f0, x, x + 0.25, d + t, BY0, 0, H1, 'plaster', WALL, 'onsen')
     W.face([(cx - 1.0, d, H1 - 0.4), (cx - 1.0, BY0, H1 - 0.4), (cx + 1.0, BY0, H1 - 0.4), (cx + 1.0, d, H1 - 0.4)],
-           'wood', (0.8, 0.7, 0.6), 'onsen')
-    # skirting boards and posts
-    for (x0, x1, y0, y1) in ((a, c, b, b + 0.03), (a, c, d - 0.03, d), (a, a + 0.03, b, d), (c - 0.03, c, b, d)):
-        geom.box(W, f0, x0, x1, y0, y1, 0, FLOOR + 0.9, 'wood', (0.6, 0.45, 0.33), 'onsen')
-    W.face([(a, b, H), (a, d, H), (c, d, H), (c, b, H)], 'wood', (0.85, 0.75, 0.62), 'onsen')
+           'wood_hinoki', (0.9, 0.85, 0.8), 'onsen')
+    W.face([(cx - 1.0, d, FLOOR - 0.01), (cx + 1.0, d, FLOOR - 0.01), (cx + 1.0, BY0, FLOOR - 0.01),
+            (cx - 1.0, BY0, FLOOR - 0.01)], 'wood_hinoki', (0.85, 0.78, 0.7), 'onsen')
+    W.face([(a, b, H), (a, d, H), (c, d, H), (c, b, H)], 'wood_hinoki', (0.95, 0.9, 0.85), 'onsen')
     for y in (b + 2.5, d - 2.5):
         geom.box(W, f0, cx - 0.5, cx + 0.5, y - 0.5, y + 0.5, H - 0.25, H - 0.01, 'shoji', (1, 1, 1), 'onsen')
     hip_roof(W, a - t, b - t, c + t, d + t, H, 25, 0.8, name='roofs')
     # shelves with baskets
-    for poly in walk.changing_furniture():
+    for poly in walk.changing_furniture(sex):
         xs, ys = [p[0] for p in poly], [p[1] for p in poly]
         x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
         for z in (FLOOR, FLOOR + 0.6, FLOOR + 1.2, FLOOR + 1.8):
-            geom.box(W, f0, x0, x1, y0, y1, z, z + 0.04, 'wood', (0.75, 0.6, 0.45), 'onsen')
+            geom.box(W, f0, x0, x1, y0, y1, z, z + 0.04, 'wood_hinoki', (1, 1, 1), 'onsen')
         for y in np.arange(y0, y1 + 0.01, (y1 - y0) / 4):
-            geom.box(W, f0, x0, x1, y - 0.02, y + 0.02, FLOOR, FLOOR + 1.84, 'wood', (0.7, 0.55, 0.4), 'onsen')
+            geom.box(W, f0, x0, x1, y - 0.02, y + 0.02, FLOOR, FLOOR + 1.84, 'wood_hinoki', (0.9, 0.85, 0.8), 'onsen')
         for z in (FLOOR + 0.04, FLOOR + 0.64, FLOOR + 1.24):
             for y in np.arange(y0 + (y1 - y0) / 8, y1, (y1 - y0) / 4):
                 col = (0.82, 0.68, 0.45) if rnd.random() < 0.8 else (0.85, 0.85, 0.9)
@@ -214,84 +222,149 @@ def changing_room(W, rnd):
                 if rnd.random() < 0.35:   # a folded towel in the basket
                     geom.box(W, f0, x0 + 0.12, x1 - 0.12, y - 0.22, y + 0.22, z + 0.12, z + 0.24, 'cloth',
                              (0.97, 0.97, 0.95), 'onsen')
-    # noren at the bath door and a vertical sign beside it
-    nf = geom.Frame((cx, b - t - 0.05, 0), (1, 0))
+    # a bench down the middle
+    geom.box(W, f0, cx - 2.2, cx + 2.2, (b + d) / 2 - 0.25, (b + d) / 2 + 0.25, FLOOR + 0.38, FLOOR + 0.44,
+             'wood_hinoki', (1, 1, 1), 'onsen')
+    for x in (cx - 2.0, cx + 2.0):
+        geom.box(W, f0, x - 0.05, x + 0.05, (b + d) / 2 - 0.2, (b + d) / 2 + 0.2, FLOOR, FLOOR + 0.38, 'wood', DARK,
+                 'onsen')
     from .shops import textured
-    for side in (-1, 1):
-        textured(W, nf, -1.0, 1.0, side * 0.01, 1.4, 2.35, 'sign_noren', side)
-    textured(W, geom.Frame((0, 0, 0), (1, 0)), cx + 1.3, cx + 1.9, b - t - 0.02, 1.0, 2.2, 'sign_onsen_board', -1)
+    noren_mat = 'sign_noren_' + sex
+    # noren at both doors, and boards beside them
+    for (yy, out) in ((b - t - 0.05, -1), (BY0 + 0.06, 1)):
+        nf = geom.Frame((cx, yy, 0), (1, 0))
+        for side in (-1, 1):
+            textured(W, nf, -1.0, 1.0, side * 0.01, 1.4, 2.35, noren_mat, side)
+        geom.box(W, nf, -1.1, 1.1, -0.03, 0.03, 2.35, 2.4, 'wood', DARK, 'onsen')
+    textured(W, f0, cx + 1.3, cx + 1.9, b - t - 0.02, 1.0, 2.2, 'sign_onsen_board_' + sex, -1)
+    textured(W, f0, cx + 1.2, cx + 1.8, BY0 - 0.04, 1.0, 2.2, 'sign_onsen_board_' + sex, 1)
+    # a hinoki low table with a jug of water and cups, and a fan (seen through the doors)
+    geom.box(W, f0, c - 2.2, c - 1.0, d - 1.0, d - 0.4, FLOOR, FLOOR + 0.7, 'wood_hinoki', (1, 1, 1), 'onsen')
+    geom.cylinder(W, c - 1.6, d - 0.7, FLOOR + 0.7, FLOOR + 0.95, 0.08, 'glass_shop', (1, 1, 1), 'onsen', seg=8)
 
 
-def deck(W):
+def garden(W, rnd):
+    """The ground of the baths' garden: pebbles everywhere but the pools, stepping stones from both doors along
+    the north and down to each bath's steps, moss under the trees; trodden snow in winter."""
     a, b, c, d = ON['deck']
     z = ON['deck_h']
-    pool = np.array(ON['pool'], float)
-    hole = walk.offset_poly(pool, 0.35)
-    step = 0.5
+    holes = [walk.offset_poly(np.array(p['outline'], float), 0.3) for p in ON['pools']]
+    step = 1.0
     xs = np.arange(a, c, step)
     ys = np.arange(b, d, step)
     X, Y = np.meshgrid(xs + step / 2, ys + step / 2)
-    inside = plan._inside_poly(X, Y, hole)
+    inside = np.zeros(X.shape, bool)
+    for h in holes:
+        inside |= plan._inside_poly(X, Y, h)
     for j in range(len(ys)):
         for i in range(len(xs)):
             if inside[j, i]:
                 continue
             x0, y0 = xs[i], ys[j]
             q = [(x0, y0, z), (x0 + step, y0, z), (x0 + step, y0 + step, z), (x0, y0 + step, z)]
-            W.face(q, 'stone_onsen', (1, 1, 1), 'onsen_deck')
+            W.face(q, 'pebbles', (1, 1, 1), 'onsen_garden')
             W.face([(p[0], p[1], z + TROD * 0.6) for p in q], 'snow_trod', name='snow_trod_onsen')
-    f0 = geom.Frame((0, 0, 0), (1, 0))
-    # the deck's raised edge
-    for (x0, x1, y0, y1) in ((a - 0.2, c + 0.2, b - 0.2, b), (a - 0.2, c + 0.2, d, d + 0.2), (a - 0.2, a, b, d),
-                             (c, c + 0.2, b, d)):
-        geom.box(W, f0, x0, x1, y0, y1, 0, z + 0.03, 'stone', (0.85, 0.83, 0.8), 'onsen_deck')
+    # stepping stones
+    path = [(10.5, -142.3), (62.0, -142.3)]
+    stones = []
+    for x in np.arange(path[0][0], path[1][0], 0.95):
+        stones.append((x + rnd.uniform(-0.1, 0.1), path[0][1] + rnd.uniform(-0.15, 0.15)))
+    for sex in ('m', 'w'):
+        cx = plan.changing_door(sex)
+        stones += [(cx + rnd.uniform(-0.15, 0.15), -140.6), (cx + rnd.uniform(-0.15, 0.15), -141.45)]
+    for p in ON['pools']:
+        sx0, sx1 = p['steps']
+        top = walk.bath_steps(p)[0][1]
+        for y in np.arange(-143.25, top, -0.9):
+            stones.append(((sx0 + sx1) / 2 + rnd.uniform(-0.2, 0.2), y))
+    for (x, y) in stones:
+        r = rnd.uniform(0.34, 0.46)
+        n = 7
+        ang0 = rnd.uniform(0, 1)
+        pts = [(x + math.cos(2 * math.pi * (k + ang0) / n) * r * rnd.uniform(0.85, 1.1),
+                y + math.sin(2 * math.pi * (k + ang0) / n) * r * rnd.uniform(0.85, 1.1)) for k in range(n)]
+        g = rnd.uniform(0.72, 0.9)
+        geom.prism(W, geom.Frame((0, 0, 0), (1, 0)), pts, z - 0.02, z + 0.05, 'stone_onsen', (g, g, g * 0.97),
+                   'onsen_garden', tile=3.0)
+    # moss under the garden's trees
+    for (x, y) in [(9.6, -144.5), (31.2, -146.2), (63.0, -144.2), (36.5, -156.6), (9.4, -147.8), (31.0, -155.2),
+                   (27.5, -156.8)]:
+        pts = [(x + math.cos(t) * 1.6 * rnd.uniform(0.8, 1.15), y + math.sin(t) * 1.6 * rnd.uniform(0.8, 1.15),
+                z + 0.015) for t in np.linspace(0, 2 * math.pi, 12, endpoint=False)]
+        geom.tri_fan(W, pts, 'grass', (0.75, 0.85, 0.6), 'onsen_moss')
+    # low shrubs (azaleas) along the fences and between the baths
+    for (x, y, r) in [(8.8, -151.5, 0.8), (8.9, -153.6, 0.7), (33.0, -150.5, 0.9), (34.5, -147.8, 0.7),
+                      (63.0, -147.3, 0.7), (25.0, -157.2, 0.8), (40.0, -157.3, 0.8), (47.0, -157.2, 0.7)]:
+        shrub(W, x, y, r, z, rnd)
 
 
-def bath(W, rnd):
-    pool = np.array(ON['pool'], float)
+def shrub(W, x, y, r, z, rnd):
+    """A clipped round shrub: a squat dome of hedge."""
+    rings = [(r, z), (r * 1.05, z + r * 0.45), (r * 0.8, z + r * 0.85), (r * 0.35, z + r * 1.05)]
+    n = 10
+    pts = [[(x + math.cos(2 * math.pi * k / n) * rr, y + math.sin(2 * math.pi * k / n) * rr, zz) for k in range(n)]
+           for (rr, zz) in rings]
+    col = (0.62 + rnd.uniform(-0.08, 0.08), 0.72, 0.6)
+    for lo, hi in zip(pts[:-1], pts[1:]):
+        for k in range(n):
+            j = (k + 1) % n
+            W.face([lo[k], lo[j], hi[j], hi[k]], 'hedge', col, 'hedges')
+    W.face(pts[-1], 'hedge', col, 'hedges')
+
+
+def bath(W, rnd, pool):
+    """One open-air bath: the water (milky or clear), its floor (pale stone, or pebbles that show through the clear
+    water), walls of stacked stone, mossy boulders round the rim but at the steps, and stone steps down."""
+    P = np.array(pool['outline'], float)
     zw, zf = ON['water'], ON['floor']
-    c = pool.mean(0)
-    inner = np.array(walk.offset_poly(pool, 0.1))
-    # counter-clockwise, so the water and the floor face up and the walls face into the bath
+    c = P.mean(0)
+    inner = np.array(walk.offset_poly(P, 0.1))
     area = np.sum(inner[:, 0] * np.roll(inner[:, 1], -1) - np.roll(inner[:, 0], -1) * inner[:, 1])
     if area < 0:
         inner = inner[::-1]
+    clear = pool['kind'] == 'clear'
+    water = 'water_onsen_clear' if clear else 'water_onsen'
     for i in range(len(inner)):
         p, q = inner[i], inner[(i + 1) % len(inner)]
-        W.face([(c[0], c[1], zw), (p[0], p[1], zw), (q[0], q[1], zw)], 'water_onsen', name='water_onsen')
-        W.face([(c[0], c[1], zf), (p[0], p[1], zf), (q[0], q[1], zf)], 'stone_onsen', (0.7, 0.72, 0.7), 'onsen_bath')
+        W.face([(c[0], c[1], zw), (p[0], p[1], zw), (q[0], q[1], zw)], water, name='water_onsen_' + pool['id'])
+        W.face([(c[0], c[1], zf), (p[0], p[1], zf), (q[0], q[1], zf)], 'pebbles' if clear else 'stone_onsen',
+               (0.9, 0.9, 0.88) if clear else (0.7, 0.72, 0.7), 'onsen_bath')
         W.face([(q[0], q[1], zf), (p[0], p[1], zf), (p[0], p[1], ON['deck_h']), (q[0], q[1], ON['deck_h'])],
-               'rock', (0.75, 0.73, 0.7), 'onsen_bath')
-    # steps down on the north side
+               'stone_wall_jp', (0.85, 0.85, 0.82), 'onsen_bath')
+    # stone steps down on the north side
     f0 = geom.Frame((0, 0, 0), (1, 0))
-    sx0, sx1 = walk.BATH_STEP_X
-    for (y0, y1, h) in walk.bath_steps():
-        geom.box(W, f0, sx0, sx1, y0, y1 + 0.5, zf, h, 'stone_onsen', (0.9, 0.9, 0.88), 'onsen_bath')
-    # rocks round the rim (not at the steps)
-    rs = geom.resample(np.vstack([pool, pool[:1]]), 0.85)
+    sx0, sx1 = pool['steps']
+    for (y0, y1, h) in walk.bath_steps(pool):
+        geom.box(W, f0, sx0, sx1, y0, y1 + 0.5, zf, h, 'stone_path', (0.95, 0.93, 0.9), 'onsen_bath')
+    # boulders round the rim (not at the steps), now and then a big one
+    rs = geom.resample(np.vstack([P, P[:1]]), 0.8)
     for i, (x, y) in enumerate(rs[:-1]):
-        if sx0 - 0.4 < x < sx1 + 0.4 and y > -144:
+        if sx0 - 0.5 < x < sx1 + 0.5 and y > c[1]:
             continue
         o = np.array([x, y]) - c
         o /= np.linalg.norm(o)
-        rock(W, x + o[0] * 0.15, y + o[1] * 0.15, rnd.uniform(0.35, 0.55), -0.35,
-             ON['deck_h'] + rnd.uniform(0.15, 0.45), rnd, math.atan2(o[1], o[0]))
-    for (x, y, r) in walk.bath_rocks():
-        rock(W, x, y, r, zf, 0.45 + r * 0.3, rnd, rnd.uniform(0, 3))
-    # the spout: a bamboo pipe out of a rock at the west end, its water falling into the bath
-    sx, sy = 12.2, -149.0
-    rock(W, sx - 1.0, sy, 0.9, -0.3, 1.1, rnd, 0)
+        big = rnd.random() < 0.18
+        r = rnd.uniform(0.55, 0.8) if big else rnd.uniform(0.35, 0.55)
+        h = rnd.uniform(0.45, 0.85) if big else rnd.uniform(0.12, 0.42)
+        rock(W, x + o[0] * (0.2 + r * 0.3), y + o[1] * (0.2 + r * 0.3), r, -0.35, ON['deck_h'] + h, rnd,
+             math.atan2(o[1], o[0]))
+
+
+def spout(W, rnd):
+    """Hot water from a bamboo pipe out of a rock into the big bath, at its west end."""
+    sx, sy = walk.SPOUT
+    rock(W, sx - 1.0, sy, 0.95, -0.3, 1.2, rnd, 0)
     pf = geom.Frame((sx - 0.8, sy, 0), (1, 0))
-    geom.box(W, pf, 0, 1.3, -0.06, 0.06, 0.95, 1.07, 'wood', BAMBOO, 'onsen_bath')
-    W.face([pf.p(1.25, -0.05, 0.95), pf.p(1.3, -0.05, 0.0), pf.p(1.3, 0.05, 0.0), pf.p(1.25, 0.05, 0.95)],
+    geom.box(W, pf, 0, 1.3, -0.06, 0.06, 1.0, 1.12, 'wood', BAMBOO, 'onsen_bath')
+    W.face([pf.p(1.25, -0.05, 1.0), pf.p(1.3, -0.05, 0.0), pf.p(1.3, 0.05, 0.0), pf.p(1.25, 0.05, 1.0)],
            'water_onsen', name='water_onsen_spout')
-    W.face([pf.p(1.25, 0.05, 0.95), pf.p(1.3, 0.05, 0.0), pf.p(1.3, -0.05, 0.0), pf.p(1.25, -0.05, 0.95)],
+    W.face([pf.p(1.25, 0.05, 1.0), pf.p(1.3, 0.05, 0.0), pf.p(1.3, -0.05, 0.0), pf.p(1.25, -0.05, 1.0)],
            'water_onsen', name='water_onsen_spout')
 
 
-def rock(W, x, y, r, z0, z1, rnd, a):
+def rock(W, x, y, r, z0, z1, rnd, a, mat='rock_mossy'):
     """A rough rock: three jittered rings of eight (the foot, a bulging middle, a smaller sloping top), a little
-    longer than wide; its own material, rock, slightly varied in colour."""
+    longer than wide, slightly varied in colour."""
     f = geom.Frame((x, y, 0), (math.cos(a), math.sin(a)))
     n = 8
     stretch = rnd.uniform(1.0, 1.35)
@@ -312,19 +385,19 @@ def rock(W, x, y, r, z0, z1, rnd, a):
     for lo, hi in zip(rings[:-1], rings[1:]):
         for i in range(n):
             j = (i + 1) % n
-            W.face([lo[i], lo[j], hi[j]], 'rock', col, 'rocks')
-            W.face([lo[i], hi[j], hi[i]], 'rock', col, 'rocks')
+            W.face([lo[i], lo[j], hi[j]], mat, col, 'rocks')
+            W.face([lo[i], hi[j], hi[i]], mat, col, 'rocks')
     top = rings[-1]
     c = sum(top) / n + np.array([0, 0, rnd.uniform(0.0, 0.08)])
     for i in range(n):
-        W.face([c, top[i], top[(i + 1) % n]], 'rock', col, 'rocks')
+        W.face([c, top[i], top[(i + 1) % n]], mat, col, 'rocks')
         W.face([c + (0, 0, SNOW * 0.7), top[i] + (c - top[i]) * 0.15 + (0, 0, SNOW * 0.35),
                 top[(i + 1) % n] + (c - top[(i + 1) % n]) * 0.15 + (0, 0, SNOW * 0.35)], 'snow_soft',
                name='snow_soft_things')
 
 
 def fence(W, a, b, h=2.2):
-    """A bamboo fence from a to b (xy): posts, rails and close vertical canes."""
+    """A bamboo screen from a to b (xy): posts, rails and a panel of close canes (bamboo_wall) on both sides."""
     a, b = np.array(a, float), np.array(b, float)
     L = float(np.linalg.norm(b - a))
     f = geom.Frame((a[0], a[1], 0), b - a)
@@ -335,28 +408,26 @@ def fence(W, a, b, h=2.2):
     for z in (0.4, h - 0.3):
         geom.box(W, f, 0, L, -0.09, -0.05, z, z + 0.05, 'wood', BAMBOO, 'fences')
         geom.box(W, f, 0, L, 0.05, 0.09, z, z + 0.05, 'wood', BAMBOO, 'fences')
-    # canes as one panel with a striped look: thin boxes every 6 cm would be heavy; every 12 cm, two faces each
-    for k in range(int(L / 0.06)):
-        u = k * 0.06 + 0.03
-        col = tuple(cc * (0.92 + 0.08 * ((k * 7) % 3) / 2) for cc in BAMBOO)
-        for side in (-1, 1):
-            q = [f.p(u - 0.028, side * 0.03, 0.05), f.p(u + 0.028, side * 0.03, 0.05), f.p(u + 0.028, side * 0.03, h),
-                 f.p(u - 0.028, side * 0.03, h)]
-            W.face(q if side < 0 else q[::-1], 'wood', col, 'fences')
+    for side in (-1, 1):
+        q = [f.p(0, side * 0.03, 0.05), f.p(L, side * 0.03, 0.05), f.p(L, side * 0.03, h), f.p(0, side * 0.03, h)]
+        W.face(q if side < 0 else q[::-1], 'bamboo', (1, 1, 1), 'fences')
     geom.box(W, f, 0, L, -0.05, 0.05, h, h + SNOW * 0.5, 'snow_soft', (1, 1, 1), 'snow_soft_things')
 
 
 def arbour(W):
-    """An arbour (東屋) over the west end of the bath."""
+    """An arbour (東屋) over the small bath."""
     posts = plan.ONSEN_POSTS
     for (x, y) in posts:
-        geom.cylinder(W, x, y, 0, 3.0, 0.13, 'wood', POST, 'arbour', seg=8)
+        geom.cylinder(W, x, y, 0, 3.0, 0.13, 'wood_cedar', POST, 'arbour', seg=8)
+    xs = [p[0] for p in posts]
+    ys = [p[1] for p in posts]
+    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
     f0 = geom.Frame((0, 0, 0), (1, 0))
-    geom.box(W, f0, 8.8, 22.7, -141.15, -140.85, 2.85, 3.1, 'wood', DARK, 'arbour')
-    geom.box(W, f0, 8.8, 22.7, -157.75, -157.45, 2.85, 3.1, 'wood', DARK, 'arbour')
-    geom.box(W, f0, 8.85, 9.15, -157.6, -141.0, 2.85, 3.1, 'wood', DARK, 'arbour')
-    geom.box(W, f0, 22.35, 22.65, -157.6, -141.0, 2.85, 3.1, 'wood', DARK, 'arbour')
-    hip_roof(W, 9.0, -157.6, 22.5, -141.0, 3.1, 28, 1.0, name='roofs')
+    geom.box(W, f0, x0 - 0.2, x1 + 0.2, y1 - 0.15, y1 + 0.15, 2.85, 3.1, 'wood_cedar', DARK, 'arbour')
+    geom.box(W, f0, x0 - 0.2, x1 + 0.2, y0 - 0.15, y0 + 0.15, 2.85, 3.1, 'wood_cedar', DARK, 'arbour')
+    geom.box(W, f0, x0 - 0.15, x0 + 0.15, y0, y1, 2.85, 3.1, 'wood_cedar', DARK, 'arbour')
+    geom.box(W, f0, x1 - 0.15, x1 + 0.15, y0, y1, 2.85, 3.1, 'wood_cedar', DARK, 'arbour')
+    hip_roof(W, x0, y0, x1, y1, 3.1, 28, 1.0, name='roofs')
 
 
 def toro(W, x, y, z=0.12):
@@ -381,17 +452,25 @@ def buckets(W, x, y):
 def build(W):
     rnd = random.Random(9)
     inn(W, rnd)
-    changing_room(W, rnd)
-    deck(W)
-    bath(W, rnd)
+    for sex in ('m', 'w'):
+        changing_room(W, rnd, sex)
+    garden(W, rnd)
+    for pool in ON['pools']:
+        bath(W, rnd, pool)
+    for (x, y, r) in walk.bath_rocks():
+        rock(W, x, y, r, ON['floor'], 0.4 + r * 0.3, rnd, rnd.uniform(0, 3))
+    for (x, y, r) in plan.ONSEN_GARDEN_ROCKS:
+        rock(W, x, y, r, 0.0, ON['deck_h'] + r * 1.1, rnd, rnd.uniform(0, 3))
+    spout(W, rnd)
     a, b, c, d = ON['deck']
     fence(W, (a - 1.0, d + 0.2), (a - 1.0, b - 1.0))
     fence(W, (a - 1.0, b - 1.0), (c + 1.0, b - 1.0))
-    # low stone wall to the east (the view of the mountain) and hedges to the north
+    # a low wall of stacked stone to the east (the view of the mountain), hedges to the north
     f0 = geom.Frame((0, 0, 0), (1, 0))
-    geom.box(W, f0, c + 0.4, c + 1.4, b - 1.0, d + 0.3, 0, 0.75, 'stone_wall', (0.95, 0.92, 0.86), 'onsen')
-    geom.box(W, f0, c + 0.4, c + 1.4, b - 1.0, d + 0.3, 0.75, 0.75 + SNOW, 'snow_soft', (1, 1, 1), 'snow_soft_things')
-    for (x0, x1) in ((a - 1.0, ON['changing'][0] - 0.3), (ON['changing'][2] + 0.3, c + 1.4)):
+    geom.box(W, f0, c + 0.4, c + 1.4, b - 1.0, d + 0.3, 0, 0.85, 'stone_wall_jp', (0.95, 0.95, 0.92), 'onsen')
+    geom.box(W, f0, c + 0.4, c + 1.4, b - 1.0, d + 0.3, 0.85, 0.85 + SNOW, 'snow_soft', (1, 1, 1), 'snow_soft_things')
+    m, w = ON['changing_m'], ON['changing_w']
+    for (x0, x1) in ((a - 1.0, m[0] - 0.3), (m[2] + 0.3, w[0] - 0.3), (w[2] + 0.3, c + 1.4)):
         geom.box(W, f0, x0, x1, d + 0.3, d + 1.3, 0, 1.15, 'hedge', (1, 1, 1), 'hedges')
         geom.box(W, f0, x0 + 0.1, x1 - 0.1, d + 0.4, d + 1.2, 1.15, 1.15 + SNOW, 'snow_soft', (1, 1, 1),
                  'snow_soft_things')
