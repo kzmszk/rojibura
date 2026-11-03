@@ -69,6 +69,7 @@ MATS = {
     'stone_path': ('stone_pathway', (1, 1, 1), 0.85, 0, 2.6, {}),
     'pebbles': ('river_small_rocks', (1, 1, 1), 0.9, 0, 1.4, {'gain': 1.25}),
     'water_onsen_clear': (None, (0.55, 0.72, 0.7), 0.05, 0, 1, {}),
+    'water_onsen_fall': (None, (0.85, 0.9, 0.88), 0.05, 0, 1, {}),
     'stone_college': ('large_sandstone_blocks', (1.0, 0.95, 0.84), 0.85, 0, 2.6, {'gain': 1.5}),
     'roof_college': ('roof_slates_03', (0.85, 0.87, 0.92), 0.7, 0, 2.2, {}),
 }

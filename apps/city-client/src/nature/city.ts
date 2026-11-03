@@ -1,9 +1,11 @@
 // Seasonal looks for the city glb, by material (or mesh) name prefix:
 //   grass, moss, hedge   tinted by season (patchy in autumn)
 //   water_pond           moving ripples, sky reflected by Fresnel, the sun's glint
-//   water_onsen          milky white (乳白色), gentle ripples, steam rising softly over it
+//   water_onsen          milky white (乳白色), a little see-through, gentle ripples, steam rising softly over it
 //   water_onsen_clear    clear hot water: see-through (the bathers' bodies and the pebbles under it show), more
 //                        so looking down into it than across it, with the same ripples and steam
+//   water_onsen_fall     the hot water running into the baths (かけ流し) from bamboo pipes and a stone channel:
+//                        streaks and foam flowing down the stream; where it falls, the bath's water rings and foams
 //   snow_soft            deep fresh snow (meshes snow_soft_*): bright, bluish in shade, fine grain, glints
 //   snow_trod            trampled snow on streets and paths (meshes snow_trod_*): greyer, footprints, wet patches
 // snow_* meshes show only in winter. In winter every other up-facing surface (roofs, stone, timber, wood, ...)
@@ -22,6 +24,7 @@ type Kind =
 	| "pond"
 	| "onsen"
 	| "onsenClear"
+	| "onsenFall"
 	| "snowSoft"
 	| "snowTrod"
 	| "dust"
@@ -46,6 +49,7 @@ export function kindOf(meshName: string, matName: string): Kind {
 	if (o.startsWith("snow_soft") || m.startsWith("snow_soft") || o.startsWith("snow_") || m.startsWith("snow"))
 		return "snowSoft";
 	if (m.startsWith("water_onsen_clear")) return "onsenClear";
+	if (m.startsWith("water_onsen_fall")) return "onsenFall";
 	if (m.startsWith("water_onsen")) return "onsen";
 	if (m.startsWith("water_pond")) return "pond";
 	if (m.startsWith("grass")) return "grass";
@@ -186,37 +190,68 @@ function water(
 	env: Env,
 	onsen: boolean,
 	clear = false,
-): { mat: THREE.MeshStandardMaterial; rip: { value: number } } {
-	const rip = { value: onsen ? 0.05 : 0.07 };
+): { mat: THREE.MeshStandardMaterial; rip: { value: number }; drops: { value: THREE.Vector4[] } } {
+	// the onsen's water stirs a little more, and quicker, than the pond's
+	const rip = { value: onsen ? 0.11 : 0.07 };
+	const drops = { value: Array.from({ length: MAX_DROPS }, () => new THREE.Vector4()) };
 	const mat = new THREE.MeshStandardMaterial({
 		color: clear
 			? new THREE.Color(0.28, 0.52, 0.52)
 			: onsen
-				? new THREE.Color(0.74, 0.77, 0.7)
+				? new THREE.Color(0.47, 0.52, 0.49)
 				: new THREE.Color(0.035, 0.07, 0.07),
 		roughness: onsen ? 0.16 : 0.05,
 		metalness: 0,
 	});
-	if (clear) {
-		// drawn after what is under it, which shows through
+	if (onsen) {
+		// drawn after what is under it, which shows through: plainly in the clear water, faintly in the milky
 		mat.transparent = true;
 		mat.depthWrite = false;
-		mat.defines = { RJ_CLEAR: "" };
+		mat.defines = { RJ_SEE: "", RJ_SEE_DOWN: clear ? "0.34" : "0.7", RJ_SEE_ACROSS: clear ? "0.92" : "0.95" };
 	}
 	mat.onBeforeCompile = (shader) => {
-		Object.assign(shader.uniforms, env, { uRip: rip, uReflect: { value: onsen ? 0.5 : 0.75 } });
+		Object.assign(shader.uniforms, env, {
+			uRip: rip,
+			uReflect: { value: onsen ? 0.5 : 0.75 },
+			uSpeed: { value: onsen ? 1.7 : 1 },
+			uDrops: drops,
+		});
 		shader.vertexShader = patchWorldVertex(shader.vertexShader);
 		let f = patch(
 			shader.fragmentShader,
 			"#include <common>",
 			/* glsl */ `#include <common>
 			${WORLD_VARYINGS}
-			uniform float uTime; uniform float uRip; uniform float uReflect;
+			uniform float uTime; uniform float uRip; uniform float uReflect; uniform float uSpeed;
 			uniform vec3 uSkyZenith; uniform vec3 uSkyHorizon;
+			// where hot water falls in: (x, z, strength); strength 0 for none
+			uniform vec4 uDrops[${MAX_DROPS}];
 			${NOISE}
+			float drops(vec2 p, float t) {
+				float h = 0.0;
+				for (int i = 0; i < ${MAX_DROPS}; i++) {
+					vec4 d = uDrops[i];
+					if (d.z <= 0.0) continue;
+					float r = length(p - d.xy);
+					// rings running out from where it falls, fading with distance
+					h += d.z * sin(r * 15.0 - t * 9.0) * exp(-r * 1.1) * smoothstep(0.0, 0.2, r) * 0.35;
+				}
+				return h;
+			}
+			float foam(vec2 p, float t) {
+				float f = 0.0;
+				for (int i = 0; i < ${MAX_DROPS}; i++) {
+					vec4 d = uDrops[i];
+					if (d.z <= 0.0) continue;
+					float r = length(p - d.xy);
+					f += d.z * exp(-r * 3.5) * (0.55 + 0.45 * vnoise2(p * 7.0 + vec2(t * 1.3, -t)));
+				}
+				return clamp(f, 0.0, 1.0);
+			}
 			float wave(vec2 p, float t) {
+				t *= uSpeed;
 				return vnoise2(p * 0.6 + t * vec2(0.21, 0.13)) * 0.6 + vnoise2(p * 1.5 - t * vec2(0.17, 0.29)) * 0.3
-					+ vnoise2(p * 3.7 + t * vec2(0.4, -0.33)) * 0.1;
+					+ vnoise2(p * 3.7 + t * vec2(0.4, -0.33)) * 0.1 + drops(p, t / uSpeed);
 			}`,
 		);
 		f = patch(
@@ -243,9 +278,11 @@ function water(
 				// the far shore and its trees darken the low reflections; the sky shows higher up
 				vec3 sky = mix(uSkyHorizon * 0.45, uSkyZenith, smoothstep(0.02, 0.5, R.y));
 				outgoingLight = mix(outgoingLight, sky, fr * uReflect);
-				#ifdef RJ_CLEAR
-				// looking down into it one sees through; across it, mostly the sky
-				diffuseColor.a = mix(0.34, 0.92, fr);
+				float fo = foam(vNWP.xz, uTime);
+				outgoingLight = mix(outgoingLight, vec3(0.92, 0.94, 0.93) * (0.6 + 0.4 * uSkyHorizon), fo * 0.55);
+				#ifdef RJ_SEE
+				// looking down into it one sees in; across it, mostly the sky
+				diffuseColor.a = max(mix(RJ_SEE_DOWN, RJ_SEE_ACROSS, fr), fo * 0.7);
 				#endif
 			}
 			#include <opaque_fragment>`,
@@ -253,7 +290,70 @@ function water(
 		shader.fragmentShader = f;
 	};
 	mat.customProgramCacheKey = () => `nature-water-${onsen}-${clear}`;
-	return { mat, rip };
+	return { mat, rip, drops };
+}
+
+/** Falling water spots the baths ring and foam round (かけ流し). */
+const MAX_DROPS = 4;
+
+/** Hot water running and falling into a bath: streaks and foam flowing down the stream (its v is metres along). */
+function fallingWater(env: Env): THREE.MeshStandardMaterial {
+	const mat = new THREE.MeshStandardMaterial({
+		color: new THREE.Color(0.86, 0.9, 0.89),
+		roughness: 0.1,
+		metalness: 0,
+		transparent: true,
+		depthWrite: false,
+		side: THREE.DoubleSide,
+	});
+	mat.defines = { USE_UV: "" };
+	mat.onBeforeCompile = (shader) => {
+		Object.assign(shader.uniforms, { uTime: env.uTime });
+		let f = patch(
+			shader.fragmentShader,
+			"#include <common>",
+			`#include <common>\nuniform float uTime;\n${NOISE}`,
+		);
+		f = patch(
+			f,
+			"#include <color_fragment>",
+			/* glsl */ `#include <color_fragment>
+			{
+				float u = vUv.x;
+				float v = vUv.y;
+				// streaks along the stream, rushing down it; brighter, foamy ones in between
+				float n = vnoise2(vec2(u * 5.0, v * 3.5 - uTime * 4.5)) * 0.6
+					+ vnoise2(vec2(u * 13.0, v * 9.0 - uTime * 7.0)) * 0.4;
+				float edge = smoothstep(0.0, 0.22, u) * smoothstep(1.0, 0.78, u);
+				diffuseColor.rgb = mix(diffuseColor.rgb * 0.8, vec3(1.0), smoothstep(0.45, 0.85, n));
+				diffuseColor.a = (0.5 + 0.45 * smoothstep(0.3, 0.8, n)) * mix(0.45, 1.0, edge);
+			}`,
+		);
+		shader.fragmentShader = f;
+	};
+	mat.customProgramCacheKey = () => "nature-onsen-fall";
+	return mat;
+}
+
+/** Where falling water meets the bath (y about 0): its lowest points, gathered into spots a metre apart. */
+function fallSpots(mesh: THREE.Mesh): THREE.Vector2[] {
+	const pos = mesh.geometry.getAttribute("position") as THREE.BufferAttribute;
+	const v = new THREE.Vector3();
+	const spots: { p: THREE.Vector2; n: number }[] = [];
+	for (let i = 0; i < pos.count; i++) {
+		v.fromBufferAttribute(pos, i).applyMatrix4(mesh.matrixWorld);
+		if (v.y > 0.08) continue;
+		const q = new THREE.Vector2(v.x, v.z);
+		const s = spots.find((x) => x.p.distanceTo(q) < 1);
+		if (s) {
+			s.p
+				.multiplyScalar(s.n)
+				.add(q)
+				.divideScalar(s.n + 1);
+			s.n++;
+		} else spots.push({ p: q, n: 1 });
+	}
+	return spots.map((s) => s.p);
 }
 
 /** Sparkles: tiny facets that catch the sun as the view moves (shared by both snows). */
@@ -520,6 +620,8 @@ export class CityLooks {
 	private readonly pond: ReturnType<typeof water>;
 	private readonly onsen: ReturnType<typeof water>;
 	private readonly onsenClear: ReturnType<typeof water>;
+	private readonly onsenFall: THREE.MeshStandardMaterial;
+	private readonly spots: THREE.Vector2[] = [];
 	private readonly snowSoft: THREE.MeshStandardMaterial;
 	private readonly snowTrod: THREE.MeshStandardMaterial;
 	private readonly puff = makePuff();
@@ -550,6 +652,7 @@ export class CityLooks {
 		this.pond = water(env, false);
 		this.onsen = water(env, true);
 		this.onsenClear = water(env, true, true);
+		this.onsenFall = fallingWater(env);
 		this.snowSoft = snowMaterial(env, this.tex, false);
 		this.snowTrod = snowMaterial(env, this.tex, true);
 	}
@@ -563,6 +666,14 @@ export class CityLooks {
 			const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
 			const kinds = mats.map((m) => kindOf(mesh.name, m.name));
 			this.entries.push({ mesh, orig: mesh.material, kinds });
+			if (kinds.includes("onsenFall")) {
+				// where it falls, the baths' water rings and foams
+				for (const p of fallSpots(mesh))
+					if (this.spots.length < MAX_DROPS && !this.spots.some((q) => q.distanceTo(p) < 1))
+						this.spots.push(p);
+				for (const w of [this.onsen, this.onsenClear])
+					this.spots.forEach((p, i) => w.drops.value[i]?.set(p.x, p.y, 1, 0));
+			}
 			if (kinds.includes("onsen") || kinds.includes("onsenClear")) {
 				mesh.geometry.computeBoundingBox();
 				const b = (mesh.geometry.boundingBox as THREE.Box3).clone().applyMatrix4(mesh.matrixWorld);
@@ -593,6 +704,8 @@ export class CityLooks {
 				return this.onsen.mat;
 			case "onsenClear":
 				return this.onsenClear.mat;
+			case "onsenFall":
+				return this.onsenFall;
 			case "keep":
 				return orig;
 			default:
@@ -649,6 +762,7 @@ export class CityLooks {
 		this.pond.mat.dispose();
 		this.onsen.mat.dispose();
 		this.onsenClear.mat.dispose();
+		this.onsenFall.dispose();
 		this.snowSoft.dispose();
 		this.snowTrod.dispose();
 		this.puff.dispose();

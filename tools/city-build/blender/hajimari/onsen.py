@@ -328,7 +328,7 @@ def bath(W, rnd, pool):
         p, q = inner[i], inner[(i + 1) % len(inner)]
         W.face([(c[0], c[1], zw), (p[0], p[1], zw), (q[0], q[1], zw)], water, name='water_onsen_' + pool['id'])
         W.face([(c[0], c[1], zf), (p[0], p[1], zf), (q[0], q[1], zf)], 'pebbles' if clear else 'stone_onsen',
-               (0.9, 0.9, 0.88) if clear else (0.7, 0.72, 0.7), 'onsen_bath')
+               (0.9, 0.9, 0.88) if clear else (0.5, 0.52, 0.5), 'onsen_bath')
         W.face([(q[0], q[1], zf), (p[0], p[1], zf), (p[0], p[1], ON['deck_h']), (q[0], q[1], ON['deck_h'])],
                'stone_wall_jp', (0.85, 0.85, 0.82), 'onsen_bath')
     # stone steps down on the north side
@@ -350,16 +350,85 @@ def bath(W, rnd, pool):
              math.atan2(o[1], o[0]))
 
 
-def spout(W, rnd):
-    """Hot water from a bamboo pipe out of a rock into the big bath, at its west end."""
-    sx, sy = walk.SPOUT
-    rock(W, sx - 1.0, sy, 0.95, -0.3, 1.2, rnd, 0)
-    pf = geom.Frame((sx - 0.8, sy, 0), (1, 0))
-    geom.box(W, pf, 0, 1.3, -0.06, 0.06, 1.0, 1.12, 'wood', BAMBOO, 'onsen_bath')
-    W.face([pf.p(1.25, -0.05, 1.0), pf.p(1.3, -0.05, 0.0), pf.p(1.3, 0.05, 0.0), pf.p(1.25, 0.05, 1.0)],
-           'water_onsen', name='water_onsen_spout')
-    W.face([pf.p(1.25, 0.05, 1.0), pf.p(1.3, 0.05, 0.0), pf.p(1.3, -0.05, 0.0), pf.p(1.25, -0.05, 1.0)],
-           'water_onsen', name='water_onsen_spout')
+def spout(W, rnd, sp):
+    """かけ流し: hot water from a bamboo pipe out of a rock, or over the lip of a carved stone channel, falling into
+    a bath all the time. The falling water is its own mesh (water_onsen_fall, flowing in the browser: nature/city.ts),
+    its v coordinate the distance along the stream."""
+    x, y, r = sp['rock']
+    a = np.array(sp['from'], float)
+    b = np.array(sp['to'], float)
+    d = (b - a)[:2]
+    d /= np.linalg.norm(d)
+    if sp['kind'] == 'bamboo':
+        rock(W, x, y, r, -0.3, a[2] + 0.15, rnd, math.atan2(d[1], d[0]))
+        L = float(np.linalg.norm((b - a)[:2]))
+        pf = geom.Frame((a[0], a[1], 0), d)
+        # the pipe, sloping a little down to its mouth, and a joint
+        for k in range(8):
+            u0, u1 = L * k / 8, L * (k + 1) / 8
+            z0 = a[2] + (b[2] - a[2]) * k / 8
+            z1 = a[2] + (b[2] - a[2]) * (k + 1) / 8
+            for j in range(6):
+                t0, t1 = 2 * math.pi * j / 6, 2 * math.pi * (j + 1) / 6
+                q = [pf.p(u0, math.cos(t0) * 0.06, z0 + math.sin(t0) * 0.06),
+                     pf.p(u1, math.cos(t0) * 0.06, z1 + math.sin(t0) * 0.06),
+                     pf.p(u1, math.cos(t1) * 0.06, z1 + math.sin(t1) * 0.06),
+                     pf.p(u0, math.cos(t1) * 0.06, z0 + math.sin(t1) * 0.06)]
+                W.face(q[::-1], 'wood', BAMBOO, 'onsen_bath')
+        geom.box(W, pf, L * 0.45, L * 0.45 + 0.05, -0.07, 0.07, (a[2] + b[2]) / 2 - 0.07, (a[2] + b[2]) / 2 + 0.07,
+                 'wood', tuple(c * 0.85 for c in BAMBOO), 'onsen_bath')
+        # a post holding it up
+        geom.box(W, pf, L * 0.7, L * 0.7 + 0.08, -0.04, 0.04, 0.0, a[2] + (b[2] - a[2]) * 0.7 - 0.06, 'wood',
+                 (0.55, 0.42, 0.3), 'onsen_bath')
+        fall(W, b + np.array([d[0] * 0.02, d[1] * 0.02, 0]), d, 0.9, 0.05, round_=True)
+    else:
+        # a block of stone with a channel cut in its top; the water spills over its lip in a thin sheet
+        f = geom.Frame((a[0], a[1], 0), d)
+        L = float(np.linalg.norm((b - a)[:2]))
+        rock(W, x - d[0] * 0.3, y - d[1] * 0.3, r, -0.3, a[2] + 0.35, rnd, math.atan2(d[1], d[0]))
+        geom.box(W, f, -0.1, L, -0.32, 0.32, -0.3, b[2] - 0.04, 'stone_wall_jp', (0.8, 0.8, 0.78), 'onsen_bath')
+        for side in (-1, 1):
+            geom.box(W, f, -0.1, L, side * 0.32 - 0.1 * (side > 0), side * 0.32 + 0.1 * (side < 0), b[2] - 0.04,
+                     b[2] + 0.1, 'stone_wall_jp', (0.8, 0.8, 0.78), 'onsen_bath')
+        # the water running along the channel, then falling
+        W.face([f.p(-0.1, -0.22, b[2] - 0.02), f.p(L, -0.22, b[2] - 0.02), f.p(L, 0.22, b[2] - 0.02),
+                f.p(-0.1, 0.22, b[2] - 0.02)], 'water_onsen_fall', name='water_onsen_fall',
+               uv=[(0, -L - 0.1), (0, 0), (1, 0), (1, -L - 0.1)])
+        fall(W, b + np.array([0, 0, -0.02]), d, 0.6, 0.22)
+
+
+def fall(W, mouth, d, speed, half, round_=False):
+    """Water leaving `mouth` (x, y, z) at `speed` m/s along d (xy) and falling to the bath's surface: a sheet
+    `half` wide either side (and a second, crossing one for a round stream). UV: u across, v metres along."""
+    zw = ON['water']
+    g = 9.8
+    T = (-0.0 + math.sqrt(2 * g * (mouth[2] - zw))) / g
+    n = 10
+    pts, vs = [], []
+    s = 0.0
+    for i in range(n + 1):
+        t = T * i / n
+        p = np.array([mouth[0] + d[0] * speed * t, mouth[1] + d[1] * speed * t, mouth[2] - 0.5 * g * t * t])
+        if pts:
+            s += float(np.linalg.norm(p - pts[-1]))
+        pts.append(p)
+        vs.append(s)
+    nrm = np.array([-d[1], d[0], 0.0])
+    sides = [nrm] if not round_ else [nrm, None]
+    for side in sides:
+        for i in range(n):
+            p0, p1 = pts[i], pts[i + 1]
+            if side is None:
+                # across the stream, perpendicular to it and to nrm
+                tan = (p1 - p0) / max(1e-6, np.linalg.norm(p1 - p0))
+                w = np.cross(tan, nrm)
+            else:
+                w = side
+            spread = 1.0 + 0.6 * i / n     # the stream widens a little as it falls
+            q = [p0 - w * half * spread, p0 + w * half * spread, p1 + w * half * (spread + 0.06),
+                 p1 - w * half * (spread + 0.06)]
+            uv = [(0, vs[i]), (1, vs[i]), (1, vs[i + 1]), (0, vs[i + 1])]
+            W.face(q, 'water_onsen_fall', name='water_onsen_fall', uv=uv)   # seen from both sides
 
 
 def rock(W, x, y, r, z0, z1, rnd, a, mat='rock_mossy'):
@@ -461,7 +530,8 @@ def build(W):
         rock(W, x, y, r, ON['floor'], 0.4 + r * 0.3, rnd, rnd.uniform(0, 3))
     for (x, y, r) in plan.ONSEN_GARDEN_ROCKS:
         rock(W, x, y, r, 0.0, ON['deck_h'] + r * 1.1, rnd, rnd.uniform(0, 3))
-    spout(W, rnd)
+    for sp in walk.SPOUTS:
+        spout(W, rnd, sp)
     a, b, c, d = ON['deck']
     fence(W, (a - 1.0, d + 0.2), (a - 1.0, b - 1.0))
     fence(W, (a - 1.0, b - 1.0), (c + 1.0, b - 1.0))
