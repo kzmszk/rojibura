@@ -7,6 +7,7 @@
 // - spine, neck, head, hips: x > 0 bends forward, y > 0 turns to the left, z > 0 leans to the right;
 // - arms hang with z = -76 (left) / +76 (right); elbows bend forward with y < 0 (left) / y > 0 (right).
 
+import { STEP_BACK, STEP_BACK_S, TOGETHER_MS } from "@rojibura/protocol";
 import * as THREE from "three";
 
 export type MoveName =
@@ -23,6 +24,7 @@ export type MoveName =
 	| "roll"
 	| "backroll"
 	| "backflip"
+	| "stepback"
 	| "handshake"
 	| "hug"
 	| "pick"
@@ -994,16 +996,39 @@ export const MOVES: {
 		name: "hug",
 		play: "once",
 		clip: () =>
-			sampled("hug", 3, (t) => {
+			// held a while (some 3 s), swaying a little; both step back after it ("stepback")
+			sampled("hug", TOGETHER_MS.hug / 1000, (t) => {
 				const f = keyed([
 					[0, { bones: {} }],
-					[0.6, { bones: HUG }],
-					[2.4, { bones: HUG }],
-					[3, { bones: {} }],
+					[0.7, { bones: HUG }],
+					[3.8, { bones: HUG }],
+					[4.5, { bones: {} }],
 				])(t);
-				if (t > 0.6 && t < 2.4) f.bones.spine = [6, 3 * Math.sin((t - 0.6) * TAU * 0.6), 0];
+				if (t > 0.7 && t < 3.8) f.bones.spine = [6, 3 * Math.sin((t - 0.7) * TAU * 0.4), 0];
 				return f;
 			}),
+	},
+	{
+		// a step back, still facing the same way: the right foot back, then the left beside it (after a hug)
+		name: "stepback",
+		play: "once",
+		travel: -STEP_BACK,
+		clip: () =>
+			sampled(
+				"stepback",
+				STEP_BACK_S,
+				keyed([
+					[0, { bones: {} }],
+					[0.3, { bones: { spine: [-3, 0, 0], rightUpperLeg: [12, 0, 0], rightLowerLeg: [30, 0, 0] } }],
+					[
+						0.55,
+						{ bones: { rightUpperLeg: [16, 0, 0], rightLowerLeg: [4, 0, 0], leftUpperLeg: [-10, 0, 0] } },
+					],
+					[0.8, { bones: { rightUpperLeg: [6, 0, 0], leftUpperLeg: [-4, 0, 0], leftLowerLeg: [28, 0, 0] } }],
+					[STEP_BACK_S, { bones: {} }],
+				]),
+				"touch",
+			),
 	},
 	// small things (docs/prd.md 3.4.7): the thing follows the right hand
 	{

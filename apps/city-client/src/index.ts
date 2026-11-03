@@ -43,6 +43,7 @@ import {
 	poseAt,
 	RUN_SPEED,
 	SKILL_NAMES,
+	TOGETHER_MS,
 	type Together,
 	travelReason,
 	type Vec2,
@@ -89,6 +90,7 @@ const MOTION_EMOJI: Record<Motion, string> = {
 	roll: "⤵️",
 	backroll: "↩️",
 	backflip: "🔄",
+	stepback: "🔙",
 };
 const TOGETHER_LABEL: Record<Together, string> = { handshake: "握手", hug: "ハグ" };
 /** Patting your AI's head (🤚, H): the palm comes down on top and moves gently from side to side. */
@@ -1060,6 +1062,19 @@ async function startCity(
 					a.together(m.kind, new THREE.Vector3(pb[0], 0, pb[1]), m.at);
 					b.together(m.kind, new THREE.Vector3(pa[0], 0, pa[1]), m.at);
 					addLog("", `${a.state.name} と ${b.state.name} が${TOGETHER_LABEL[m.kind]}しました`, "sys");
+					// a hug over, arms back down: one steps back a little (an AI hugged does too, by the host)
+					if (m.kind === "hug" && (m.a === myId || m.b === myId)) {
+						const spot = m.a === myId ? pa : pb;
+						setTimeout(
+							() => {
+								const mine = myId ? avatars.get(myId) : undefined;
+								if (!mine) return;
+								const p = poseAt(mine.state.move, conn.hostNow());
+								if (!p.moving && dist(p.pos, spot) < 0.2) act("stepback");
+							},
+							m.at + TOGETHER_MS.hug - conn.hostNow(),
+						);
+					}
 					break;
 				}
 				case "BUILT":

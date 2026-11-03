@@ -99,7 +99,10 @@ import {
 	THROW_MS,
 	THROW_RANGE,
 	THROW_RELEASE_MS,
+	STEP_BACK,
+	STEP_BACK_S,
 	TOGETHER_GAP,
+	TOGETHER_MS,
 	type Together,
 	type Vec2,
 	WALK_SPEED,
@@ -263,6 +266,11 @@ export interface Member extends JoinInfo {
 	companyAt?: number;
 	/** What it is doing now (docs/life.md 3). */
 	doing?: Doing;
+	/**
+	 * Doing something together with `with` (docs/prd.md 3.4.6) until host time `until` (and a little after,
+	 * while they step back): the host moves neither of them meanwhile, and an AI does not move itself.
+	 */
+	together?: { with: AvatarId; kind: Together; until: number };
 	/** Working or studying in a zone since host time `since`; `paid` coins of it are in the wallet already. */
 	/** `settled`: host time its life was brought up to; `used`: the energy it has used so far. */
 	job?: { kind: JobKind; zone: string; since: number; paid: number; settled?: number; used?: number };
@@ -285,6 +293,9 @@ export interface ChatLine {
 }
 
 const CHAT_LOG_MAX = 2000;
+
+/** After something done together, the two may still step back this long (ms): the host leaves them be. */
+const STEP_BACK_GRACE_MS = 3000;
 
 /** Building: keep this clear around the spawn point and landmarks (m). */
 const SPAWN_CLEAR = 3.5;
@@ -792,11 +803,19 @@ export class RoomCore<C> {
 					this.violation(conn, v, now);
 					return;
 				}
-				// walking with its owner the host moves it; with the owner standing still, it may step about close by
-				if (this.accompanying(m) && !this.freeStep(m, msg, now)) {
+				// walking with its owner the host moves it; with the owner standing still, it may step about close by;
+				// hugging (or shaking hands), an AI stays where it is
+				if (
+					(this.accompanying(m) && !this.freeStep(m, msg, now)) ||
+					(m.kind !== "human" && this.togetherNow(m, now))
+				) {
 					this.transport.send(conn, { t: "CORRECT", move: m.move });
 					return;
 				}
+				// a person walking off in the middle of a hug ends it for both (stepping back after it does not)
+				// (a stop where one is, as a page says on arriving, is not walking off)
+				const off = msg.t === "MOVE_PATH" || msg.speed > 0;
+				if (m.kind === "human" && off && m.together && now < m.together.until) this.endTogether(m);
 				msg.t === "MOVE_PATH" ? this.movePath(conn, m, msg, now) : this.moveVel(conn, m, msg, now);
 				if (m.companion) this.accompany(m, now);
 				// walking out of where one works or studies ends it
@@ -864,6 +883,8 @@ export class RoomCore<C> {
 					undefined,
 					true,
 				);
+				// stepping back after a hug: an AI (or the guide) hugged steps back with them
+				if (msg.motion === "stepback") this.stepBackWith(m, now);
 				return;
 			case "BODY": {
 				if (!this.moveToken(v, now)) {
@@ -1031,11 +1052,62 @@ export class RoomCore<C> {
 		this.transport.send(fc, { t: "ANSWERED", by: m.id, kind: offer.kind, accept: accept && fits });
 		if (!accept || !fits) return;
 		const ms = Math.max(this.stepTo(fc, from, a, pa, now), this.stepTo(mc, m, b, pb, now));
+		const at = now + ms + 200;
+		const until = at + TOGETHER_MS[offer.kind];
+		from.together = { with: m.id, kind: offer.kind, until };
+		m.together = { with: from.id, kind: offer.kind, until };
+		this.transport.persist(fc, from);
+		this.transport.persist(mc, m);
 		this.broadcastAbout(
 			from,
-			{ t: "TOGETHER", kind: offer.kind, a: from.id, b: m.id, at: now + ms + 200 },
+			{ t: "TOGETHER", kind: offer.kind, a: from.id, b: m.id, at },
 			undefined,
 			m.id,
+			true,
+		);
+	}
+
+	private endTogether(m: Member): void {
+		const other = m.together ? this.memberById(m.together.with) : undefined;
+		if (other?.together?.with === m.id) delete other.together;
+		delete m.together;
+	}
+
+	/** Whether `m` is (still) doing something together: until it is over, and a little after (stepping back). */
+	private togetherNow(m: Member, now: number): boolean {
+		return !!m.together && now < m.together.until + STEP_BACK_GRACE_MS;
+	}
+
+	/**
+	 * `m`, a person, steps back after a hug (their page does it when the hug is over): the AI (or the guide)
+	 * they hugged steps back too, away from them, unless it has moved on. Two people each step back themselves.
+	 */
+	private stepBackWith(m: Member, now: number): void {
+		const t = m.together;
+		delete m.together;
+		if (!t || m.kind !== "human" || now > t.until + STEP_BACK_GRACE_MS) return;
+		const other = this.memberById(t.with);
+		if (!other || other.kind === "human" || other.together?.with !== m.id) return;
+		delete other.together;
+		const oc = this.byId.get(other.id);
+		const here = this.positionOf(other, now);
+		if (oc === undefined || poseAt(other.move, now).moving) return;
+		const from = this.positionOf(m, now);
+		const d = dist(here, from);
+		if (d < 1e-3) return;
+		const to: Vec2 = [
+			here[0] + ((here[0] - from[0]) / d) * STEP_BACK,
+			here[1] + ((here[1] - from[1]) / d) * STEP_BACK,
+		];
+		if (!this.walkOf(other).validatePath([here, to])) return;
+		other.move = { kind: "path", path: [here, to], speed: STEP_BACK / STEP_BACK_S, at: now };
+		this.transport.persist(oc, other);
+		this.broadcastAbout(other, { t: "MOVED", id: other.id, move: other.move });
+		this.broadcastAbout(
+			other,
+			{ t: "ACTED", id: other.id, motion: "stepback", at: now },
+			undefined,
+			undefined,
 			true,
 		);
 	}
@@ -1167,6 +1239,8 @@ export class RoomCore<C> {
 			const side = slot++ % 2 === 0 ? 1 : -1;
 			// taking the owner somewhere: it leads, the owner follows (until it is over, or long past)
 			if (ai.lead && now < ai.lead.until) continue;
+			// hugging its owner (or someone): it stays there until it is over and they have stepped back
+			if (this.togetherNow(ai, now)) continue;
 			if (ai.lead) {
 				delete ai.lead;
 				this.transport.persist(conn, ai);

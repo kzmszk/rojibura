@@ -49,6 +49,7 @@ export const MOTIONS: readonly Motion[] = [
 	"roll",
 	"backroll",
 	"backflip",
+	"stepback",
 ];
 /** Motions that last until the avatar moves: the host keeps them in its idle MoveState. */
 export const POSTURES: readonly Posture[] = ["sit", "lie"];

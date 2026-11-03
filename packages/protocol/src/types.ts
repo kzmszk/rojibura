@@ -18,7 +18,8 @@ export type Motion =
 	| "handstand"
 	| "roll"
 	| "backroll"
-	| "backflip";
+	| "backflip"
+	| "stepback";
 /** Two avatars doing something together, after one asked and the other said yes (docs/prd.md 3.4.6). */
 export type Together = "handshake" | "hug";
 /** Host-issued: "i_...". */

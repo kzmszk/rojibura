@@ -94,6 +94,11 @@ export const OFFER_REACH = 3; // m: how close someone must be to be asked
 export const OFFER_TTL_MS = 15_000;
 /** How far apart two avatars stand (centre to centre) for each thing done together, in metres. */
 export const TOGETHER_GAP = { handshake: 0.65, hug: 0.4 } as const;
+/** How long each lasts once it starts (the clip's length), in ms: nobody moves the two meanwhile. */
+export const TOGETHER_MS = { handshake: 2200, hug: 4500 } as const;
+/** After a hug both step back this far (the "stepback" motion, m), and take this long over it (s). */
+export const STEP_BACK = 0.3;
+export const STEP_BACK_S = 1.1;
 
 // an AI taking its owner somewhere (docs/prd.md 3.4.10)
 export const LEAD_REACH = 12; // m: how close the owner must be
