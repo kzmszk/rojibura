@@ -73,7 +73,7 @@ export class CityScene {
 		addEventListener("resize", () => this.resize());
 	}
 
-	/** The area's sky, fog, view distance, water and shadow reach (docs/prd.md 3.8). */
+	/** The area's sky, fog, view distance, water, shadow reach and sun (docs/prd.md 3.8). */
 	applyView(view: AreaView | undefined): void {
 		if (!view) return;
 		if (view.sky) {
@@ -101,6 +101,8 @@ export class CityScene {
 			this.water = water;
 		}
 		if (view.shadow) this.setShadow(view.shadow);
+		// an invisible light is left out, and with it the shadow pass
+		if (view.sun === false) this.sun.visible = false;
 		if (view.camera) this.controls.maxDistance = view.camera;
 	}
 

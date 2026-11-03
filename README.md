@@ -171,7 +171,7 @@ pnpm assets:record   # 3Dを作り直したら files.json を書き直す（pnpm
 ```
 
 - デプロイは手元の静的アセットで全部を置き換える。3Dがそろっていないとビルド（`cf deploy` も）が止まる。止まったら `pnpm assets:pull`。
-- ヴェネツィア（`assets/areas/venezia/3d/2026-11-01/`）とサグラダ・ファミリアの中（`assets/areas/sagrada/3d/2026-11-03/`）は demos の書き出しのコピー。元は demos にある（venice の `tools/rj_export.mjs`、sagrada-familia の `tools/rj_export.mjs`）。新しい版を書き出したら、`3d/<版>/` に置いて `assets/areas.json` の `scene` を書き換え、`pnpm assets:record`。
+- ヴェネツィア（`assets/areas/venezia/3d/2026-11-01/`）とサグラダ・ファミリアの中（`assets/areas/sagrada/3d/2026-11-03b/`）は demos の書き出しのコピー。元は demos にある（venice の `tools/rj_export.mjs`、sagrada-familia の `tools/rj_export.mjs`）。新しい版を書き出したら、`3d/<版>/` に置いて `assets/areas.json` の `scene` を書き換え、`pnpm assets:record`。
 - まだデプロイしていない書き出しを試すだけなら、開発ビルドの `?assets=` でほかの置き場から読める（`node tools/serve-cors.ts <dir> 8418` で手元のフォルダを CORS 付きで配る）。
 
 ### ヴェネツィアの歩ける場所
