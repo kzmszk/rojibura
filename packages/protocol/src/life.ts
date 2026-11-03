@@ -111,6 +111,9 @@ export const ACTIVITY_REACH = 4;
 export const MORNING_ENERGY = 70;
 /** Energy used per city hour just by being about (scaled by fitness). */
 export const ENERGY_PER_HOUR = 4;
+/** Walking with its owner, an AI's mood goes up this much every COMPANY_MOOD_MS (real time) beside them. */
+export const COMPANY_MOOD = 1;
+export const COMPANY_MOOD_MS = 60_000;
 /** Below this energy, work and exercise cannot be started and nobody runs. */
 export const HUNGRY = 20;
 /** Below this fitness, nobody runs. */
@@ -219,6 +222,12 @@ export function decay(life: LifeState, hostNow: number): LifeState {
 	// fit bodies use less: fitness 0 ×1.25, 50 ×1, 100 ×0.75
 	const rate = ENERGY_PER_HOUR * (1.25 - life.fitness / 200);
 	return { ...life, energy: round(clamp(life.energy - hours * rate)), at: hostNow };
+}
+
+/** The mood after `ms` (real time) walking with its owner, from `since` on: whole COMPANY_MOOD_MS count. */
+export function withCompany(life: LifeState, ms: number): LifeState {
+	const n = Math.floor(Math.max(0, ms) / COMPANY_MOOD_MS);
+	return n > 0 ? { ...life, mood: round(clamp(life.mood + n * COMPANY_MOOD)) } : life;
 }
 
 /** What was left undone today, in words. */
