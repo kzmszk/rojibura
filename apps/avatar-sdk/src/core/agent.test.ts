@@ -459,6 +459,100 @@ describe("walking with its owner", () => {
 });
 
 describe("living by what it needs (docs/life.md 5.3)", () => {
+	test("walking with its owner and hungry, it asks them along to a shop and buys there", async () => {
+		// city 09:00
+		const nine = Date.UTC(2026, 10, 2, 11) + realMs(180);
+		vi.useFakeTimers({ now: nine });
+		try {
+			const sent: ClientToHost[] = [];
+			const agent = new Agent({
+				persona: { name: "ミナ", personality: "" },
+				llm: { name: "fake", complete: async () => null },
+				memory: memory(),
+				nav: { findPath: (a, b) => [a, b] },
+				landmarks: [],
+				logger: { info: () => {}, warn: () => {} },
+				send: (m) => sent.push(m),
+				wanderMs: [1000, 1000],
+				random: () => 0,
+				shops: [
+					{
+						id: "bakery",
+						name: "パン屋こむぎ",
+						currency: "銅貨",
+						counter: [30, 0],
+						goods: [{ id: "baguette", name: "バゲット", price: 4, color: "#c90", food: true }],
+					},
+					{
+						id: "seven",
+						name: "セブンイレブン",
+						currency: "銅貨",
+						counter: [10, 0],
+						goods: [{ id: "onigiri", name: "おにぎり", price: 3, color: "#fff", food: true }],
+					},
+				],
+				foods: { onigiri: { energy: 25, meal: true }, baguette: { energy: 30, meal: true } },
+			});
+			const blank = { thumb: "", lod: "", vrm: "" };
+			agent.handle({
+				t: "WELCOME",
+				you: "a_mina",
+				serverTime: nine,
+				budget: 0,
+				avatars: [
+					{
+						id: "a_mina",
+						kind: "ai",
+						name: "ミナ",
+						status: "active",
+						assets: blank,
+						move: { kind: "idle", pos: [0, 0], at: 0 },
+					},
+					{
+						id: "h_k",
+						kind: "human",
+						name: "Kazu",
+						status: "active",
+						assets: blank,
+						move: { kind: "idle", pos: [2, 0], at: 0 },
+					},
+				],
+				life: { ...newLife(nine), energy: 30 },
+			});
+			agent.handle({ t: "WALLET", coins: 100 });
+			agent.handle({ t: "COMPANY", owner: "h_k", on: true });
+			// it does not walk off for food: it asks its owner along to the nearest shop
+			await vi.advanceTimersByTimeAsync(3100);
+			expect(sent.filter((m) => m.t === "LEAD")).toEqual([
+				{
+					t: "LEAD",
+					to: [10, 0],
+					place: "セブンイレブン",
+					text: "おなかがすいた。セブンイレブンに寄ってもいい？",
+				},
+			]);
+			expect(sent.some((m) => m.t === "BUY")).toBe(false);
+			// they come: the host walks it there, and it buys once it is at the counter
+			agent.handle({
+				t: "LEAD_ANSWERED",
+				by: "h_k",
+				accept: true,
+				place: "セブンイレブン",
+				at: Date.now() + 5000,
+			});
+			agent.handle({
+				t: "MOVED",
+				id: "a_mina",
+				move: { kind: "idle", pos: [9.5, 0], at: Date.now() },
+			});
+			await vi.advanceTimersByTimeAsync(26_000);
+			expect(sent).toContainEqual({ t: "BUY", shop: "seven", goods: "onigiri" });
+			agent.stop();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	test("hungry, it buys a meal and eats it; then it works until the day's work is done", async () => {
 		// city 09:00
 		const nine = Date.UTC(2026, 10, 2, 11) + realMs(180);

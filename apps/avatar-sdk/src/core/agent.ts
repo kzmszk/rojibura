@@ -20,6 +20,7 @@ import {
 	insidePolygon,
 	type JobKind,
 	type JobZone,
+	LEAD_MIN_DISTANCE,
 	LEAD_PLACE_MAX,
 	LEAD_TEXT_MAX,
 	pathLeg,
@@ -338,10 +339,8 @@ export class Agent {
 			return true;
 		}
 		if (t.night) return false;
-		const mealtime =
-			(life.duties.meals < 1 && t.minutes >= 7 * 60) || (life.duties.meals < 2 && t.minutes >= 18 * 60);
-		if ((life.energy < 45 || (mealtime && life.energy < 90)) && this.goEat(here, life.energy < HUNGRY))
-			return true;
+		const want = this.wantsFood();
+		if (want && this.goEat(here, want.anything)) return true;
 		if (
 			life.energy >= 30 &&
 			(!life.duties.work || (coins !== null && coins < POOR)) &&
@@ -416,8 +415,18 @@ export class Agent {
 		return this.goFor(e, near, what) || this.goFor(e, place.pos, what);
 	}
 
-	/** To a shop for something to eat it can pay for: a meal, or anything when very hungry. */
-	private goEat(here: Vec2, anything: boolean): boolean {
+	/** Whether it would eat now: hungry, or a mealtime it has not eaten at. */
+	private wantsFood(): { anything: boolean } | null {
+		const life = this.world.lifeNow();
+		const t = cityTime(this.hostNow());
+		if (!life || t.night) return null;
+		const mealtime =
+			(life.duties.meals < 1 && t.minutes >= 7 * 60) || (life.duties.meals < 2 && t.minutes >= 18 * 60);
+		return life.energy < 45 || (mealtime && life.energy < 90) ? { anything: life.energy < HUNGRY } : null;
+	}
+
+	/** Food it can pay for: the meals, or anything when very hungry. */
+	private foodChoice(anything: boolean): { s: Shop; g: Shop["goods"][number] }[] {
 		const coins = this.world.coins;
 		const food = (this.o.shops ?? []).flatMap((s) =>
 			s.goods
@@ -425,12 +434,39 @@ export class Agent {
 				.map((g) => ({ s, g, meal: this.o.foods?.[g.id]?.meal === true })),
 		);
 		const meals = food.filter((f) => f.meal);
-		const choice = meals.length > 0 ? meals : anything ? food : [];
+		return meals.length > 0 ? meals : anything ? food : [];
+	}
+
+	/** To a shop for something to eat it can pay for: a meal, or anything when very hungry. */
+	private goEat(here: Vec2, anything: boolean): boolean {
+		const choice = this.foodChoice(anything);
 		const pick = choice[Math.floor(this.random() * choice.length)];
 		if (!pick) return false;
 		const e: Errand = { kind: "buy", shop: pick.s.id, goods: pick.g.id };
 		if (dist(here, pick.s.counter) <= SHOP_REACH - 0.5) return this.arrive(e, here);
 		return this.goFor(e, pick.s.counter, `to ${pick.s.name} for ${pick.g.name}`);
+	}
+
+	/**
+	 * Walking with its owner, hungry: at a shop's counter it buys (and eats once it is in its hand); otherwise
+	 * it asks them along to the nearest shop with food (LEAD), and buys when it has taken them there.
+	 */
+	private eatAlong(here: Vec2): boolean {
+		const want = this.wantsFood();
+		if (!want) return false;
+		const choice = this.foodChoice(want.anything);
+		const at = choice.filter((f) => dist(here, f.s.counter) <= SHOP_REACH - 0.5);
+		const pick = at[Math.floor(this.random() * at.length)];
+		if (pick) return this.arrive({ kind: "buy", shop: pick.s.id, goods: pick.g.id }, here);
+		const near = choice
+			.map((f) => ({ ...f, d: dist(here, f.s.counter) }))
+			.filter((f) => f.d >= LEAD_MIN_DISTANCE)
+			.sort((a, b) => a.d - b.d)[0];
+		if (!near) return false;
+		return this.lead(
+			{ id: near.s.id, name: near.s.name, pos: near.s.counter },
+			`おなかがすいた。${near.s.name}に寄ってもいい？`,
+		);
 	}
 
 	/** To a place to work or study (the middle of it). */
@@ -636,21 +672,29 @@ export class Agent {
 
 	/**
 	 * Asks the owner it walks with to come along to `place` (docs/prd.md 3.4.10), with a line of its own
-	 * (`say`; after a reply that already said it, none). Not again soon, and not soon after a no.
+	 * (`say`: true for one of LEAD_LINES, or the line; after a reply that already said it, none). Not again
+	 * soon, and not soon after a no. True if it asked.
 	 */
-	private lead(place: Landmark, say: boolean): void {
+	private lead(place: Landmark, say: boolean | string): boolean {
 		const now = Date.now();
-		if (now - this.leadAskedAt < LEAD_AGAIN_MS || now - this.leadNoAt < LEAD_AFTER_NO_MS) return;
+		if (now - this.leadAskedAt < LEAD_AGAIN_MS || now - this.leadNoAt < LEAD_AFTER_NO_MS) return false;
 		this.leadAskedAt = now;
-		const line = LEAD_LINES[Math.floor(this.random() * LEAD_LINES.length)] ?? "{place}に行きたいな。";
 		const name = [...place.name].slice(0, LEAD_PLACE_MAX).join("");
+		const line =
+			typeof say === "string"
+				? say
+				: (LEAD_LINES[Math.floor(this.random() * LEAD_LINES.length)] ?? "{place}に行きたいな。").replace(
+						"{place}",
+						name,
+					);
 		this.o.send({
 			t: "LEAD",
 			to: place.pos,
 			place: name,
-			...(say ? { text: [...line.replace("{place}", name)].slice(0, LEAD_TEXT_MAX).join("") } : {}),
+			...(say ? { text: [...line].slice(0, LEAD_TEXT_MAX).join("") } : {}),
 		});
 		this.o.logger.info(`asking the owner along to ${place.name}`);
+		return true;
 	}
 
 	walkTo(to: Vec2): boolean {
@@ -705,8 +749,9 @@ export class Agent {
 			void this.initiate(near.a, near.d, here);
 			return;
 		}
-		// walking with its owner: no strolling off alone, but now and then it would like to go somewhere
+		// walking with its owner: no strolling off alone, but it eats, and now and then it would like to go somewhere
 		if (this.world.company) {
+			if (this.eatAlong(here)) return;
 			const options = this.o.landmarks.filter((l) => dist(l.pos, here) > LEAD_FAR);
 			const pick = options[Math.floor(this.random() * options.length)];
 			if (pick && this.random() < LEAD_CHANCE) this.lead(pick, true);
