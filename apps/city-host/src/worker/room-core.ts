@@ -40,6 +40,7 @@ import {
 	dist,
 	EARN_MS,
 	eatFood,
+	FLY_REACH,
 	type Food,
 	facing,
 	finishActivity,
@@ -88,6 +89,7 @@ import {
 	type Together,
 	type Vec2,
 	WALK_SPEED,
+	WARP_INTERVAL_MS,
 } from "@rojibura/protocol";
 import { PRODUCTION_RULES, type RoomRules } from "./rules.ts";
 
@@ -171,6 +173,8 @@ export interface World {
 	spawn: Vec2;
 	/** Used in the spatial context when no landmark is close. */
 	areaName: string;
+	/** People may float in the air here (docs/prd.md 3.4.13). */
+	fly?: boolean;
 	/** Where building is possible (free play). */
 	build?: BuildWorld;
 	/** Published builds that are part of the city (already in `walk`); only for spatial context. */
@@ -231,6 +235,10 @@ export interface Member extends JoinInfo {
 	watchUsage?: boolean;
 	/** Humans: their own AIs walk with them (docs/prd.md 3.4.9). */
 	companion?: boolean;
+	/** Humans floating in the air (docs/prd.md 3.4.13): at this height (world Y); they move over everything. */
+	fly?: number;
+	/** Host time of their last WARP (docs/prd.md 3.4.14). */
+	warpedAt?: number;
 	/** Which way the avatar last walked (the host knows no facing): companions keep to its front. */
 	heading?: Vec2;
 	/** AIs: taking the owner to a place (docs/prd.md 3.4.10); walking with them again after `until` at last. */
@@ -763,6 +771,18 @@ export class RoomCore<C> {
 				// walking out of where one works or studies ends it
 				if (m.job && !this.inJobZone(m, m.job.zone, now)) this.stopJob(m, now);
 				return;
+			case "FLY":
+			case "WARP": {
+				if (!this.moveToken(v, now)) {
+					this.violation(conn, v, now);
+					return;
+				}
+				const err = msg.t === "FLY" ? this.fly(conn, m, msg.alt, now) : this.warp(conn, m, msg.to, now);
+				if (err) this.notice(conn, "rejected", err);
+				if (!err && m.companion) this.accompany(m, now);
+				if (m.job && !this.inJobZone(m, m.job.zone, now)) this.stopJob(m, now);
+				return;
+			}
 			case "JOB": {
 				const err = msg.kind ? this.startJob(m, msg.kind, now) : this.stopJob(m, now);
 				if (err) this.notice(conn, "rejected", err);
@@ -1626,17 +1646,24 @@ export class RoomCore<C> {
 		if (v) v.lastSeen = this.clock();
 	}
 
+	/** Afloat one goes anywhere not too far out from where one can walk (docs/prd.md 3.4.13). */
+	private inSky(p: Vec2): boolean {
+		return dist(this.walk.closestPoint(p), p) <= FLY_REACH;
+	}
+
 	private movePath(conn: C, m: Member, msg: Extract<ClientToHost, { t: "MOVE_PATH" }>, now: number): void {
 		const here = this.positionOf(m, now);
 		const start = msg.path[0] as Vec2;
 		const fromHere = dist(start, here) <= POSITION_TOLERANCE;
+		const clear = (path: Vec2[]) =>
+			m.fly !== undefined ? path.every((p) => this.inSky(p)) : this.walk.validatePath(path);
 		let path: Vec2[] | null =
-			fromHere && polylineLength(msg.path) <= MAX_PATH_LENGTH && this.walk.validatePath(msg.path)
+			fromHere && polylineLength(msg.path) <= MAX_PATH_LENGTH && clear(msg.path)
 				? // start exactly where the host thinks the avatar is, so everyone interpolates the same line
 					[here, ...msg.path.slice(1)]
 				: null;
 		// a path through something built (a client or AI that does not know about it yet): plan it again
-		if (!path && fromHere && this.builds.size > 0)
+		if (!path && fromHere && this.builds.size > 0 && m.fly === undefined)
 			path = this.replan(here, msg.path[msg.path.length - 1] as Vec2);
 		if (!path) {
 			this.reject(conn, m, here, now);
@@ -1650,7 +1677,8 @@ export class RoomCore<C> {
 
 	private moveVel(conn: C, m: Member, msg: Extract<ClientToHost, { t: "MOVE_VEL" }>, now: number): void {
 		const here = this.positionOf(m, now);
-		if (dist(msg.pos, here) > POSITION_TOLERANCE || !this.walk.isWalkable(msg.pos)) {
+		const open = m.fly !== undefined ? this.inSky(msg.pos) : this.walk.isWalkable(msg.pos);
+		if (dist(msg.pos, here) > POSITION_TOLERANCE || !open) {
 			this.reject(conn, m, here, now);
 			return;
 		}
@@ -1665,6 +1693,71 @@ export class RoomCore<C> {
 					: { kind: "vel", pos: msg.pos, dir: msg.dir, speed: this.speedFor(m, msg.speed, now), at: now };
 		this.transport.persist(conn, m);
 		this.broadcastAbout(m, { t: "MOVED", id: m.id, move: m.move });
+	}
+
+	/**
+	 * Floats at `alt`, or comes down (null) on the walkable ground nearest below (docs/prd.md 3.4.13). Humans
+	 * only, where the area allows it. Null if done, else why not.
+	 */
+	private fly(conn: C, m: Member, alt: number | null, now: number): string | null {
+		if (m.kind !== "human") return "AIは空を飛べません";
+		if (alt !== null && !this.world.fly) return "ここでは浮かべません";
+		if (alt === null) {
+			if (m.fly === undefined) return null;
+			delete m.fly;
+			this.broadcastAbout(m, { t: "FLEW", id: m.id, alt: null });
+			this.land(conn, m, this.positionOf(m, now), now);
+			return null;
+		}
+		const lifting = m.fly === undefined;
+		m.fly = alt;
+		if (lifting) {
+			this.stopDoing(conn, m, now);
+			// a posture ends: one floats up standing
+			const here = this.positionOf(m, now);
+			if (m.move.kind === "idle" && m.move.posture) {
+				m.move = { kind: "idle", pos: here, at: now };
+				this.broadcastAbout(m, { t: "MOVED", id: m.id, move: m.move });
+			}
+		}
+		this.transport.persist(conn, m);
+		this.broadcastAbout(m, { t: "FLEW", id: m.id, alt });
+		return null;
+	}
+
+	/** Stands `m` still on the walkable ground nearest `p` (where one lands, or warps to). */
+	private land(conn: C, m: Member, p: Vec2, now: number): void {
+		let at: Vec2 = this.walk.isWalkable(p) ? p : this.walk.closestPoint(p);
+		// rings round it, then the spawn point, if the nearest point is not quite on the ground
+		for (let r = 1; r <= 30 && !this.walk.isWalkable(at); r++)
+			for (let k = 0; k < 16; k++) {
+				const q: Vec2 = [p[0] + Math.cos((k * Math.PI) / 8) * r, p[1] + Math.sin((k * Math.PI) / 8) * r];
+				if (this.walk.isWalkable(q)) {
+					at = q;
+					break;
+				}
+			}
+		if (!this.walk.isWalkable(at)) at = this.world.spawn;
+		m.move = { kind: "idle", pos: [round1(at[0]), round1(at[1])], at: now };
+		if (!this.walk.isWalkable(m.move.pos)) m.move = { kind: "idle", pos: at, at: now };
+		this.transport.persist(conn, m);
+		this.broadcastAbout(m, { t: "MOVED", id: m.id, move: m.move });
+	}
+
+	/** Humans: at one of the area's landmarks or portals at once, on the ground (docs/prd.md 3.4.14). */
+	private warp(conn: C, m: Member, to: string, now: number): string | null {
+		if (m.kind !== "human") return "AIは歩いて行ってください";
+		const place = this.world.landmarks.find((l) => l.id === to);
+		if (!place) return "その場所はありません";
+		if (m.warpedAt !== undefined && now - m.warpedAt < WARP_INTERVAL_MS) return "少し待ってください";
+		m.warpedAt = now;
+		this.stopDoing(conn, m, now);
+		if (m.fly !== undefined) {
+			delete m.fly;
+			this.broadcastAbout(m, { t: "FLEW", id: m.id, alt: null });
+		}
+		this.land(conn, m, this.spawnPoint(to), now);
+		return null;
 	}
 
 	private reject(conn: C, m: Member, here: Vec2, now: number): void {
@@ -2207,6 +2300,7 @@ export class RoomCore<C> {
 		if (m.kind === "human") s.acceptsAi = m.allowAiApproach !== false;
 		if (m.doing) s.doing = m.doing;
 		if (m.job) s.job = m.job.kind;
+		if (m.fly !== undefined) s.fly = m.fly;
 		return s;
 	}
 

@@ -2,8 +2,8 @@
 	"version": 1,
 	"source": "https://rojibura.kazumasa.workers.dev",
 	"files": {
-		"areas/hajimari/hajimari.glb": {"size":16570288,"sha256":"d83921d7635738f1fed6c92652601c96bd8343821d761f4b1c34cad2223d4a61"},
-		"areas/hajimari/hajimari_snow.glb": {"size":938520,"sha256":"2adc26691a2820c77f5c8eb6bf9d9f311945fd1d86ba2adaa78900f1ac6f35d6"},
+		"areas/hajimari/hajimari.glb": {"size":18044052,"sha256":"6365698c431b455450ea1d7fc2fbde85edf9ead74cf3121854acd3f3e0670d81"},
+		"areas/hajimari/hajimari_snow.glb": {"size":971052,"sha256":"f18dbe420a77ab12d2cbccedb9b6ebdb54d2fdb0fbcacc401dc725c3a9f585a8"},
 		"areas/hajimari/sagrada_exterior.glb": {"size":6513400,"sha256":"2ed604753cdc28192a56d064d2ee2024cc1c3225240ab080424290f023362f50"},
 		"areas/sagrada/3d/2026-11-02/sagrada_00.glb": {"size":14368156,"sha256":"3bcf53d762b18d7330620bb51f3ee0f0c87814f1ce935b38a3a784d9ed5c2b35"},
 		"areas/sagrada/3d/2026-11-02/sagrada_01.glb": {"size":11684692,"sha256":"a2b47ab2090c8a617adb15ab354d1e7b71dcf2d60ce8da37a45c332d4d60a0c9"},

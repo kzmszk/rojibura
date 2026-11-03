@@ -258,16 +258,17 @@ def build(W):
     rnd = random.Random(3)
     for (x, y, rot) in plan.STALLS:
         stall(W, x, y, rot, rnd)
-    for (x, y) in plan.WELLS:
+    for (x, y) in lots.wells():
         well(W, x, y)
-    # lamps on the square's edges and along the streets
-    x0, y0, x1, y1 = plan.SQUARE
-    for x in np.arange(x0 + 2.5, x1, 16.0):
-        street_lamp(W, x, y0 + 2.5, 0.08)
-        street_lamp(W, x, y1 - 2.5, 0.08)
-    for y in np.arange(y0 + 14, y1 - 8, 16.0):
-        street_lamp(W, x0 + 2.5, y, 0.08)
-    for (x, y) in [(-40, 24), (-40, -24), (-60, 24), (-60, -24)]:
+    # lamps round the edge of the square and along the streets
+    cx, cy = plan.TOWN_C
+    r = plan.SQUARE_R - 1.5
+    n = int(2 * math.pi * r / 16.0)
+    for k in range(n):
+        a = 2 * math.pi * k / n
+        x, y = cx + r * math.cos(a), cy + r * math.sin(a)
+        if min(abs(x - cx), abs(y - cy)) < 6.0:
+            continue
         street_lamp(W, x, y, 0.08)
     for name, w, pts in plan.STREETS:
         if w >= 6 and name not in ('main',):
@@ -275,4 +276,5 @@ def build(W):
     lamps_along(W, plan.STREETS[0][2], 10.0, 12.0, True)
     for (x, y, a) in walk.benches():
         if x < 0:
-            bench(W, x, y, a, 0.08)
+            on_square = math.hypot(x - plan.TOWN_C[0], y - plan.TOWN_C[1]) < plan.SQUARE_R
+            bench(W, x, y, a, 0.08 if on_square else 0.03)

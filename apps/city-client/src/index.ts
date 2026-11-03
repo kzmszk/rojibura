@@ -15,6 +15,10 @@ import {
 	deltaText,
 	dist,
 	energyWord,
+	FLY_ALT_MAX,
+	FLY_ALT_MIN,
+	FLY_REACH,
+	FLY_SPEED,
 	type HostToClient,
 	hoursText,
 	ITEM_REACH,
@@ -46,6 +50,7 @@ import { BuildPanel } from "./build-ui.ts";
 import { BuildsView, makeObject, modelsFromHost } from "./builds.ts";
 import { VIEW_LABEL, VIEWS, type View, ViewController } from "./camera.ts";
 import { ItemsView } from "./items.ts";
+import { type MapPlace, MapView } from "./map.ts";
 import { actionBar, Relations, showAdmin } from "./moderation.ts";
 import { SEASONS, type Season } from "./nature/season.ts";
 import { CityConnection, type ConnState } from "./net.ts";
@@ -126,6 +131,20 @@ async function loadNavMesh(dir: string, building: boolean): Promise<NavMeshData>
 	return (await (
 		await fetch(`${dir}/${building ? "navmesh.base.json" : "navmesh.json"}`)
 	).json()) as NavMeshData;
+}
+
+/** What the map shows: the walkable area and a margin round it (x0, z0, x1, z1). */
+function mapBounds(data: NavMeshData): [number, number, number, number] {
+	let [x0, z0, x1, z1] = [Infinity, Infinity, -Infinity, -Infinity];
+	const v = data.vertices;
+	for (let i = 0; i < v.length; i += 3) {
+		x0 = Math.min(x0, v[i] as number);
+		x1 = Math.max(x1, v[i] as number);
+		z0 = Math.min(z0, v[i + 2] as number);
+		z1 = Math.max(z1, v[i + 2] as number);
+	}
+	const m = Math.max(x1 - x0, z1 - z0) * 0.03;
+	return [x0 - m, z0 - m, x1 + m, z1 + m];
 }
 
 function navigatorFor(mesh: NavMesh): Navigator {
@@ -339,6 +358,18 @@ async function startCity(
 		area.portals ?? [],
 		(x, z) => mesh.heightAt([x, z]) ?? scene.heightAt(x, z),
 	);
+	// the map (docs/prd.md 3.4.14): the area from above, drawn the first time it opens; a place on it warps you there
+	const cityMap = new MapView(
+		area.name,
+		mapBounds(base),
+		() =>
+			scene.renderMap(mapBounds(base), 1400, area.view?.mapCut, [
+				...portals.objects,
+				...[...avatars.values()].map((v) => v.root),
+				items.group,
+			]),
+		(p) => warpTo(p),
+	);
 	// what can be done where (docs/life.md 3): the area's activities, and its places
 	let activities: Activity[] = [];
 	const places = new Map<string, Vec2>();
@@ -347,11 +378,26 @@ async function startCity(
 			.then((r) => (r.ok ? (r.json() as Promise<ActivitiesData>) : null))
 			.catch(() => null),
 		fetch(`${area.dir}/landmarks.json`)
-			.then((r) => (r.ok ? (r.json() as Promise<{ landmarks: { id: string; pos: Vec2 }[] }>) : null))
+			.then((r) =>
+				r.ok
+					? (r.json() as Promise<{ landmarks: { id: string; name: string; pos: Vec2; major?: boolean }[] }>)
+					: null,
+			)
 			.catch(() => null),
 	]).then(([a, l]) => {
 		activities = Array.isArray(a?.activities) ? a.activities : [];
 		for (const x of l?.landmarks ?? []) places.set(x.id, [x.pos[0], x.pos[1]]);
+		// the map's places: an area that marks no main places has every one as main
+		const marked = l?.landmarks.some((x) => x.major) ?? false;
+		cityMap.setPlaces([
+			...(l?.landmarks ?? []).map((x) => ({
+				id: x.id,
+				name: x.name,
+				pos: x.pos,
+				major: !marked || !!x.major,
+			})),
+			...(area.portals ?? []).map((p) => ({ id: p.id, name: p.name, pos: p.pos, major: true, gate: true })),
+		]);
 	});
 	const badgeOf = (d?: Doing | null) => {
 		if (!d) return null;
@@ -519,12 +565,34 @@ async function startCity(
 	gateButton.title = `${onlyGate ? onlyGate.name : "いちばん近い門"}まで歩いていきます（遠いときは走ります）`;
 	gateButton.hidden = gates.length === 0;
 	gateButton.onclick = () => goToGate();
+	const mapButton = el("button", "rj-logout rj-gate", "🗺️ 地図");
+	mapButton.type = "button";
+	mapButton.title = "地図を開く（M）。主な場所へ瞬間移動できます";
+	mapButton.onclick = () => cityMap.toggle();
+	// floating in the air (docs/prd.md 3.4.13), where the area allows it: up and down while afloat
+	const flyBar = el("div", "rj-fly");
+	const flyButton = el("button", "rj-logout rj-gate", "🕊️ 浮かぶ");
+	flyButton.type = "button";
+	flyButton.title = "空に浮かぶ（U）。浮いている間はスペースで上へ、C で下へ";
+	flyButton.onclick = () => toggleFly();
+	const liftButtons = (["up", "down"] as const).map((way) => {
+		const b = el("button", "rj-logout", way === "up" ? "⬆️" : "⬇️");
+		b.type = "button";
+		b.title = way === "up" ? "上へ（スペース）" : "下へ（C）";
+		b.hidden = true;
+		b.onpointerdown = () => lift.add(way);
+		for (const ev of ["pointerup", "pointerleave", "pointercancel"] as const)
+			b.addEventListener(ev, () => lift.delete(way));
+		return b;
+	});
+	flyBar.append(flyButton, ...liftButtons);
+	flyBar.hidden = !area.fly;
 	const left = el("div", "rj-left");
 	// your wallet (docs/prd.md 3.8.6): shown once the host tells it
 	const purse = el("div", "rj-status rj-purse", "");
 	purse.hidden = true;
 	purse.title = "お店や宿で働くか、学校で勉強すると増える（1分で1銅貨）";
-	left.append(status, purse, gateButton);
+	left.append(status, purse, gateButton, mapButton, flyBar);
 	hud.append(left, right);
 	const chat = el("div", "rj-chat");
 	// what was said fades after a while; it all comes back while talking or pointing at it (docs/prd.md 3.4.12)
@@ -633,7 +701,7 @@ async function startCity(
 	// at a shop's counter: what it sells (docs/prd.md 3.8.6)
 	const shops = new ShopsUi((shop, goods) => conn.send({ t: "BUY", shop: shop.id, goods }));
 	void shops.load(area.dir);
-	root.append(hud, chat, toast, travel, actsBar, offerBox, agentPanel.el, settings.el, shops.el);
+	root.append(hud, chat, toast, travel, actsBar, offerBox, agentPanel.el, settings.el, shops.el, cityMap.el);
 	if (area.credit) root.append(el("div", "rj-credit", area.credit));
 
 	const avatars = new Map<AvatarId, AvatarView>();
@@ -808,6 +876,9 @@ async function startCity(
 							avatars.delete(a.id);
 							add(a);
 						}
+						// afloat or not, as the host has it
+						avatars.get(a.id)?.setFly(a.fly ?? null);
+						if (a.id === m.you) showFlying(a.fly ?? null);
 						agentPanel.present(a.id);
 					}
 					listTargets();
@@ -892,9 +963,23 @@ async function startCity(
 					else listTargets();
 					break;
 				}
-				case "MOVED":
-					avatars.get(m.id)?.setMove(m.move);
+				case "MOVED": {
+					const v = avatars.get(m.id);
+					// you, somewhere else at once (a warp, or landing): the camera goes with you
+					if (v && m.id === myId && m.move.kind === "idle") {
+						const at = poseAt(v.state.move, conn.hostNow()).pos;
+						if (dist(at, m.move.pos) > 15) placed = false;
+					}
+					v?.setMove(m.move);
 					break;
+				}
+				case "FLEW": {
+					// your own height is yours while afloat; only coming down is news
+					if (m.id === myId && m.alt !== null && flyAlt !== null) break;
+					avatars.get(m.id)?.setFly(m.alt);
+					if (m.id === myId) showFlying(m.alt);
+					break;
+				}
 				case "CORRECT":
 					if (myId) avatars.get(myId)?.setMove(m.move);
 					break;
@@ -1040,9 +1125,17 @@ async function startCity(
 		const pos = poseAt(mine.state.move, conn.hostNow()).pos;
 		const wanted = v.lengthSq() > 0;
 		const dir: Vec2 = wanted ? [v.x / v.length(), v.z / v.length()] : [0, 0];
-		const speed = wanted ? (keys.has("shift") ? RUN_SPEED : WALK_SPEED) : 0;
-		// do not walk into walls or off the walkable area
-		const moving = wanted && nav.isWalkable([pos[0] + dir[0] * speed * 0.2, pos[1] + dir[1] * speed * 0.2]);
+		const speed = wanted
+			? flyAlt !== null
+				? keys.has("shift")
+					? FLY_SPEED
+					: RUN_SPEED
+				: keys.has("shift")
+					? RUN_SPEED
+					: WALK_SPEED
+			: 0;
+		// do not walk into walls or off the walkable area (afloat: not too far out from it)
+		const moving = wanted && canBe([pos[0] + dir[0] * speed * 0.2, pos[1] + dir[1] * speed * 0.2]);
 		if (!moving && !sentVel) return;
 		if (sentVel && !force) {
 			const same =
@@ -1066,6 +1159,8 @@ async function startCity(
 		return ["w", "a", "s", "d", "shift"].includes(m) ? m : null;
 	};
 	addEventListener("keyup", (e) => {
+		if (e.key === " ") lift.delete("up");
+		if (e.key.toLowerCase() === "c") lift.delete("down");
 		const k = movementKey(e);
 		if (!k) return;
 		keys.delete(k);
@@ -1091,6 +1186,14 @@ async function startCity(
 		if (e.key === "Enter" && !typing()) {
 			input.focus();
 			e.preventDefault();
+		} else if (!typing() && flyAlt !== null && (e.key === " " || e.key.toLowerCase() === "c")) {
+			// afloat, Space goes up and C down
+			e.preventDefault();
+			lift.add(e.key === " " ? "up" : "down");
+		} else if (!typing() && !panel.open && e.key.toLowerCase() === "m") {
+			cityMap.toggle();
+		} else if (!typing() && !panel.open && e.key.toLowerCase() === "u" && area.fly) {
+			toggleFly();
 		} else if (!typing() && !panel.open && (e.key === " " || ACTIONS.some(([, , key]) => key === e.key))) {
 			e.preventDefault();
 			act(
@@ -1112,6 +1215,7 @@ async function startCity(
 			panel.turn(e.key.toLowerCase() === "q" ? -15 : 15);
 		} else if (e.key === "Escape") {
 			if (panel.open) panel.hide();
+			cityMap.hide();
 			stopGoing();
 			setTarget(null);
 			input.blur();
@@ -1250,12 +1354,16 @@ async function startCity(
 		if (!walkTo([p.x, p.z], e.shiftKey ? RUN_SPEED : WALK_SPEED)) showToast("そこへは行けません");
 	});
 
-	/** Walks along the navmesh to `to`. False if there is no way there. */
+	/** Walks along the navmesh to `to` (afloat: flies straight there). False if there is no way there. */
 	function walkTo(to: Vec2, speed: number): boolean {
 		const mine = myId ? avatars.get(myId) : undefined;
 		if (!mine) return false;
 		const from = poseAt(mine.state.move, conn.hostNow()).pos;
-		const path = nav.findPath(from, to);
+		if (flyAlt !== null) {
+			if (!canBe(to)) return false;
+			speed = speed > WALK_SPEED ? FLY_SPEED : RUN_SPEED;
+		}
+		const path = flyAlt !== null ? [from, to] : nav.findPath(from, to);
 		if (!path || path.length < 2) return false;
 		// as much of the way as the host takes at once (a longer way stops short)
 		const leg = pathLeg(path);
@@ -1489,6 +1597,62 @@ async function startCity(
 		const h = mine.heading;
 		conn.send({ t: "THROW", dir: [Math.sin(h), Math.cos(h)] });
 	}
+	// ---- floating and warping (docs/prd.md 3.4.13, 3.4.14) ----
+	/** Your height while afloat (world Y), or null on the ground. */
+	let flyAlt: number | null = null;
+	/** Going up or down while afloat (held keys or buttons). */
+	const lift = new Set<"up" | "down">();
+	let flySentAt = 0;
+	let flySent: number | null = null;
+	/** Somewhere you may be now: walkable, or afloat not too far out from it. */
+	function canBe(p: Vec2): boolean {
+		if (flyAlt === null) return nav.isWalkable(p);
+		return dist(mesh.closestPoint(p), p) <= FLY_REACH - 1;
+	}
+	function showFlying(alt: number | null): void {
+		flyAlt = alt;
+		flyButton.textContent = alt === null ? "🕊️ 浮かぶ" : "🛬 降りる";
+		flyButton.classList.toggle("on", alt !== null);
+		for (const b of liftButtons) b.hidden = alt === null;
+		if (alt === null) lift.clear();
+	}
+	function toggleFly(): void {
+		const mine = myId ? avatars.get(myId) : undefined;
+		if (!mine || !area.fly) return;
+		if (flyAlt !== null) {
+			conn.send({ t: "FLY", alt: null });
+			return;
+		}
+		stopGoing();
+		const alt = Math.min(FLY_ALT_MAX, mine.root.position.y + 2.5);
+		mine.setFly(alt);
+		showFlying(alt);
+		conn.send({ t: "FLY", alt });
+		flySent = alt;
+		flySentAt = performance.now();
+	}
+	/** Up or down while a key or button is held; others hear of it a few times a second. */
+	function liftStep(mine: AvatarView | undefined, dt: number, t: number): void {
+		if (!mine || flyAlt === null) return;
+		if (lift.size > 0) {
+			const under = scene.heightAt(mine.root.position.x, mine.root.position.z) ?? FLY_ALT_MIN;
+			const way = (lift.has("up") ? 1 : 0) - (lift.has("down") ? 1 : 0);
+			flyAlt = Math.min(FLY_ALT_MAX, Math.max(FLY_ALT_MIN, under + 0.3, flyAlt + way * 5 * dt));
+			mine.setFly(flyAlt);
+		}
+		if (flySent !== flyAlt && t - flySentAt > 300) {
+			conn.send({ t: "FLY", alt: Math.round(flyAlt * 100) / 100 });
+			flySent = flyAlt;
+			flySentAt = t;
+		}
+	}
+	/** At a place of the area at once (from the map). */
+	function warpTo(p: MapPlace): void {
+		stopGoing();
+		conn.send({ t: "WARP", to: p.id });
+		showToast(`${p.name}へ瞬間移動しました`);
+	}
+
 	/** Stops following someone or going to a portal (the person moves on their own). */
 	function stopGoing(): void {
 		endFollow();
@@ -1709,8 +1873,18 @@ async function startCity(
 		// stop at the edge of the walkable area instead of walking into walls
 		if (mine?.state.move.kind === "vel") {
 			const ahead = poseAt(mine.state.move, now + 150).pos;
-			if (!nav.isWalkable(ahead)) steer(t, true);
+			if (!canBe(ahead)) steer(t, true);
 		}
+		liftStep(mine, dt, t);
+		portals.update(mine ? poseAt(mine.state.move, now).pos : null);
+		if (cityMap.open)
+			cityMap.update(
+				mine ? poseAt(mine.state.move, now).pos : null,
+				mine?.heading ?? 0,
+				[...avatars.values()]
+					.filter((a) => a !== mine)
+					.map((a) => ({ pos: poseAt(a.state.move, now).pos, ai: a.state.kind === "ai" })),
+			);
 		if (mine && !placed) {
 			scene.jumpTo(mine.root.position);
 			placed = true;

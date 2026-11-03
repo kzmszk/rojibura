@@ -7,10 +7,12 @@
 			"scene": ["hajimari.glb", "sagrada_exterior.glb"],
 			"winter": ["hajimari_snow.glb"],
 			"build": true,
+			"fly": true,
 			"view": { "sky": "#c4d9ea", "fog": [160, 900], "far": 1200, "shadow": 60 },
 			"credit": "3D（教会の外観）：SAGRADA FAMÍLIA（demos.polynous.io/sagrada-familia、出典の一覧：/areas/sagrada/credits.html） ｜ テクスチャ：Poly Haven・ambientCG（CC0）",
 			"portals": [
-				{ "id": "gate_sagrada", "name": "サグラダ・ファミリアの入口", "pos": [-79.15, -0.02], "to": "sagrada", "at": "gate_hajimari" },
+				{ "id": "gate_sagrada", "name": "サグラダ・ファミリアの入口（生誕の門）", "pos": [-81.65, -0.02], "to": "sagrada", "at": "crossing", "quiet": true },
+				{ "id": "gate_sagrada_passion", "name": "サグラダ・ファミリアの入口（受難の門）", "pos": [-158, 0], "to": "sagrada", "at": "crossing", "quiet": true },
 				{ "id": "gate_venezia", "name": "ヴェネツィアへの門", "pos": [-236, 0], "to": "venezia", "at": "gate_main" }
 			]
 		},
@@ -23,10 +25,11 @@
 				"3d/2026-11-02/sagrada_02.glb",
 				"3d/2026-11-02/sagrada_03.glb"
 			],
-			"view": { "sky": "#c9d8e6", "fog": [120, 360], "far": 500, "shadow": 60, "camera": 6 },
+			"view": { "sky": "#c9d8e6", "fog": [120, 360], "far": 500, "shadow": 60, "camera": 6, "mapCut": 12 },
 			"credit": "3D：SAGRADA FAMÍLIA（demos.polynous.io/sagrada-familia） ｜ ステンドグラス・彫刻の写真：R. Mortel（CC BY 2.0）、A. Meskens・Smiley.toerist・A. Alikhan（CC BY-SA 4.0）、J. L. B. Ribeiro（CC BY-SA 3.0）、K. Knöfler（CC BY 3.0）／Wikimedia Commons、加工あり ｜ 出典の一覧：/areas/sagrada/credits.html",
 			"portals": [
-				{ "id": "gate_hajimari", "name": "はじまりの街への門", "pos": [52.5, 34.5], "to": "main", "at": "gate_sagrada" }
+				{ "id": "gate_hajimari", "name": "はじまりの街への門（生誕の門）", "pos": [52.5, 34.5], "to": "main", "at": "gate_sagrada", "quiet": true },
+				{ "id": "gate_hajimari_passion", "name": "はじまりの街への門（受難の門）", "pos": [52.5, -34.5], "to": "main", "at": "gate_sagrada_passion", "quiet": true }
 			]
 		},
 		"venezia": {
@@ -38,6 +41,7 @@
 				"3d/2026-11-01/t_17_7.glb",
 				"3d/2026-11-01/t_17_8.glb"
 			],
+			"fly": true,
 			"view": { "sky": "#c9dbe8", "fog": [90, 380], "far": 450, "water": 0, "shadow": 70 },
 			"credit": "地図データ © OpenStreetMap contributors（ODbL） ｜ 3D：VENEZIA（demos.polynous.io/venice）",
 			"portals": [

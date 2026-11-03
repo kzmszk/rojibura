@@ -290,6 +290,8 @@ export class AvatarView {
 	private bubbleUntil = 0;
 	/** Smoothed height so stairs do not jitter. */
 	private y = 0;
+	/** Gliding down to the ground after floating. */
+	private landing = false;
 	private facing = 0;
 	private readonly isMe: boolean;
 	/** In the bath: clothes off and a towel on (made the first time). */
@@ -413,6 +415,14 @@ export class AvatarView {
 		this.state.move = move;
 		// turned a way of its own choosing: that, not the last gesture's partner
 		if (move.kind === "idle" && move.face) this.faceTo = null;
+	}
+
+	/** Floating at `alt` (world Y), or back on the ground (null) (docs/prd.md 3.4.13). */
+	setFly(alt: number | null): void {
+		// coming down, it glides to the ground instead of dropping onto it
+		if (alt === null && this.state.fly !== undefined) this.landing = true;
+		if (alt === null) delete this.state.fly;
+		else this.state.fly = alt;
 	}
 
 	setStatus(status: Status): void {
@@ -651,9 +661,20 @@ export class AvatarView {
 	update(hostNow: number, dt: number, scene: Pick<CityScene, "heightAt">): void {
 		const move = this.state.move;
 		const pose = poseAt(move, hostNow);
-		const ground = scene.heightAt(pose.pos[0], pose.pos[1]);
-		if (ground !== null)
-			this.y = Math.abs(ground - this.y) > 2 ? ground : this.y + (ground - this.y) * Math.min(1, dt * 12);
+		const fly = this.state.fly;
+		if (fly !== undefined) {
+			// afloat (docs/prd.md 3.4.13): at its height, but never under the ground; bobbing a little
+			const under = scene.heightAt(pose.pos[0], pose.pos[1]);
+			const want = Math.max(fly, (under ?? -Infinity) + 0.3) + Math.sin(hostNow / 700) * 0.08;
+			this.y += (want - this.y) * Math.min(1, dt * 5);
+		} else {
+			const ground = scene.heightAt(pose.pos[0], pose.pos[1]);
+			if (ground !== null && this.landing) {
+				this.y += (ground - this.y) * Math.min(1, dt * 3);
+				if (Math.abs(ground - this.y) < 0.05) this.landing = false;
+			} else if (ground !== null)
+				this.y = Math.abs(ground - this.y) > 2 ? ground : this.y + (ground - this.y) * Math.min(1, dt * 12);
+		}
 		this.root.position.set(pose.pos[0], this.y, pose.pos[1]);
 		// a roll travels along its path without turning to it (a back roll goes backwards)
 		const rolling = this.gesture !== null && TRAVEL.has(this.gesture.name) && hostNow < this.gesture.until;
@@ -711,7 +732,7 @@ export class AvatarView {
 		const posture = move.kind === "idle" ? move.posture : undefined;
 		let want = "stand";
 		if (rolling && this.gesture) want = this.gesture.name;
-		else if (pose.moving) want = speed > 2.5 && this.actions.run ? "run" : "walk";
+		else if (pose.moving && fly === undefined) want = speed > 2.5 && this.actions.run ? "run" : "walk";
 		else if (this.gesture && hostNow < this.gesture.until) want = this.gesture.name;
 		else if (posture && this.actions[posture]) want = posture;
 		// a posture that began before this avatar was drawn (someone who came later) shows as it is now

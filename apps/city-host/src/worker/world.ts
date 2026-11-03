@@ -126,6 +126,7 @@ export const world: World = {
 	landmarks: landmarksOf(city, areaOf(MAIN_AREA)),
 	spawn: [sx, sz],
 	areaName: areaOf(MAIN_AREA).name,
+	...(areaOf(MAIN_AREA).fly ? { fly: true } : {}),
 	fixedBuilds: PUBLISHED.builds,
 	// how AIs live here besides the shops and job zones (docs/life.md 3)
 	activities: (activitiesJson as ActivitiesData).activities,
@@ -158,6 +159,7 @@ export function worldOf(id: AreaId): World | undefined {
 		landmarks: landmarksOf(files.landmarks, area),
 		spawn: [files.landmarks.spawn.pos[0], files.landmarks.spawn.pos[1]],
 		areaName: area.name,
+		...(area.fly ? { fly: true } : {}),
 	};
 	worlds.set(id, made);
 	return made;

@@ -11,6 +11,8 @@ import {
 	BUILD_OFFSET_MAX,
 	BUILD_SCALE_MAX,
 	BUILD_SCALE_MIN,
+	FLY_ALT_MAX,
+	FLY_ALT_MIN,
 	INTEREST_RADIUS_MAX,
 	INTEREST_RADIUS_MIN,
 	LEAD_PLACE_MAX,
@@ -218,6 +220,12 @@ export function parseClientMessage(raw: string | ArrayBuffer): Parsed<ClientToHo
 		case "JOB":
 			if (v.kind !== null && v.kind !== "work" && v.kind !== "study") return fail("bad kind");
 			return { ok: true, msg: { t: "JOB", kind: v.kind } };
+		case "FLY":
+			if (v.alt !== null && !isNum(v.alt, FLY_ALT_MIN, FLY_ALT_MAX)) return fail("bad alt");
+			return { ok: true, msg: { t: "FLY", alt: v.alt === null ? null : Math.round(v.alt * 100) / 100 } };
+		case "WARP":
+			if (typeof v.to !== "string" || !NAME_ID_RE.test(v.to)) return fail("bad to");
+			return { ok: true, msg: { t: "WARP", to: v.to } };
 		case "COMPANION":
 			if (typeof v.on !== "boolean") return fail("bad on");
 			return { ok: true, msg: { t: "COMPANION", on: v.on } };

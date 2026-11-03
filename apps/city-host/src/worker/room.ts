@@ -100,6 +100,8 @@ const MESSAGE_LABELS: Record<ClientToHost["t"], string> = {
 	BODY: "AIが体を動かす",
 	ACT: "活動を始める",
 	ACT_STOP: "活動をやめる",
+	FLY: "空に浮かぶ",
+	WARP: "瞬間移動",
 };
 /** Registered models are stored in pieces: a DO SQLite value may be at most 2 MB. */
 const MODEL_CHUNK = 1024 * 1024;
