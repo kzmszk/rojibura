@@ -1,5 +1,6 @@
 import {
 	type ClientToHost,
+	COMPANION_FREE,
 	type HostToClient,
 	MAX_PATH_LENGTH,
 	newLife,
@@ -430,7 +431,12 @@ describe("walking with its owner", () => {
 			expect(asks()).toHaveLength(1);
 			await vi.advanceTimersByTimeAsync(3 * 60_000);
 			expect(asks()).toHaveLength(2);
-			expect(sent.filter((m) => m.t === "MOVE_PATH")).toEqual([]);
+			// no walking off alone: only a step about close by its owner (at [2, 0])
+			for (const m of sent)
+				if (m.t === "MOVE_PATH") {
+					const [x, z] = m.path.at(-1) as [number, number];
+					expect(Math.hypot(x - 2, z)).toBeLessThanOrEqual(COMPANION_FREE);
+				}
 			agent.stop();
 		} finally {
 			vi.useRealTimers();

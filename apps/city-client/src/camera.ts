@@ -23,6 +23,7 @@ export class ViewController {
 	private yaw = 0;
 	private pitch = 0;
 	private drag: { x: number; y: number } | null = null;
+	private orbiting = false;
 	private readonly scene: CityScene;
 	private me: AvatarView | null = null;
 
@@ -44,7 +45,18 @@ export class ViewController {
 			);
 			this.drag = { x: e.clientX, y: e.clientY };
 		});
+		scene.controls.addEventListener("start", () => {
+			this.orbiting = true;
+		});
+		scene.controls.addEventListener("end", () => {
+			this.orbiting = false;
+		});
 		this.layers();
+	}
+
+	/** The person is turning the view by dragging (keys then walk relative to where it looks now). */
+	get dragging(): boolean {
+		return this.drag !== null || this.orbiting;
 	}
 
 	/** Switches the view; the avatar is yours (its head hides in the eyes view). */

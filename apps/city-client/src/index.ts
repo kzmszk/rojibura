@@ -18,6 +18,7 @@ import {
 	FLY_ALT_MAX,
 	FLY_ALT_MIN,
 	FLY_REACH,
+	FLY_RUN_SPEED,
 	FLY_SPEED,
 	type HostToClient,
 	hoursText,
@@ -94,8 +95,40 @@ const PAT: BodyKey[] = [
 	{ at: 1.2, right: { part: "head", of: "you", wiggle: { dir: "side", size: 0.04, hz: 1.2 } } },
 	{ at: 3.2, right: { part: "head", of: "you", wiggle: { dir: "side", size: 0.04, hz: 1.2 } } },
 ];
-/** An AI this close to its owner looks at them (docs/prd.md 3.4.9). */
+/** An AI this close to its owner attends to them (docs/prd.md 3.4.9). */
 const ATTEND_M = 5;
+/** After a line between an AI and its owner, it faces them and looks them in the eye this long. */
+const TALK_FACE_MS = 20_000;
+/** Beside its owner, not talking: how it stands changes this often; it turns this far to them, at most. */
+const MOOD_MS = 8_000;
+const TOWARD_OWNER = 0.35;
+
+/** A number in [0, 1) from a string (FNV-1a): the same on every screen. */
+function hash01(s: string): number {
+	let h = 0x811c9dc5;
+	for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x01000193);
+	return (h >>> 0) / 2 ** 32;
+}
+
+/**
+ * An AI standing beside its owner, not talking (docs/prd.md 3.4.9): it faces the way they face, turned a little
+ * to them; now and then it looks elsewhere for a while, or glances at them. From the time, so every screen
+ * shows the same.
+ */
+function besideMood(ai: AvatarView, owner: AvatarView, hostNow: number): { facing: number; glance: boolean } {
+	const slot = Math.floor(hostNow / MOOD_MS);
+	const r = hash01(`${ai.state.id}:${slot}`);
+	const g = hash01(`${slot}:${ai.state.id}`);
+	const a = ai.root.position;
+	const o = owner.root.position;
+	const toward = Math.atan2(o.x - a.x, o.z - a.z);
+	const off = Math.atan2(Math.sin(toward - owner.heading), Math.cos(toward - owner.heading));
+	const look = r < 0.5 ? (r - 0.25) * 2.4 : 0;
+	return {
+		facing: owner.heading + Math.max(-TOWARD_OWNER, Math.min(TOWARD_OWNER, off)) + look,
+		glance: g < 0.45 && hostNow % MOOD_MS < 2_500,
+	};
+}
 /** A line in the chat log stays this long, then shows only while talking or pointing at the log. */
 const LOG_FRESH_MS = 20_000;
 /** The action bar (docs/prd.md 3.4.5): motion, label, key. Space also jumps. */
@@ -705,6 +738,8 @@ async function startCity(
 	if (area.credit) root.append(el("div", "rj-credit", area.credit));
 
 	const avatars = new Map<AvatarId, AvatarView>();
+	/** When an AI and its owner last spoke to each other (host time), by the AI. */
+	const talkAt = new Map<AvatarId, number>();
 	let myId: AvatarId | null = null;
 	let talkTo: AvatarId | null = null;
 	let seq = 0;
@@ -1003,6 +1038,12 @@ async function startCity(
 					if (relations.silenced(m.id)) break;
 					const v = avatars.get(m.id);
 					v?.say(m.text, conn.hostNow());
+					// an AI and its owner talking: it faces them (docs/prd.md 3.4.9)
+					const heard = m.to ? avatars.get(m.to) : undefined;
+					if (v?.state.kind === "ai" && (!m.to || m.to === v.state.ownerId))
+						talkAt.set(v.state.id, conn.hostNow());
+					if (heard?.state.kind === "ai" && heard.state.ownerId === m.id)
+						talkAt.set(heard.state.id, conn.hostNow());
 					const to = m.to ? avatars.get(m.to)?.state.name : undefined;
 					addLog(`${v?.state.name ?? "?"}${to ? ` → ${to}` : ""}`, m.text, m.id === myId ? "mine" : "");
 					break;
@@ -1108,16 +1149,28 @@ async function startCity(
 		conn.send(talkTo ? { t: "SAY", text, to: talkTo } : { t: "SAY", text });
 		input.value = "";
 	};
-	// WASD: walk relative to the camera; sent as MOVE_VEL only when the direction changes (docs/prd.md 3.2.2)
+	// WASD: walk relative to the camera; sent as MOVE_VEL only when the direction changes (docs/prd.md 3.2.2).
+	// "Forward" is where the camera looked when the keys held last changed: the view coming round behind the
+	// avatar does not turn the way it walks (with A or D held it would walk round in jerky circles).
 	const keys = new Set<string>();
+	let softFocus = false;
 	let sentVel: { dir: Vec2; speed: number; at: number } | null = null;
+	let forward: { keys: string; f: THREE.Vector3 } | null = null;
+	/** A key of two was let go: until then the way does not change yet (the other may follow at once). */
+	let settleUntil = 0;
 	const steer = (now: number, force = false) => {
 		const mine = myId ? avatars.get(myId) : undefined;
-		if (!mine) return;
-		const f = new THREE.Vector3();
-		scene.camera.getWorldDirection(f);
-		f.y = 0;
-		f.normalize();
+		if (!mine || (now < settleUntil && !force)) return;
+		const held = ["w", "a", "s", "d"].filter((k) => keys.has(k)).join("");
+		// a key pressed or let go goes out at once (two pressed together make a diagonal straight away)
+		const pressed = forward?.keys !== held;
+		if (!forward || pressed || view.dragging) {
+			const look = new THREE.Vector3();
+			scene.camera.getWorldDirection(look);
+			look.y = 0;
+			forward = { keys: held, f: look.normalize() };
+		}
+		const f = forward.f.clone();
 		const r = new THREE.Vector3(-f.z, 0, f.x);
 		const fw = (keys.has("w") ? 1 : 0) - (keys.has("s") ? 1 : 0);
 		const rt = (keys.has("d") ? 1 : 0) - (keys.has("a") ? 1 : 0);
@@ -1128,21 +1181,21 @@ async function startCity(
 		const speed = wanted
 			? flyAlt !== null
 				? keys.has("shift")
-					? FLY_SPEED
-					: RUN_SPEED
+					? FLY_RUN_SPEED
+					: FLY_SPEED
 				: keys.has("shift")
 					? RUN_SPEED
 					: WALK_SPEED
 			: 0;
 		// do not walk into walls or off the walkable area (afloat: not too far out from it)
-		const moving = wanted && canBe([pos[0] + dir[0] * speed * 0.2, pos[1] + dir[1] * speed * 0.2]);
+		const moving = wanted && clearAhead(pos, dir, speed, 0.25);
 		if (!moving && !sentVel) return;
 		if (sentVel && !force) {
 			const same =
 				moving &&
 				Math.abs(sentVel.speed - speed) < 0.01 &&
 				sentVel.dir[0] * dir[0] + sentVel.dir[1] * dir[1] > 0.97;
-			if (same || (moving && now - sentVel.at < 250)) return;
+			if (same || (moving && !pressed && now - sentVel.at < 150)) return;
 		}
 		const move = moving
 			? ({ kind: "vel", pos, dir, speed, at: conn.hostNow() } as const)
@@ -1164,7 +1217,14 @@ async function startCity(
 		const k = movementKey(e);
 		if (!k) return;
 		keys.delete(k);
-		steer(performance.now());
+		// letting go of a diagonal's two keys is never quite at once: wait a moment before going the one way left
+		if (["w", "a", "s", "d"].some((x) => keys.has(x))) {
+			settleUntil = performance.now() + 80;
+			setTimeout(() => steer(performance.now()), 90);
+		} else {
+			settleUntil = 0;
+			steer(performance.now());
+		}
 	});
 	addEventListener("blur", () => {
 		keys.clear();
@@ -1174,12 +1234,23 @@ async function startCity(
 	const typing = () =>
 		document.activeElement instanceof HTMLInputElement ||
 		document.activeElement instanceof HTMLTextAreaElement;
+	// the chat box has the focus from a click on someone (to talk to them): until something is typed in it, the
+	// keys that walk still walk (else the one you clicked, standing in front of you, kept you from walking)
+	input.addEventListener("input", () => {
+		softFocus = false;
+	});
+	input.addEventListener("blur", () => {
+		softFocus = false;
+	});
 	addEventListener("keydown", (e) => {
 		const k = movementKey(e);
+		if (k && k !== "shift" && softFocus && document.activeElement === input && !input.value && !e.isComposing)
+			input.blur();
 		if (k && !typing()) {
 			e.preventDefault();
 			stopGoing();
 			keys.add(k);
+			settleUntil = 0;
 			steer(performance.now());
 			return;
 		}
@@ -1338,6 +1409,7 @@ async function startCity(
 			if (o) {
 				setTarget(o.userData.avatarId as string);
 				input.focus();
+				softFocus = true;
 				return;
 			}
 		}
@@ -1361,7 +1433,7 @@ async function startCity(
 		const from = poseAt(mine.state.move, conn.hostNow()).pos;
 		if (flyAlt !== null) {
 			if (!canBe(to)) return false;
-			speed = speed > WALK_SPEED ? FLY_SPEED : RUN_SPEED;
+			speed = speed > WALK_SPEED ? FLY_RUN_SPEED : FLY_SPEED;
 		}
 		const path = flyAlt !== null ? [from, to] : nav.findPath(from, to);
 		if (!path || path.length < 2) return false;
@@ -1609,6 +1681,19 @@ async function startCity(
 		if (flyAlt === null) return nav.isWalkable(p);
 		return dist(mesh.closestPoint(p), p) <= FLY_REACH - 1;
 	}
+	/**
+	 * Somewhere you may be all along the next `s` seconds going `dir` at `speed`: a step at a time, so a narrow
+	 * strip one may not walk on (a steep bank) is not stepped across.
+	 */
+	function clearAhead(pos: Vec2, dir: Vec2, speed: number, s: number): boolean {
+		const d = speed * s;
+		const n = Math.max(1, Math.ceil(d / (flyAlt === null ? 0.2 : 2)));
+		for (let i = 1; i <= n; i++) {
+			const t = (d * i) / n;
+			if (!canBe([pos[0] + dir[0] * t, pos[1] + dir[1] * t])) return false;
+		}
+		return true;
+	}
 	function showFlying(alt: number | null): void {
 		flyAlt = alt;
 		flyButton.textContent = alt === null ? "🕊️ 浮かぶ" : "🛬 降りる";
@@ -1637,7 +1722,9 @@ async function startCity(
 		if (lift.size > 0) {
 			const under = scene.heightAt(mine.root.position.x, mine.root.position.z) ?? FLY_ALT_MIN;
 			const way = (lift.has("up") ? 1 : 0) - (lift.has("down") ? 1 : 0);
-			flyAlt = Math.min(FLY_ALT_MAX, Math.max(FLY_ALT_MIN, under + 0.3, flyAlt + way * 5 * dt));
+			// up and down at 6 m/s, with Shift 15
+			const rate = keys.has("shift") ? 15 : 6;
+			flyAlt = Math.min(FLY_ALT_MAX, Math.max(FLY_ALT_MIN, under + 0.3, flyAlt + way * rate * dt));
 			mine.setFly(flyAlt);
 		}
 		if (flySent !== flyAlt && t - flySentAt > 300) {
@@ -1823,10 +1910,15 @@ async function startCity(
 		last = t;
 		const now = conn.hostNow();
 		for (const v of avatars.values()) {
-			// an AI looks at its owner close by, so the owner sees its face (docs/prd.md 3.4.9)
+			// an AI by its owner: talking, it faces them and looks them in the eye; else it stands beside them
+			// facing their way, glancing at them now and then (docs/prd.md 3.4.9)
 			const owner = v.state.kind === "ai" && v.state.ownerId ? avatars.get(v.state.ownerId) : undefined;
 			const near = owner && owner.root.position.distanceTo(v.root.position) < ATTEND_M;
-			v.attend(near ? owner.eyePosition() : null);
+			const talking =
+				near && (v.state.status === "busy" || now - (talkAt.get(v.state.id) ?? -TALK_FACE_MS) < TALK_FACE_MS);
+			const mood = near && !talking ? besideMood(v, owner, now) : null;
+			v.attend(near && (talking || mood?.glance) ? owner.eyePosition() : null);
+			v.standFacing(mood ? mood.facing : null);
 			v.update(now, dt, scene);
 			// at the onsen everyone has taken their clothes off and wears a bath towel; the towel is made
 			// before they get there (the first one of a model takes a moment)
@@ -1872,8 +1964,8 @@ async function startCity(
 		gateStep(t);
 		// stop at the edge of the walkable area instead of walking into walls
 		if (mine?.state.move.kind === "vel") {
-			const ahead = poseAt(mine.state.move, now + 150).pos;
-			if (!canBe(ahead)) steer(t, true);
+			const move = mine.state.move;
+			if (!clearAhead(poseAt(move, now).pos, move.dir, move.speed, 0.15)) steer(t, true);
 		}
 		liftStep(mine, dt, t);
 		portals.update(mine ? poseAt(mine.state.move, now).pos : null);

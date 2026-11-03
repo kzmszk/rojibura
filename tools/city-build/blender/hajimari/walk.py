@@ -151,10 +151,11 @@ def build():
     # benches and lamps are small; trees block their trunks
     for (sp, x, y, s, r) in plan.trees():
         R.block(circle(x, y, 0.3 + 0.12 * s, 10))
+    # the railing blocks a band wider than itself: a thinner one falls between the cells' centres (holes)
     for (x0, y0, x1, y1) in plan.summit_railing():
         t = np.array([x1 - x0, y1 - y0])
         L = float(np.linalg.norm(t))
-        R.block(lots.rect(x0, y0, t[0] / L, t[1] / L, -0.1, L + 0.1, -0.1, 0.1))
+        R.block(lots.rect(x0, y0, t[0] / L, t[1] / L, -0.1, L + 0.1, -0.3, 0.3))
     for b in benches():
         R.block(lots.rect(b[0], b[1], math.cos(b[2]), math.sin(b[2]), -0.95, 0.95, -0.35, 0.35))
 

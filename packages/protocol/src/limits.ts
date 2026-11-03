@@ -2,6 +2,7 @@
 
 export const MAX_PATH_POINTS = 24;
 export const MAX_PATH_LENGTH = 200; // m
+/** On the ground; afloat one may go up to FLY_RUN_SPEED (docs/prd.md 3.4.13). */
 export const MAX_SPEED = 6.0; // m/s
 export const WALK_SPEED = 1.4; // m/s
 export const RUN_SPEED = 4.0; // m/s
@@ -11,7 +12,9 @@ export const POSITION_TOLERANCE = 2.0; // m
 export const FLY_ALT_MIN = -10; // m
 export const FLY_ALT_MAX = 150; // m
 export const FLY_REACH = 30; // m
-export const FLY_SPEED = 6.0; // m/s
+export const FLY_SPEED = 10.0; // m/s
+/** Afloat with Shift. */
+export const FLY_RUN_SPEED = 20.0; // m/s
 /** Warping to a place (docs/prd.md 3.4.14): at most once in this long. */
 export const WARP_INTERVAL_MS = 2_000;
 export const MAX_SAY_LENGTH = 200;

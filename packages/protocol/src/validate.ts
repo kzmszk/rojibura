@@ -13,6 +13,7 @@ import {
 	BUILD_SCALE_MIN,
 	FLY_ALT_MAX,
 	FLY_ALT_MIN,
+	FLY_RUN_SPEED,
 	INTEREST_RADIUS_MAX,
 	INTEREST_RADIUS_MIN,
 	LEAD_PLACE_MAX,
@@ -20,7 +21,6 @@ import {
 	MAX_MESSAGE_BYTES,
 	MAX_PATH_POINTS,
 	MAX_SAY_LENGTH,
-	MAX_SPEED,
 } from "./limits.ts";
 import type {
 	BuildAt,
@@ -144,7 +144,8 @@ export function parseClientMessage(raw: string | ArrayBuffer): Parsed<ClientToHo
 			const path = v.path;
 			if (!Array.isArray(path) || path.length < 2 || path.length > MAX_PATH_POINTS) return fail("bad path");
 			if (!path.every(isVec2)) return fail("bad path point");
-			if (!isNum(v.speed, 0.1, MAX_SPEED)) return fail("bad speed");
+			// afloat one goes faster; on the ground the host keeps it to MAX_SPEED
+			if (!isNum(v.speed, 0.1, FLY_RUN_SPEED)) return fail("bad speed");
 			if (!isSeq(v.seq)) return fail("bad seq");
 			return {
 				ok: true,
@@ -158,7 +159,7 @@ export function parseClientMessage(raw: string | ArrayBuffer): Parsed<ClientToHo
 		}
 		case "MOVE_VEL": {
 			if (!isVec2(v.pos) || !isVec2(v.dir)) return fail("bad vector");
-			if (!isNum(v.speed, 0, MAX_SPEED)) return fail("bad speed");
+			if (!isNum(v.speed, 0, FLY_RUN_SPEED)) return fail("bad speed");
 			if (!isSeq(v.seq)) return fail("bad seq");
 			const len = Math.hypot(v.dir[0], v.dir[1]);
 			const dir: Vec2 = len < 1e-6 ? [0, 0] : [v.dir[0] / len, v.dir[1] / len];

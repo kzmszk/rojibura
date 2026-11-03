@@ -41,6 +41,7 @@ import {
 	EARN_MS,
 	eatFood,
 	FLY_REACH,
+	FLY_RUN_SPEED,
 	type Food,
 	facing,
 	finishActivity,
@@ -120,15 +121,12 @@ export interface BuildStore {
 }
 
 /**
- * Where your AIs walk with you (docs/prd.md 3.4.9): this far ahead and this far to one side (m), far enough
- * ahead to be in view from your own eyes (the first-person view).
+ * Where your AIs walk with you (docs/prd.md 3.4.9): this far ahead and this far to one side (m), side by side
+ * (in front it stood in your way).
  */
-const COMPANION_WALKING: Vec2 = [2, 0.8];
-/**
- * Where they stand when you stop: a metre away, 25° to one side, so its face is in view from your eyes and a
- * second one on the other side does not stand in the first.
- */
-const COMPANION_STANDING: Vec2 = [0.91, 0.42];
+const COMPANION_WALKING: Vec2 = [0.3, 0.9];
+/** Where they stand when you stop: at your side, a little forward; a second one on the other side. */
+const COMPANION_STANDING: Vec2 = [0.15, 0.8];
 /** How long after arriving an AI that took its owner somewhere waits for them before walking with them again. */
 const LEAD_GRACE_MS = 2 * 60_000;
 /**
@@ -1071,9 +1069,9 @@ export class RoomCore<C> {
 	}
 
 	/**
-	 * Moves the owner's AIs to keep just ahead of them, one to each side: along the owner's path shifted
-	 * sideways (or, walking with keys, to where the owner will be a few seconds on), at the speed that gets
-	 * there when the owner does, and, when the owner stops, up close in front of them.
+	 * Moves the owner's AIs to keep beside them, one to each side: along the owner's path shifted sideways (or,
+	 * walking with keys, to where the owner will be a few seconds on), at the speed that gets there when the
+	 * owner does, and, when the owner stops, at their side.
 	 */
 	private accompany(owner: Member, now: number): void {
 		const move = owner.move;
@@ -1097,6 +1095,21 @@ export class RoomCore<C> {
 				this.transport.persist(conn, ai);
 			}
 			this.companionStep(conn, ai, owner, side, ahead, now);
+		}
+	}
+
+	/** The owner went somewhere at once (WARP): the AIs walking with them are there beside them too. */
+	private bringCompany(owner: Member, now: number): void {
+		if (!owner.companion) return;
+		this.endLeads(owner);
+		const at = this.positionOf(owner, now);
+		let slot = 0;
+		for (const [conn, ai] of this.members) {
+			if (ai.kind !== "ai" || ai.ownerId !== owner.id) continue;
+			const side = slot++ % 2 === 0 ? 1 : -1;
+			this.stopDoing(conn, ai, now);
+			const there = this.beside(at, owner.heading ?? [0, 1], side, COMPANION_STANDING);
+			this.land(conn, ai, there ?? at, now);
 		}
 	}
 
@@ -1236,7 +1249,7 @@ export class RoomCore<C> {
 				}
 			}
 		} else {
-			// the owner has stopped: it comes up close
+			// the owner has stopped: it comes to their side
 			const there = this.beside(this.positionOf(owner, now), ahead, side, COMPANION_STANDING);
 			if (there) path = [from, there];
 		}
@@ -1394,9 +1407,16 @@ export class RoomCore<C> {
 		if (owner !== undefined) this.transport.send(owner, msg);
 	}
 
-	/** An AI too hungry or unfit to run walks instead. */
+	/** On the ground no faster than MAX_SPEED (afloat, FLY_RUN_SPEED); an AI too hungry or unfit to run walks. */
 	private speedFor(m: Member, speed: number, now: number): number {
-		return m.life && speed > WALK_SPEED && !canRun(decay(m.life, now)) ? WALK_SPEED : speed;
+		const capped = Math.min(speed, m.fly !== undefined ? FLY_RUN_SPEED : MAX_SPEED);
+		return m.life && capped > WALK_SPEED && !canRun(decay(m.life, now)) ? WALK_SPEED : capped;
+	}
+
+	/** How far a move may start from where the host thinks one is: further afloat, where one goes fast. */
+	private tolerance(m: Member): number {
+		const speed = m.fly !== undefined && m.move.kind !== "idle" ? m.move.speed : 0;
+		return POSITION_TOLERANCE + speed * 0.3;
 	}
 
 	// ---- small things (docs/prd.md 3.4.7) -----------------------------------
@@ -1654,16 +1674,17 @@ export class RoomCore<C> {
 	private movePath(conn: C, m: Member, msg: Extract<ClientToHost, { t: "MOVE_PATH" }>, now: number): void {
 		const here = this.positionOf(m, now);
 		const start = msg.path[0] as Vec2;
-		const fromHere = dist(start, here) <= POSITION_TOLERANCE;
+		const fromHere = dist(start, here) <= this.tolerance(m);
 		const clear = (path: Vec2[]) =>
 			m.fly !== undefined ? path.every((p) => this.inSky(p)) : this.walk.validatePath(path);
+		// start exactly where the host thinks the avatar is, so everyone interpolates the same line; that way is
+		// checked too (from a little elsewhere it could cut through a wall)
+		const mine: Vec2[] = [here, ...msg.path.slice(1)];
 		let path: Vec2[] | null =
-			fromHere && polylineLength(msg.path) <= MAX_PATH_LENGTH && clear(msg.path)
-				? // start exactly where the host thinks the avatar is, so everyone interpolates the same line
-					[here, ...msg.path.slice(1)]
-				: null;
-		// a path through something built (a client or AI that does not know about it yet): plan it again
-		if (!path && fromHere && this.builds.size > 0 && m.fly === undefined)
+			fromHere && polylineLength(mine) <= MAX_PATH_LENGTH && clear(msg.path) && clear(mine) ? mine : null;
+		// a path through something built (a client or AI that does not know about it yet), or from here through
+		// a wall: plan it again
+		if (!path && fromHere && m.fly === undefined && (this.builds.size > 0 || clear(msg.path)))
 			path = this.replan(here, msg.path[msg.path.length - 1] as Vec2);
 		if (!path) {
 			this.reject(conn, m, here, now);
@@ -1677,8 +1698,13 @@ export class RoomCore<C> {
 
 	private moveVel(conn: C, m: Member, msg: Extract<ClientToHost, { t: "MOVE_VEL" }>, now: number): void {
 		const here = this.positionOf(m, now);
-		const open = m.fly !== undefined ? this.inSky(msg.pos) : this.walk.isWalkable(msg.pos);
-		if (dist(msg.pos, here) > POSITION_TOLERANCE || !open) {
+		// on the ground, from where the host thinks one is to there must be clear (not through a wall)
+		const open =
+			m.fly !== undefined
+				? this.inSky(msg.pos)
+				: this.walk.isWalkable(msg.pos) &&
+					(dist(msg.pos, here) < 0.05 || this.walk.validatePath([here, msg.pos]));
+		if (dist(msg.pos, here) > this.tolerance(m) || !open) {
 			this.reject(conn, m, here, now);
 			return;
 		}
@@ -1757,6 +1783,7 @@ export class RoomCore<C> {
 			this.broadcastAbout(m, { t: "FLEW", id: m.id, alt: null });
 		}
 		this.land(conn, m, this.spawnPoint(to), now);
+		this.bringCompany(m, now);
 		return null;
 	}
 
