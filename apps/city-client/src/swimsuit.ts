@@ -368,16 +368,16 @@ function geometryOf(d: MeshData): THREE.BufferGeometry {
 function planFor(body: Body, parts: Part[], kind: Suit): Plan | null {
 	const inside = outline(body, kind);
 	if (!inside) return null;
-	const fill = parts.some((p) => p.kind === "cloth") ? skinFill(body) : null;
+	const fill = parts.some((p) => p.kind === "cloth") ? skinFill(body, kind === "one-piece") : null;
 	const main = mainOf(parts.filter((p) => p.kind === "skin").map((p) => p.mesh));
 	const suit = suitOf(body, main, fill, inside);
 	return suit ? { suit, fill, inside, fillUV: false } : null;
 }
 
 /** Skin made again where VRoid deleted it under clothes (bath-body.ts), or null if nothing is missing. */
-function skinFill(body: Body): MeshData | null {
+function skinFill(body: Body, bust: boolean): MeshData | null {
 	const s = body.size;
-	const shape = bodyShape(body);
+	const shape = bodyShape(body, bust);
 	if (!shape) return null;
 	// only where clothes were: the skin elsewhere is whole
 	const box = new THREE.Box3();
