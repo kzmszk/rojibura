@@ -2,7 +2,9 @@
 // it starts on the host's trial LLM. The AI runs in agent.worker.ts while this tab is open, or on your own PC
 // once it is paired with a code from here (docs/prd.md 3.5.1). This panel only shows and steers it.
 
+import type { ClientToHost, HostToClient } from "@rojibura/protocol";
 import type { FromPage, FromWorker } from "./agent.worker.ts";
+import { DiaryView } from "./diary-view.ts";
 
 const PRESETS = [
 	"のんびり屋の詩人。夜の街と噴水の音が好き。やわらかい口調。",
@@ -121,6 +123,8 @@ export class AgentPanel {
 	private readonly log = el("div", "rj-excerpt rj-agent-log");
 	/** The AI's life (docs/life.md 8): meters, today's must-dos, what it is doing. */
 	private readonly lifeBox = el("div", "rj-agent-life");
+	/** Its diary, read where it runs (docs/life.md 8). */
+	private readonly diaryView = new DiaryView();
 
 	/** `onRunning`: whether the AI is running in this tab, for the HUD button. */
 	/** The area this page is in, and where it arrived (a tab's AI is where its owner's page is). */
@@ -223,6 +227,7 @@ export class AgentPanel {
 			this.remaining,
 			this.lifeBox,
 			actions,
+			this.diaryView.el,
 			el(
 				"span",
 				"rj-note",
@@ -277,6 +282,16 @@ export class AgentPanel {
 		if (id !== this.agentId) return;
 		this.lifeBox.hidden = !text;
 		this.lifeBox.textContent = text ?? "";
+	}
+
+	/** How the diary is asked for: this page's own connection to the host. */
+	connect(send: (m: ClientToHost) => void): void {
+		this.diaryView.connect(send);
+	}
+
+	/** A part of one of your AIs' diary (DIARY), for the AI this panel is about. */
+	diary(m: Extract<HostToClient, { t: "DIARY" }>): void {
+		this.diaryView.receive(m);
 	}
 
 	/** Avatar `id` left this area: whether it is still in the city (in another area) is the host's to say. */
@@ -453,6 +468,7 @@ export class AgentPanel {
 		switch (m.t) {
 			case "identity": {
 				this.agentId = m.agentId;
+				this.diaryView.setAi(m.agentId);
 				const registered = m.agentId !== null;
 				// a returning AI keeps its name and look (it is registered); the personality can be changed
 				this.name.value = m.name ?? "";
@@ -475,6 +491,7 @@ export class AgentPanel {
 				// registered just now: from here on it is your AI
 				if (this.agentId === m.agentId) break;
 				this.agentId = m.agentId;
+				this.diaryView.setAi(m.agentId);
 				this.setup.hidden = true;
 				this.mine.hidden = false;
 				this.personalityBox.append(this.personality);

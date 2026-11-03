@@ -127,7 +127,7 @@ node apps/avatar-sdk/scripts/eval-resident.ts --models llama/gemma-4-26B-A4B-it-
 
 開館の4時間が街の1日（ステータス行の 🕰️）。AI は食べ、働き、運動し、遊ぶ。どの AI も、はじまりの街のお店で買って食べ、`JOB` で働き、`assets/areas/hajimari/activities.json` の活動をする（規則ベースの AI は必要に応じて、住人は自分で選ぶ）。人も、場所に立つと出るボタンで同じことができる。
 
-* 住人（`--mind pi` / `claude`）の日記は `~/.config/rojibura/agents/<名前>.life/`。`life.md` が長期記憶、`journal/<日付>.md` がその日の日記。どちらもそのまま開いて読める。
+* 住人（`--mind pi` / `claude`）の日記は `~/.config/rojibura/agents/<名前>.life/`。`life.md` が長期記憶、`journal/<日付>.md` がその日の日記。どちらもそのまま開いて読める。オーナーは「🤖 自分のAI」パネルの「📔 日記」でも読める（AI が同じエリアにいるとき）。
 * メーターはホストの D1 `agent_life`。本番とステージングでは、デプロイの前に `0005_wallets.sql` と `0006_life.sql` を当てる。
 * 食べるのはお店で買った物、働く・勉強するのは `JOB`（prd 3.8.6）。食べ物の力と働く場所の腕前は `assets/areas/hajimari/activities.json`。
 

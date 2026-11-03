@@ -2,6 +2,14 @@
 // its mind, and it can read any day back. Kept where the AI runs (a PC's files, later IndexedDB or D1), never on
 // the host. This file has what does not depend on where it is kept.
 
+import {
+	type AvatarId,
+	type ClientToHost,
+	DIARY_DAYS_MAX,
+	DIARY_PART_MAX,
+	DIARY_PARTS_MAX,
+} from "@rojibura/protocol";
+
 /** Where the diary is kept. Days are JST dates, "2026-11-02". */
 export interface Journal {
 	/** Adds to the diary of `day` (today, JST, if omitted). */
@@ -77,6 +85,40 @@ export async function searchJournal(journal: Journal, query: string, max = 5): P
 		.sort((a, b) => b.score - a.score || b.order - a.order)
 		.slice(0, max)
 		.map(({ day, text }) => ({ day, text }));
+}
+
+/** A page of the diary its owner asked to read (DIARY_ASK, docs/life.md 8). */
+export interface DiaryPage {
+	/** The day it is, "life" for the long-term memory, or null: no diary yet. */
+	day: string | null;
+	/** "" if nothing was written that day. */
+	text: string;
+	/** Days with a diary, oldest first. */
+	days: string[];
+}
+
+/** The page its owner asks for: a day's diary (the latest if none is asked), or "life", the long-term memory. */
+export async function diaryPage(journal: Journal, day?: string): Promise<DiaryPage> {
+	const days = await journal.days();
+	if (day === "life") return { day, text: await journal.readLife(), days };
+	const d = day ?? days.at(-1) ?? null;
+	return { day: d, text: (d && (await journal.read(d))) || "", days };
+}
+
+/** A page as the DIARY messages that carry it to `to`: from its end if it is longer than they can carry. */
+export function diaryMessages(to: AvatarId, page: DiaryPage): Extract<ClientToHost, { t: "DIARY" }>[] {
+	const chars = [...page.text];
+	const kept = chars.slice(-DIARY_PART_MAX * DIARY_PARTS_MAX);
+	const parts = Math.max(1, Math.ceil(kept.length / DIARY_PART_MAX));
+	return Array.from({ length: parts }, (_, part) => ({
+		t: "DIARY",
+		to,
+		day: page.day,
+		part,
+		parts,
+		text: kept.slice(part * DIARY_PART_MAX, (part + 1) * DIARY_PART_MAX).join(""),
+		...(part === 0 ? { days: page.days.slice(-DIARY_DAYS_MAX) } : {}),
+	}));
 }
 
 /** The end of a text, at most `max` characters, starting at a line where it can. */

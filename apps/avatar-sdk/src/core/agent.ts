@@ -30,6 +30,7 @@ import {
 	type Vec2,
 	WALK_SPEED,
 } from "@rojibura/protocol";
+import { type DiaryPage, diaryMessages, jstDate } from "./journal.ts";
 import {
 	decisionSchema,
 	FALLBACK_REPLIES,
@@ -273,9 +274,24 @@ export class Agent {
 					void this.o.memory.remember(SELF, `${msg.review.day}日目: ${this.doneToday.join("、")}`);
 				this.doneToday = [];
 				return;
+			case "DIARY_ASK":
+				void this.showDiary(msg.from, msg.day);
+				return;
 			default:
 				return;
 		}
+	}
+
+	/**
+	 * Its owner reads its diary (docs/life.md 8). It keeps no diary of its own: today is what it did, and its
+	 * notes on the days before stand for the long-term memory.
+	 */
+	private async showDiary(owner: AvatarId, day: string | undefined): Promise<void> {
+		const today = jstDate();
+		const page: DiaryPage = { day: day ?? today, text: "", days: [today] };
+		if (day === "life") page.text = (await this.o.memory.recall(SELF).catch(() => [])).join("\n");
+		else if (page.day === today) page.text = this.doneToday.map((d) => `- ${d}`).join("\n");
+		for (const m of diaryMessages(owner, page)) this.o.send(m);
 	}
 
 	/** Its own day in words, for its replies: the time, how it feels, today and the days before. */

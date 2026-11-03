@@ -147,6 +147,13 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #bfd6e8; }
 .rj-agent details > * + * { margin-top: 6px; }
 .rj-agent details textarea { width: 100%; box-sizing: border-box; }
 .rj-agent summary { cursor: pointer; color: #333; }
+.rj-diary-page { max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; gap: 3px; font-size: 12px; line-height: 1.6; white-space: pre-wrap; }
+.rj-diary-h1 { font-weight: 700; font-size: 13px; }
+.rj-diary-h2 { font-weight: 600; margin-top: 6px; }
+.rj-diary-h3 { font-style: italic; color: #555; margin-top: 2px; }
+.rj-agent .rj-diary .rj-agent-row button.on { background: #2f6fae; color: #fff; border-color: #2f6fae; }
+.rj-agent .rj-diary .rj-agent-row button:disabled { opacity: .45; cursor: default; }
+.rj-agent .rj-diary select { font-size: 12px; padding: 2px 4px; }
 .rj-agent-log { max-height: 180px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
 .rj-command { display: block; margin: 4px 0 6px; padding: 6px 8px; background: #fff; border: 1px solid #dde; border-radius: 6px; font-size: 12px; white-space: pre-wrap; word-break: break-all; user-select: all; }
 .rj-report textarea, .rj-report input, .rj-report select { font: inherit; padding: 8px; border-radius: 6px; border: 1px solid #ccd; }

@@ -55,7 +55,16 @@ import {
 	type MoveBook,
 	movesLine,
 } from "./body.ts";
-import { dayOf, type Journal, jstDate, LIFE_MAX, searchJournal, tail } from "./journal.ts";
+import {
+	dayOf,
+	diaryMessages,
+	diaryPage,
+	type Journal,
+	jstDate,
+	LIFE_MAX,
+	searchJournal,
+	tail,
+} from "./journal.ts";
 import { dayEntry, doneEntry, doneEvent, lifeGuide, lifeLines } from "./life-text.ts";
 import { PrivacyIndex } from "./privacy.ts";
 import { clean, cleanNote, FALLBACK_REPLIES } from "./prompt.ts";
@@ -345,6 +354,9 @@ export class Resident {
 				return;
 			case "DAY":
 				void this.morning(msg);
+				return;
+			case "DIARY_ASK":
+				void this.showDiary(msg.from, msg.day);
 				return;
 			case "CONV_END":
 				this.endConversation(msg.convId);
@@ -1074,6 +1086,13 @@ export class Resident {
 		if (!doing) return "いまは何もしていない。";
 		this.o.send({ t: "ACT_STOP" });
 		return "やめた。";
+	}
+
+	/** Its owner reads its diary (docs/life.md 8): the page goes through the host to them, and no one else. */
+	private async showDiary(owner: AvatarId, day: string | undefined): Promise<void> {
+		const j = this.o.journal;
+		const page = (j && (await diaryPage(j, day).catch(() => null))) || { day: null, text: "", days: [] };
+		for (const m of diaryMessages(owner, page)) this.o.send(m);
 	}
 
 	/** The diary tool: what it thought, felt or noticed (what happened is written already). */

@@ -109,6 +109,39 @@ describe("parseClientMessage", () => {
 		expect(parseClientMessage(new ArrayBuffer(4)).ok).toBe(false);
 	});
 
+	test("the owner reading their AI's diary: DIARY_ASK and the AI's DIARY", () => {
+		const ask = (v: object) => parseClientMessage(JSON.stringify({ t: "DIARY_ASK", id: "a_mina", ...v }));
+		expect(ask({}).ok).toBe(true);
+		expect(ask({ day: "2026-11-03" }).ok).toBe(true);
+		expect(ask({ day: "life" }).ok).toBe(true);
+		expect(ask({ day: "../etc" }).ok).toBe(false);
+		expect(ask({ id: "mina" }).ok).toBe(false);
+		const part = (v: object) =>
+			parseClientMessage(
+				JSON.stringify({
+					t: "DIARY",
+					to: "h_kazu",
+					day: "2026-11-03",
+					part: 0,
+					parts: 1,
+					text: "# 日\n\n## 07:10",
+					...v,
+				}),
+			);
+		const r = part({ days: ["2026-11-02", "2026-11-03"] });
+		// line breaks are kept; control characters are not
+		expect(r.ok && r.msg.t === "DIARY" && r.msg.text).toBe("# 日\n\n## 07:10");
+		expect(r.ok && r.msg.t === "DIARY" && r.msg.days).toEqual(["2026-11-02", "2026-11-03"]);
+		const dirty = part({ text: "a\u0007b\tc" });
+		expect(dirty.ok && dirty.msg.t === "DIARY" && dirty.msg.text).toBe("ab\tc");
+		expect(part({ day: null, text: "" }).ok).toBe(true);
+		expect(part({ day: "life" }).ok).toBe(true);
+		expect(part({ part: 1 }).ok).toBe(false);
+		expect(part({ parts: 11 }).ok).toBe(false);
+		expect(part({ text: "あ".repeat(1501) }).ok).toBe(false);
+		expect(part({ days: ["life"] }).ok).toBe(false);
+	});
+
 	test("sanitizeText", () => {
 		expect(sanitizeText("a‮b")).toBe("a‮b"); // bidi marks are left to the renderer
 		expect(sanitizeText("a\u007Fb\u0085c")).toBe("abc");
