@@ -697,7 +697,7 @@ async function startCity(
 	gateButton.onclick = () => goToGate();
 	const mapButton = el("button", "rj-logout rj-gate", "🗺️ 地図");
 	mapButton.type = "button";
-	mapButton.title = "地図を開く（M）。主な場所へ瞬間移動できます";
+	mapButton.title = "地図を開く（M）。主な場所へ歩いて行くか、瞬間移動できます";
 	mapButton.onclick = () => cityMap.toggle();
 	// floating in the air (docs/prd.md 3.4.13), where the area allows it: up and down while afloat
 	const flyBar = el("div", "rj-fly");
