@@ -32,7 +32,7 @@ MATS = {
     'stone': ('PavingStones109', (1, 1, 1), 0.85, 0, 1.6, {}),
     'stone_onsen': ('stone_tiles_02', (0.95, 0.93, 0.9), 0.8, 0, 2.2, {}),
     'rock': ('rock_wall_13', (0.95, 0.92, 0.88), 0.9, 0, 2.0, {}),
-    'glass': (None, (0.12, 0.15, 0.18), 0.12, 0.3, 1, {}),
+    'glass': (None, (0.06, 0.075, 0.085), 0.1, 0.5, 1, {}),
     'glass_shop': (None, (0.55, 0.62, 0.66), 0.08, 0.1, 1, {'alpha': 0.35}),
     'metal': (None, (0.08, 0.08, 0.09), 0.55, 0.8, 1, {}),
     'paint': (None, (1, 1, 1), 0.7, 0, 1, {}),                 # vertex colours: shutters, doors, goods
@@ -48,6 +48,29 @@ MATS = {
     'flowers': (None, (1, 1, 1), 0.9, 0, 1, {}),
     'hedge': (None, (0.22, 0.36, 0.16), 0.95, 0, 1, {}),
     'far_land': (None, (1, 1, 1), 1.0, 0, 1, {}),
+    # Venetian houses (houses.py): walls tinted by vertex colour; the browser weathers every wall_* (weathering.ts)
+    'wall_plaster': ('painted_plaster_wall', (1, 1, 1), 0.92, 0, 2.2, {'gain': 1.3}),
+    'wall_red': ('red_plaster_weathered', (1, 1, 1), 0.92, 0, 2.4, {'gain': 1.15}),
+    'wall_ochre': ('yellow_plaster', (1, 1, 1), 0.92, 0, 2.2, {'gain': 1.3}),
+    'wall_peel': ('rough_plaster_brick_04', (1, 1, 1), 0.92, 0, 2.2, {'gain': 1.2}),
+    'wall_brick': ('red_bricks_04', (1, 1, 1), 0.9, 0, 2.0, {'gain': 1.1}),
+    'trim_istrian': ('marble_01', (0.96, 0.94, 0.9), 0.6, 0, 1.2, {}),
+    'shutter': ('worn_shutter', (1, 1, 1), 0.7, 0, 1.0, {'gain': 2.6}),
+    'wood_door': ('weathered_planks', (1, 1, 1), 0.8, 0, 1.2, {'gain': 1.4}),
+    'wood_altana': ('weathered_planks', (0.85, 0.8, 0.74), 0.85, 0, 1.6, {'gain': 1.4}),
+    'roof_coppi': ('clay_roof_tiles_03', (1, 1, 1), 0.8, 0, 2.4, {}),
+    # the onsen (onsen.py) and the college (college.py)
+    'wood_hinoki': ('hinoki_planks', (1, 1, 1), 0.7, 0, 1.6, {}),
+    'wood_cedar': ('japanese_cedar_planks', (0.8, 0.72, 0.65), 0.75, 0, 1.4, {}),
+    'tatami_mat': ('tatami_mat', (1, 1, 1), 0.95, 0, 1.82, {}),
+    'rock_mossy': ('mossy_rock', (1, 1, 1), 0.9, 0, 1.8, {}),
+    'stone_wall_jp': ('japanese_stone_wall', (1, 1, 1), 0.85, 0, 2.4, {}),
+    'bamboo': ('bamboo_wall', (1, 1, 1), 0.8, 0, 1.6, {}),
+    'stone_path': ('stone_pathway', (1, 1, 1), 0.85, 0, 2.6, {}),
+    'pebbles': ('river_small_rocks', (1, 1, 1), 0.9, 0, 1.4, {'gain': 1.25}),
+    'water_onsen_clear': (None, (0.55, 0.72, 0.7), 0.05, 0, 1, {}),
+    'stone_college': ('large_sandstone_blocks', (1.0, 0.95, 0.84), 0.85, 0, 2.6, {'gain': 1.5}),
+    'roof_college': ('roof_slates_03', (0.85, 0.87, 0.92), 0.7, 0, 2.2, {}),
 }
 SIGNS = {}   # sign_<id>: image path, set by signs.py
 
@@ -62,10 +85,24 @@ def reset():
 _made = {}
 
 
-def _image(path, colour):
+def _image(path, colour, gain=1.0):
     img = bpy.data.images.load(path, check_existing=True)
     if not colour:
         img.colorspace_settings.name = 'Non-Color'
+    if gain != 1.0:
+        # lighter: a copy with its pixels scaled (the vertex colours, at most 1, tint it down from there)
+        name = '%s_x%.2f' % (os.path.basename(os.path.dirname(path)), gain)
+        made = bpy.data.images.get(name)
+        if made is None:
+            w, h = img.size
+            px = np.empty(w * h * 4, np.float32)
+            img.pixels.foreach_get(px)
+            px = px.reshape(-1, 4)
+            px[:, :3] = np.clip(px[:, :3] * gain, 0, 1)
+            made = bpy.data.images.new(name, w, h)
+            made.pixels.foreach_set(px.ravel())
+            made.pack()
+        img = made
     return img
 
 
@@ -91,7 +128,7 @@ def material(name):
     nt.links.new(vc.outputs['Color'], mix.inputs['B'])
     if img_path:
         t = nt.nodes.new('ShaderNodeTexImage')
-        t.image = _image(img_path, True)
+        t.image = _image(img_path, True, extra.get('gain', 1.0))
         if tint != (1, 1, 1):
             tm = nt.nodes.new('ShaderNodeMix')
             tm.data_type = 'RGBA'

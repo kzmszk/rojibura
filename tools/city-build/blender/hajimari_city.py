@@ -4,16 +4,21 @@
     blender -b --python tools/city-build/blender/hajimari_city.py [-- --preview] [-- --only ground,houses]
     node tools/city-build/src/build-grid.ts tools/city-build/blender/out/hajimari assets/areas/hajimari
     node tools/city-build/src/compress-glb.ts tools/city-build/blender/out/hajimari/hajimari_raw.glb \
-        assets/areas/hajimari/hajimari.glb --drop snow_
+        assets/areas/hajimari/hajimari_town_w.glb --drop snow_ --cols 0
+    node tools/city-build/src/compress-glb.ts tools/city-build/blender/out/hajimari/hajimari_raw.glb \
+        assets/areas/hajimari/hajimari_town_e.glb --drop snow_ --cols 1
+    node tools/city-build/src/compress-glb.ts tools/city-build/blender/out/hajimari/hajimari_raw.glb \
+        assets/areas/hajimari/hajimari_park.glb --drop snow_ --cols 2,3
     node tools/city-build/src/compress-glb.ts tools/city-build/blender/out/hajimari/hajimari_raw.glb \
         assets/areas/hajimari/hajimari_snow.glb --only snow_
 
-(pnpm build:hajimari does all of it.) Writes assets/areas/hajimari: hajimari.glb (the town, park, mountain and
-onsen), hajimari_snow.glb (the winter snow, loaded only in winter), trees.json, zones.json, shops.json, and the
-navmesh and landmarks. The Sagrada Família's exterior is its own file, sagrada_exterior.glb, made from
+(pnpm build:hajimari does all of it.) Writes assets/areas/hajimari: hajimari_town_w.glb and hajimari_town_e.glb (the
+walled town's west and east halves; the half where one arrives is loaded first, areas.json "bounds"),
+hajimari_park.glb (the park, mountain, college and onsen: loaded once in), hajimari_snow.glb
+(the winter snow, loaded only in winter), trees.json, zones.json, shops.json, and the navmesh and landmarks. The Sagrada Família's exterior is its own file, sagrada_exterior.glb, made from
 ~/work/demos/sagrada-familia (its tools/rj_export.mjs). The layout is in hajimari/plan.py.
 """
-import os, sys, time
+import math, os, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -91,6 +96,19 @@ def main():
             'court': ((22, 99, 1.7), (86, 0, -35), 20),
             'library': ((52.5, 103, 1.6), (88, 0, 0), 18),
         }
+        # along a few streets, from the far side, looking at the houses (Venetian look, issue 42)
+        from hajimari import lots
+        H = lots.houses()
+        for i in (5, 60, 140, 230, 320):
+            if i >= len(H):
+                continue
+            h = H[i]
+            tx, ty = h['t']
+            nx, ny = -ty, tx
+            o = h['o']
+            p = (o[0] - nx * 5.0 - tx * 9.0, o[1] - ny * 5.0 - ty * 9.0, 1.7)
+            look = (tx * 0.8 + nx * 0.6, ty * 0.8 + ny * 0.6)
+            shots['house%d' % i] = (p, (84, 0, math.degrees(math.atan2(-look[0], look[1]))), 18)
         for name in (arg('--shots') or ','.join(shots)).split(','):
             loc, rot, lens = shots[name]
             bl.preview(os.path.join(OUT, 'preview_%s%s.png' % (name, '_winter' if winter else '')), loc, rot,

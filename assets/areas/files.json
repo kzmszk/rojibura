@@ -2,8 +2,10 @@
 	"version": 1,
 	"source": "https://rojibura.kazumasa.workers.dev",
 	"files": {
-		"areas/hajimari/hajimari.glb": {"size":18044052,"sha256":"6365698c431b455450ea1d7fc2fbde85edf9ead74cf3121854acd3f3e0670d81"},
-		"areas/hajimari/hajimari_snow.glb": {"size":971052,"sha256":"f18dbe420a77ab12d2cbccedb9b6ebdb54d2fdb0fbcacc401dc725c3a9f585a8"},
+		"areas/hajimari/hajimari_park.glb": {"size":8255900,"sha256":"beec42e5bb94aedc13105523d7932dccc5f440d74c0d5b6f611dcf4ca4435ad2"},
+		"areas/hajimari/hajimari_snow.glb": {"size":1098720,"sha256":"d7c431760c65520c71d46c1bba0deaa2eab6b04931c0e07d1a2887a0b507499d"},
+		"areas/hajimari/hajimari_town_e.glb": {"size":9566832,"sha256":"53476eeacce74b47c64f3f4b74a300c25dd699a4a4ea3b293045c811f2edba2c"},
+		"areas/hajimari/hajimari_town_w.glb": {"size":8952124,"sha256":"ae4c6382a5984af20a3962c30eaa160e2b1ed59bf6ff8e477432feecc71b8167"},
 		"areas/hajimari/sagrada_exterior.glb": {"size":11924452,"sha256":"02f3f2c99ae1914e32f95cbea4ad9feda50ef3cbd3585958805d8a0a2dafbff8"},
 		"areas/hajimari/sagrada_exterior_lite.glb": {"size":10232092,"sha256":"2d68cb6e215d15aef3ffb69dd076f29dff55eeeb5e07f342e16f03fdf867dc5e"},
 		"areas/sagrada/3d/2026-11-03b-lite/sagrada_00.glb": {"size":11821836,"sha256":"7f307817afb34a135f74164b583ab730f51cd2f23f8ea8c2f70b6190ed098cbd"},

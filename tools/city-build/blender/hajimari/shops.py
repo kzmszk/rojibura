@@ -41,9 +41,9 @@ def shell(W, sh, st):
     u0, u1 = -w / 2, w / 2
     pc = st['plaster']
     # back and sides
-    geom.box(W, f, u0, u1, d - WT, d, 0, H0, 'plaster', pc, 'shops')
-    geom.box(W, f, u0, u0 + WT, 0, d, 0, H0, 'plaster', pc, 'shops')
-    geom.box(W, f, u1 - WT, u1, 0, d, 0, H0, 'plaster', pc, 'shops')
+    geom.box(W, f, u0, u1, d - WT, d, 0, H0, 'wall_plaster', pc, 'shops')
+    geom.box(W, f, u0, u0 + WT, 0, d, 0, H0, 'wall_plaster', pc, 'shops')
+    geom.box(W, f, u1 - WT, u1, 0, d, 0, H0, 'wall_plaster', pc, 'shops')
     # front: piers, the door, two shop windows
     zt = 2.75
     door = (ud - 1.1, ud + 1.1)
@@ -86,7 +86,7 @@ def shell(W, sh, st):
     # inside: floor, ceiling, lights
     W.face([f.p(u0, 0, 0.02), f.p(u1, 0, 0.02), f.p(u1, d, 0.02), f.p(u0, d, 0.02)][::-1], 'wood_deck',
            st['floor'], 'shops')
-    W.face([f.p(u0, 0, H0 - 0.01), f.p(u1, 0, H0 - 0.01), f.p(u1, d, H0 - 0.01), f.p(u0, d, H0 - 0.01)], 'plaster',
+    W.face([f.p(u0, 0, H0 - 0.01), f.p(u1, 0, H0 - 0.01), f.p(u1, d, H0 - 0.01), f.p(u0, d, H0 - 0.01)], 'wall_plaster',
            (0.95, 0.94, 0.9), 'shops')
     for uu in np.arange(u0 + 2.0, u1 - 1.0, 3.0):
         for nn in np.arange(2.5, d - 1.0, 3.5):

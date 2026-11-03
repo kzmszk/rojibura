@@ -193,6 +193,38 @@ describe("movement", () => {
 		expect(ctx.room.stats.rejectedMoves).toBe(2);
 	});
 
+	test("men keep out of the women's changing room, women out of the men's (docs/prd.md 3.8.6)", () => {
+		// two rooms to the north: the women's at x -12..-8, the men's at x 8..12 (z 12..16)
+		const women: Vec2[] = [
+			[-12, 12],
+			[-8, 12],
+			[-8, 16],
+			[-12, 16],
+		];
+		const men: Vec2[] = [
+			[8, 12],
+			[12, 12],
+			[12, 16],
+			[8, 16],
+		];
+		ctx = setup({ keepOut: { m: [{ poly: women }], f: [{ poly: men }] } });
+		const a = conn("a");
+		const b = conn("b");
+		const pos = joinAt(a, human("taro", { assets: { ...assets, sex: "m" } }));
+		ctx.room.handle(a, { t: "MOVE_PATH", path: [pos, [-10, 14]], speed: 1.4, seq: 1 });
+		expect(last(a)?.t).toBe("CORRECT");
+		ctx.room.handle(a, { t: "MOVE_PATH", path: [pos, [-10, 8], [10, 14]], speed: 1.4, seq: 2 });
+		expect(last(a)?.t).not.toBe("CORRECT");
+		const p2 = joinAt(b, human("hanako", { assets: { ...assets, sex: "f" } }));
+		ctx.room.handle(b, { t: "MOVE_PATH", path: [p2, [-10, 14]], speed: 1.4, seq: 1 });
+		expect(last(b)?.t).not.toBe("CORRECT");
+		// no sex given: either
+		const c = conn("c");
+		const p3 = joinAt(c, human("capsule"));
+		ctx.room.handle(c, { t: "MOVE_PATH", path: [p3, [-10, 14]], speed: 1.4, seq: 1 });
+		expect(last(c)?.t).not.toBe("CORRECT");
+	});
+
 	test("too many moves get rate limited and finally disconnected", () => {
 		const a = conn("a");
 		const pos = joinAt(a, human("alice"));

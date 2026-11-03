@@ -12,7 +12,7 @@ from .houses import window
 from .shops import textured
 
 CO = plan.COLLEGE
-ASH = 'stone_ashlar'
+ASH = 'stone_college'   # pale stone, weathered (issue 42)
 ASHC = (1.0, 1.0, 1.0)
 TRIM = (0.92, 0.88, 0.8)          # dressings: mullions, string courses, copings
 F0 = geom.Frame((0, 0, 0), (1, 0))
@@ -118,11 +118,11 @@ def range_block(W, x0, y0, x1, y1, h, ridge_x, roof=True, door=None):
         if ridge_x:
             f = geom.Frame(((x0 + x1) / 2, y0, 0), (1, 0))
             houses.roof(W, f, -(x1 - x0) / 2 + 0.4, (x1 - x0) / 2 - 0.4, 0.4, (y1 - y0) - 0.4, h, 32, False,
-                        'roof_slate', ov=-0.1, ovg=-0.1)
+                        'roof_college', ov=-0.1, ovg=-0.1)
         else:
             f = geom.Frame((x0, (y0 + y1) / 2, 0), (0, 1))
             houses.roof(W, f, -(y1 - y0) / 2 + 0.4, (y1 - y0) / 2 - 0.4, -(x1 - x0) + 0.4, -0.4, h, 32, False,
-                        'roof_slate', ov=-0.1, ovg=-0.1)
+                        'roof_college', ov=-0.1, ovg=-0.1)
 
 
 def chimneys(W, xs, ys, z0, z1):

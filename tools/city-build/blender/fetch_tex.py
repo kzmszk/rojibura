@@ -30,6 +30,28 @@ SETS = {
     'gravel_floor_02': 'park paths',
     'brown_mud_leaves_01': 'the mountain trail',
     'white_sandstone_bricks': 'the college: ashlar of pale stone',
+    # Venetian houses (issue 42)
+    'painted_plaster_wall': 'house walls: weathered plaster, tinted per house',
+    'red_plaster_weathered': 'house walls: Venetian red plaster',
+    'yellow_plaster': 'house walls: ochre plaster',
+    'rough_plaster_brick_04': 'house walls: plaster fallen off the brick',
+    'red_bricks_04': 'house walls: bare brick',
+    'marble_01': 'Istrian stone: window and door frames, string courses, balconies, the walls\' feet',
+    'worn_shutter': 'shutters (persiane), tinted',
+    'weathered_planks': 'altane (roof terraces), doors',
+    'clay_roof_tiles_03': 'old coppi roofs',
+    # the onsen
+    'hinoki_planks': 'the onsen: cypress walls and baths',
+    'japanese_cedar_planks': 'the onsen: cedar boards',
+    'tatami_mat': 'the changing rooms',
+    'mossy_rock': 'the open-air baths: boulders round the pools',
+    'river_small_rocks': 'the open-air baths: pebbles on the bottom',
+    'japanese_stone_wall': 'the open-air baths: stone walls',
+    'bamboo_wall': 'the open-air baths: bamboo screens',
+    'stone_pathway': 'the open-air baths: stepping stones',
+    # the college
+    'large_sandstone_blocks': 'the college: weathered pale stone',
+    'roof_slates_03': 'the college: slate roofs',
 }
 
 

@@ -77,10 +77,15 @@ export type MoveState =
 	| { kind: "path"; path: Vec2[]; speed: number; at: number }
 	| { kind: "vel"; pos: Vec2; dir: Vec2; speed: number; at: number };
 
+/** Men and women go into different changing rooms at the onsen (docs/prd.md 3.8.6). */
+export type Sex = "m" | "f";
+
 export interface AvatarAssets {
 	thumb: string;
 	lod: string;
 	vrm: string;
+	/** The look's sex, where it has one: the onsen's changing room it goes into. */
+	sex?: Sex;
 }
 
 export interface AvatarState {
@@ -207,8 +212,13 @@ export interface AreaInfo {
 	 */
 	sceneLite?: string[];
 	/**
-	 * How many of the `scene` (and `sceneLite`) files are drawn before you enter the area: the rest load while
-	 * you are in it, one after another. All of them when omitted.
+	 * Where scene files lie (ground plan [x0, z0, x1, z1], metres), by file name: a file with bounds is drawn
+	 * before you enter only if you arrive near it, else once you are in, nearest first (an area cut in pieces).
+	 */
+	bounds?: Record<string, [x0: number, z0: number, x1: number, z1: number]>;
+	/**
+	 * How many of the `scene` (and `sceneLite`) files without `bounds` are drawn before you enter the area: the
+	 * rest load while you are in it, before the far pieces. All of them when omitted.
 	 */
 	first?: number;
 	/** glb files drawn only in winter (the snow lying on everything), relative to `assets`. */
