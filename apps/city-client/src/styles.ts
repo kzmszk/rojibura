@@ -55,6 +55,9 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #bfd6e8; }
 .rj-settings-row select, .rj-settings-row button { flex: 1; min-width: 0; font: inherit; padding: 5px 8px; border-radius: 8px; border: 1px solid #bbc; background: #fff; color: #222; cursor: pointer; }
 .rj-settings-row button.on { background: #2f6fae; border-color: #2f6fae; color: #fff; }
 .rj-settings-check { cursor: pointer; }
+.rj-settings-credit { font-size: 11px; line-height: 1.5; color: #555; padding-top: 6px; border-top: 1px solid #e3e5ea; overflow-wrap: anywhere; }
+.rj-settings-credit b { font-size: 13px; color: #444; }
+.rj-settings-credit a { color: #2f6fae; }
 .rj-settings-links { display: flex; gap: 14px; padding-top: 6px; border-top: 1px solid #e3e5ea; flex: 1; }
 .rj-settings-links a { color: #2f6fae; text-decoration: none; }
 .rj-google { display: block; text-align: center; font-size: 16px; padding: 10px; border-radius: 8px; border: 1px solid #bbc; color: #222; text-decoration: none; background: #fff; }
@@ -104,8 +107,6 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #bfd6e8; }
 .rj-shop-panel button:hover { background: rgba(31,127,191,.12); }
 .rj-shop-dot { width: 12px; height: 12px; border-radius: 50%; flex: none; box-shadow: 0 0 0 1px rgba(0,0,0,.2); }
 .rj-shop-price { margin-left: auto; color: #6b5a3a; }
-.rj-credit { position: absolute; right: 8px; bottom: 6px; font-size: 11px; color: rgba(20, 24, 32, .75); background: rgba(255,255,255,.55);
-  padding: 2px 6px; border-radius: 6px; pointer-events: none; }
 .rj-login { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(320px, calc(100% - 32px));
   display: flex; flex-direction: column; gap: 10px; padding: 24px; border-radius: 14px; background: #fff; box-shadow: 0 6px 30px rgba(0,0,0,.15); }
 .rj-login h1 { margin: 0; font-size: 26px; }

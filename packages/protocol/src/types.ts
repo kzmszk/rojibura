@@ -236,6 +236,12 @@ export interface AreaView {
 	 * height (metres), under the roof.
 	 */
 	mapCut?: number;
+	/**
+	 * false under a roof (inside the Sagrada Família): no sun, so the area is not drawn a second time for its
+	 * shadow. The roof shaded everything from it anyway; the light inside is the hemisphere's and what is baked into
+	 * the 3D (docs/prd.md 3.8.7).
+	 */
+	sun?: boolean;
 }
 
 /** A way to another area. People walk up to it and travel; it is also one of the area's landmarks. */

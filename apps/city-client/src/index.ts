@@ -531,7 +531,7 @@ async function startCity(
 	if (area.sceneLite) {
 		const detailSelect = el("select", "");
 		for (const [v, label] of [
-			["auto", touchFirst() ? "自動（この端末は軽い）" : "自動（この端末は細かい）"],
+			["auto", touchFirst() ? "自動（軽い）" : "自動（細かい）"],
 			["full", "細かい"],
 			["lite", "軽い（スマホ向け）"],
 		] as const) {
@@ -596,6 +596,22 @@ async function startCity(
 		root.append(panel.el);
 		onApiUsage((label, cost) => panel.addOwn(label, cost));
 		usage = panel;
+	}
+	// the area's credits (licences of what is drawn): here, out of the way of the chat (docs/prd.md 3.8.1)
+	if (area.credit) {
+		const credit = el("div", "rj-settings-credit");
+		credit.append(el("b", "", "📜 クレジット"), el("br", ""));
+		// the list of sources is a page of the host
+		for (const part of area.credit.split(/(\/areas\/[\w/.-]+\.html)/)) {
+			if (/^\/areas\/.+\.html$/.test(part)) {
+				const a = el("a", "", part);
+				a.href = part;
+				a.target = "_blank";
+				a.rel = "noopener";
+				credit.append(a);
+			} else credit.append(document.createTextNode(part));
+		}
+		settings.row("", credit);
 	}
 	const links = el("div", "rj-settings-links");
 	if (me.role === "moderator" || me.role === "admin") {
@@ -765,7 +781,6 @@ async function startCity(
 	const shops = new ShopsUi((shop, goods) => conn.send({ t: "BUY", shop: shop.id, goods }));
 	void shops.load(area.dir);
 	root.append(hud, chat, toast, travel, actsBar, offerBox, agentPanel.el, settings.el, shops.el, cityMap.el);
-	if (area.credit) root.append(el("div", "rj-credit", area.credit));
 
 	const avatars = new Map<AvatarId, AvatarView>();
 	/** When an AI and its owner last spoke to each other (host time), by the AI. */
