@@ -160,6 +160,9 @@ def bench(W, x, y, a, ground=0.0):
         z = 0.58 + k * 0.15
         geom.box(W, f, -0.95, 0.95, 0.22, 0.26, z, z + 0.1, 'wood', (0.9, 0.75, 0.6), 'benches')
     geom.box(W, f, -0.92, 0.92, -0.24, 0.2, 0.46, 0.46 + SNOW * 0.6, 'snow_soft', (1, 1, 1), 'snow_soft_things')
+    # one sits with one's back to the backrest (+n)
+    c = f.p(0, 0, 0.46)
+    geom.seats(c[0], c[1], c[2], f.t[0], f.t[1], 1.9, -f.n[0], -f.n[1])
 
 
 def fountain(W, x, y, r, ground=0.0, tiers=2):

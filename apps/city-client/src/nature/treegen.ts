@@ -5,9 +5,12 @@
 // Wood vertex data:   (wind weight 0 trunk .. 1 twig, depth 0..1, 0, 0); uv = metres around, metres along.
 // Leaf vertex data:   (outerness 0..1, random per card, height in the crown 0..1, wind weight); uv in the atlas.
 // The leaf cards that sit on twigs come first: in winter a bare tree draws only those (with the twig cell).
+// Broadleaf trees also get their leaves one by one (`close`, issue 46): each card's spray as single leaves of
+// the atlas's singles cell, scattered through the spray in 3D and each turned its own way, drawn instead of the
+// cards close to the camera, where a card shows as a flat sheet with leaves printed on it.
 
 import { Rng } from "./rng.ts";
-import { SPECIES, type Species, type SpeciesDef } from "./species.ts";
+import { CELL, SPECIES, type Species, type SpeciesDef } from "./species.ts";
 
 export interface PartMesh {
 	position: Float32Array;
@@ -28,7 +31,33 @@ export interface TreeTemplate {
 	leaves: PartMesh;
 	/** Leaf cards on twigs (drawn first); the rest fill the crown's shell. */
 	twigCards: number;
+	/** The leaves one by one, for close to the camera (full templates of broadleaf trees, when asked for). */
+	close: PartMesh | null;
 }
+
+/** Whether a species has its leaves drawn one by one close to the camera. */
+export function hasCloseLeaves(species: Species): boolean {
+	return LEAF[species] !== undefined;
+}
+
+/**
+ * Broadleaf species' leaves (blade length, metres, a little over life size): those drawn one by one close to
+ * the camera.
+ */
+const LEAF: Partial<Record<Species, number>> = {
+	momiji: 0.09,
+	kaede: 0.14,
+	ichou: 0.08,
+	keyaki: 0.08,
+	nara: 0.14,
+	platanus: 0.2,
+	bodaiju: 0.11,
+	shirakaba: 0.08,
+	sakura: 0.11,
+};
+/** Single leaves per card (at most), and per tree. */
+const CLOSE_PER_CARD = 34;
+const CLOSE_PER_TREE = 18_000;
 
 /** Template variants per species. */
 export const VARIANTS = 3;
@@ -162,7 +191,20 @@ interface Card {
 }
 
 /** Grows one template; deterministic in (species, variant, lod). */
-export function makeTree(species: Species, variant: number, lod: 0 | 1): TreeTemplate {
+/**
+ * Where a single leaf lies in its square of the atlas's singles cell: x0, y0, x1, y1 as fractions of the square
+ * (y down the picture). The whole square if not known.
+ */
+export type LeafRect = [number, number, number, number];
+
+export function makeTree(
+	species: Species,
+	variant: number,
+	lod: 0 | 1,
+	leafRect: LeafRect = [0, 0, 1, 1],
+	/** Make the leaves one by one too (broadleaf species' full templates; made when first needed). */
+	close = false,
+): TreeTemplate {
 	const sp = SPECIES[species];
 	const r = new Rng(1000 + SPECIES_SEED(species) * 97 + variant * 13);
 	const H = r.range(sp.height[0], sp.height[1]);
@@ -327,6 +369,30 @@ export function makeTree(species: Species, variant: number, lod: 0 | 1): TreeTem
 	}
 
 	const leaves = new Builder();
+	// the leaves one by one (from their own random numbers, so the cards stay as they are)
+	const leafLen = lod === 0 && close ? LEAF[species] : undefined;
+	const singles = leafLen ? new Builder() : null;
+	const lr = new Rng(7919 + SPECIES_SEED(species) * 31 + variant * 7);
+	const cardMean = (sp.card[0] + sp.card[1]) / 2;
+	const perCard = leafLen
+		? Math.min(
+				CLOSE_PER_CARD,
+				Math.floor(CLOSE_PER_TREE / Math.max(1, want)),
+				Math.round(((cardMean * cardMean) / (leafLen * leafLen)) * 0.55),
+			)
+		: 0;
+	const su = CELL.singles % ATLAS_N;
+	const sv = Math.floor(CELL.singles / ATLAS_N);
+	const sx = sp.single % 4;
+	const sy = Math.floor(sp.single / 4);
+	// the leaf's own rectangle in its square (so the quad is the leaf, not mostly empty square), and its shape
+	const [rx0, ry0, rx1, ry1] = leafRect;
+	const rMax = Math.max(rx1 - rx0, ry1 - ry0, 1e-3);
+	const aw = (rx1 - rx0) / rMax;
+	const ah = (ry1 - ry0) / rMax;
+	/** UV in the atlas of a point (x, y in 0..1, y up) of the leaf's rectangle. */
+	const SU = (x: number): number => (su + (sx + rx0 + (rx1 - rx0) * x) / 4) / ATLAS_N;
+	const SV = (y: number): number => (sv + (sy + ry1 - (ry1 - ry0) * y) / 4) / ATLAS_N;
 	const scale = lod === 0 ? 1 : 1.9;
 	let rmax = 1e-3;
 	for (const c of chosen) rmax = Math.max(rmax, Math.hypot(c.p[0], c.p[2]));
@@ -387,12 +453,59 @@ export function makeTree(species: Species, variant: number, lod: 0 | 1): TreeTem
 			height = Math.max(height, v[1]);
 		}
 		leaves.i.push(b0, b0 + 1, b0 + 2, b0, b0 + 2, b0 + 3);
+		if (singles && leafLen) {
+			// the spray's leaves: through its card (wider towards its end), a little in front and behind it
+			const k = Math.max(4, Math.round(perCard * (size / cardMean) ** 2));
+			for (let i = 0; i < k; i++) {
+				const along = 0.12 + 0.86 * Math.sqrt(lr.next());
+				const across = lr.normal(0.16 + 0.12 * along);
+				const depth = lr.normal(0.09) * size;
+				const at = add(
+					add(add(base, mul(up, along * size)), mul(side, Math.max(-0.45, Math.min(0.45, across)) * size)),
+					mul(n, depth),
+				);
+				// each leaf turned its own way: mostly outwards and up, never quite edge-on to the crown
+				let lu = norm(add(add(up, mul(out, 0.5)), [lr.normal(0.55), lr.normal(0.45), lr.normal(0.55)]));
+				let ln = norm(add(mul(nn, 1), [lr.normal(0.5), lr.normal(0.5) + 0.2, lr.normal(0.5)]));
+				ln = sub(ln, mul(lu, dot(ln, lu)));
+				if (len(ln) < 1e-3) ln = norm(cross(lu, [1, 0, 0]));
+				ln = norm(ln);
+				if (dot(ln, out) < 0) ln = mul(ln, -1);
+				lu = norm(lu);
+				const ls = cross(lu, ln);
+				const L = leafLen * lr.range(0.8, 1.2);
+				// the quad is the leaf's rectangle, centred on where the leaf is
+				const hw = (L * aw) / 2;
+				const hh = (L * ah) / 2;
+				const corners: [V3, number, number][] = [
+					[add(sub(at, mul(ls, hw)), mul(lu, -hh)), 0, 0],
+					[add(add(at, mul(ls, hw)), mul(lu, -hh)), 1, 0],
+					[add(add(at, mul(ls, hw)), mul(lu, hh)), 1, 1],
+					[add(sub(at, mul(ls, hw)), mul(lu, hh)), 0, 1],
+				];
+				const lrnd = lr.next();
+				const shade = norm(add(mul(ln, 0.55), mul(out, 0.45)));
+				const s0 = singles.count;
+				for (const [v, x, y] of corners) singles.vertex(v, shade, SU(x), SV(y), [outer, lrnd, hz, 1]);
+				singles.i.push(s0, s0 + 1, s0 + 2, s0, s0 + 2, s0 + 3);
+			}
+		}
 	}
 	for (let i = 0; i < wood.p.length; i += 3) {
 		radius = Math.max(radius, Math.hypot(wood.p[i] as number, wood.p[i + 2] as number));
 		height = Math.max(height, wood.p[i + 1] as number);
 	}
-	return { species, variant, lod, height, radius, wood: wood.mesh(), leaves: leaves.mesh(), twigCards };
+	return {
+		species,
+		variant,
+		lod,
+		height,
+		radius,
+		wood: wood.mesh(),
+		leaves: leaves.mesh(),
+		twigCards,
+		close: singles ? singles.mesh() : null,
+	};
 }
 
 function SPECIES_SEED(sp: Species): number {

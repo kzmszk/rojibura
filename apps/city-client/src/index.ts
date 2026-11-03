@@ -42,7 +42,13 @@ import {
 	pathLeg,
 	poseAt,
 	RUN_SPEED,
+	SEAT_NEAR,
+	SEAT_REACH,
+	type Seat,
+	type SeatsData,
 	SKILL_NAMES,
+	seatsOf,
+	TOGETHER_MS,
 	type Together,
 	travelReason,
 	type Vec2,
@@ -53,7 +59,7 @@ import { AgentPanel } from "./agent-panel.ts";
 import { api, onApiUsage } from "./api.ts";
 import { AreaNature, SEASON_LABEL } from "./area-nature.ts";
 import { currentArea, DETAIL_KEY, savedDetail, sceneFiles, touchFirst, travelUrl } from "./areas.ts";
-import { AvatarView, TRAVEL } from "./avatars.ts";
+import { AvatarView, setSeats, TRAVEL } from "./avatars.ts";
 import { BuildPanel } from "./build-ui.ts";
 import { BuildsView, makeObject, modelsFromHost } from "./builds.ts";
 import { VIEW_LABEL, VIEWS, type View, ViewController } from "./camera.ts";
@@ -89,6 +95,7 @@ const MOTION_EMOJI: Record<Motion, string> = {
 	roll: "⤵️",
 	backroll: "↩️",
 	backflip: "🔄",
+	stepback: "🔙",
 };
 const TOGETHER_LABEL: Record<Together, string> = { handshake: "握手", hug: "ハグ" };
 /** Patting your AI's head (🤚, H): the palm comes down on top and moves gently from side to side. */
@@ -444,6 +451,7 @@ async function startCity(
 				items.group,
 			]),
 		(p) => warpTo(p),
+		(p) => walkToPlace(p),
 	);
 	// the rest of the area's 3D (farther from where you arrive) loads now that you are in, one file after another
 	void (async () => {
@@ -689,7 +697,7 @@ async function startCity(
 	gateButton.onclick = () => goToGate();
 	const mapButton = el("button", "rj-logout rj-gate", "🗺️ 地図");
 	mapButton.type = "button";
-	mapButton.title = "地図を開く（M）。主な場所へ瞬間移動できます";
+	mapButton.title = "地図を開く（M）。主な場所へ歩いて行くか、瞬間移動できます";
 	mapButton.onclick = () => cityMap.toggle();
 	// floating in the air (docs/prd.md 3.4.13), where the area allows it: up and down while afloat
 	const flyBar = el("div", "rj-fly");
@@ -799,7 +807,13 @@ async function startCity(
 	stopJobButton.type = "button";
 	stopJobButton.hidden = true;
 	stopJobButton.onclick = () => conn.send({ t: "JOB", kind: null });
-	motionBar.append(pickButton, throwButton, dropButton, eatButton, ...jobButtons, stopJobButton);
+	// a bench, a sofa or a chair close by: sit on it (docs/prd.md 3.4.5), or get up from it
+	const seatButton = el("button", "", "🪑 腰かける");
+	seatButton.type = "button";
+	seatButton.title = "近くのベンチや椅子に座る（R）";
+	seatButton.hidden = true;
+	seatButton.onclick = () => seatOrStand();
+	motionBar.append(seatButton, pickButton, throwButton, dropButton, eatButton, ...jobButtons, stopJobButton);
 	// your own AI close by: pat its head (docs/prd.md 3.4.11)
 	const patButton = el("button", "", "🤚");
 	patButton.type = "button";
@@ -823,6 +837,15 @@ async function startCity(
 	// at a shop's counter: what it sells (docs/prd.md 3.8.6)
 	const shops = new ShopsUi((shop, goods) => conn.send({ t: "BUY", shop: shop.id, goods }));
 	void shops.load(area.dir);
+	// benches, sofas and chairs to sit on (docs/prd.md 3.4.5)
+	let areaSeats: Seat[] = [];
+	void fetch(`${area.dir}/seats.json`)
+		.then((r) => (r.ok ? (r.json() as Promise<SeatsData>) : null))
+		.catch(() => null)
+		.then((d) => {
+			areaSeats = seatsOf(d);
+			setSeats(areaSeats);
+		});
 	root.append(hud, chat, toast, travel, actsBar, offerBox, agentPanel.el, settings.el, shops.el, cityMap.el);
 
 	const avatars = new Map<AvatarId, AvatarView>();
@@ -1060,6 +1083,19 @@ async function startCity(
 					a.together(m.kind, new THREE.Vector3(pb[0], 0, pb[1]), m.at);
 					b.together(m.kind, new THREE.Vector3(pa[0], 0, pa[1]), m.at);
 					addLog("", `${a.state.name} と ${b.state.name} が${TOGETHER_LABEL[m.kind]}しました`, "sys");
+					// a hug over, arms back down: one steps back a little (an AI hugged does too, by the host)
+					if (m.kind === "hug" && (m.a === myId || m.b === myId)) {
+						const spot = m.a === myId ? pa : pb;
+						setTimeout(
+							() => {
+								const mine = myId ? avatars.get(myId) : undefined;
+								if (!mine) return;
+								const p = poseAt(mine.state.move, conn.hostNow());
+								if (!p.moving && dist(p.pos, spot) < 0.2) act("stepback");
+							},
+							m.at + TOGETHER_MS.hug - conn.hostNow(),
+						);
+					}
 					break;
 				}
 				case "BUILT":
@@ -1373,6 +1409,8 @@ async function startCity(
 			nextView();
 		} else if (!typing() && !panel.open && e.key.toLowerCase() === "e") {
 			pickNearest();
+		} else if (!typing() && !panel.open && e.key.toLowerCase() === "r") {
+			seatOrStand();
 		} else if (!typing() && !panel.open && e.key.toLowerCase() === "h") {
 			patMine();
 		} else if (!typing() && !panel.open && e.key.toLowerCase() === "t") {
@@ -1675,6 +1713,82 @@ async function startCity(
 		if (walkTo([thing.position.x, thing.position.z], WALK_SPEED)) pickAfter = id;
 		else showToast("そこへは行けません");
 	}
+	// ---- sitting on a seat (🪑 腰かける, docs/prd.md 3.4.5) ----
+	/** Stand this far in front of a seat to sit down on it. */
+	const SEAT_FRONT = 0.5;
+	/** The seat being walked to, to sit on once there. */
+	let seatAfter: number | null = null;
+	/** The seat you sit on now, if any. */
+	function mySeat(): number | undefined {
+		const move = myId ? avatars.get(myId)?.state.move : undefined;
+		return move?.kind === "idle" && move.posture === "sit" ? move.seat : undefined;
+	}
+	/**
+	 * The nearest free seat within SEAT_NEAR, facing your side of it (a bench with no back faces both ways), on
+	 * about your level; null if none.
+	 */
+	function nearestSeat(): number | null {
+		const mine = myId ? avatars.get(myId) : undefined;
+		if (!mine) return null;
+		const taken = new Set<number>();
+		for (const v of avatars.values()) {
+			const m = v.state.move;
+			if (v !== mine && m.kind === "idle" && m.seat !== undefined) taken.add(m.seat);
+		}
+		const here = poseAt(mine.state.move, conn.hostNow()).pos;
+		const y = mine.root.position.y;
+		let best: { i: number; d: number } | null = null;
+		areaSeats.forEach((s, i) => {
+			if (taken.has(i) || Math.abs(s.y - y - 0.45) > 1) return;
+			const dx = here[0] - s.pos[0];
+			const dz = here[1] - s.pos[1];
+			const d = Math.hypot(dx, dz);
+			if (d > SEAT_NEAR || dx * s.face[0] + dz * s.face[1] < -0.05) return;
+			if (!best || d < best.d) best = { i, d };
+		});
+		return (best as { i: number } | null)?.i ?? null;
+	}
+	/** Sits on the nearest free seat (walking up to it first), or gets up from the one you sit on. */
+	function seatOrStand(): void {
+		if (mySeat() !== undefined) {
+			act("sit");
+			return;
+		}
+		const i = nearestSeat();
+		const seat = i === null ? undefined : areaSeats[i];
+		const mine = myId ? avatars.get(myId) : undefined;
+		if (i === null || !seat || !mine) {
+			showToast("近くに座れる所がありません");
+			return;
+		}
+		stopGoing();
+		const front: Vec2 = [seat.pos[0] + seat.face[0] * SEAT_FRONT, seat.pos[1] + seat.face[1] * SEAT_FRONT];
+		const here = poseAt(mine.state.move, conn.hostNow()).pos;
+		if (dist(here, front) > 0.25 && walkTo(front, WALK_SPEED)) seatAfter = i;
+		else sitOn(i);
+	}
+	function sitOn(i: number): void {
+		const mine = myId ? avatars.get(myId) : undefined;
+		const seat = areaSeats[i];
+		if (!mine || !seat) return;
+		const now = conn.hostNow();
+		const { pos } = poseAt(mine.state.move, now);
+		if (dist(pos, seat.pos) > SEAT_REACH) {
+			showToast("そこには届きません");
+			return;
+		}
+		mine.setMove({ kind: "idle", pos, at: now, posture: "sit", face: seat.face, seat: i });
+		conn.send({ t: "ACTION", motion: "sit", seat: i });
+	}
+	function seatStep(): void {
+		if (seatAfter === null) return;
+		const mine = myId ? avatars.get(myId) : undefined;
+		if (!mine) return;
+		if (poseAt(mine.state.move, conn.hostNow()).moving) return;
+		const i = seatAfter;
+		seatAfter = null;
+		sitOn(i);
+	}
 	function pickStep(): void {
 		const mine = myId ? avatars.get(myId) : undefined;
 		const thing = pickAfter ? items.meshes.find((o) => o.userData.itemId === pickAfter) : undefined;
@@ -1858,13 +1972,14 @@ async function startCity(
 	/** Stops following someone or going to a portal (the person moves on their own). */
 	function stopGoing(): void {
 		endFollow();
-		toGate = null;
+		going = null;
+		seatAfter = null;
 	}
 	/** After your yes, your AI walks to a place and you follow behind it until it is there. */
 	function trail(id: AvatarId, to: Vec2, place: string): void {
 		const them = avatars.get(id);
 		if (!them) return;
-		toGate = null;
+		going = null;
 		following = { id, until: performance.now() + LEAD_FOLLOW_MAX_MS, plannedAt: 0, lead: { to, place } };
 		showToast(`${them.state.name}について${place}へ向かいます`);
 	}
@@ -1925,50 +2040,88 @@ async function startCity(
 		}
 	}
 
-	// ---- going to a portal (🚪 門へ) ----
-	/** Run while farther than this, plan the next leg this often, and give up after this long. */
+	// ---- going somewhere on foot: a portal (🚪 門へ), or a place on the map (🚶 歩いて行く) ----
+	/** Run to a gate while farther than this, plan the next leg this often, and give up after this long. */
 	const GATE_RUN_M = 10;
 	const GATE_REPLAN_MS = 1000;
 	const GATE_MAX_MS = 5 * 60_000;
+	/** A place on the map is reached this close (a gate at PORTAL_REACH, where its button shows). */
+	const PLACE_REACH_M = 3;
+	const PLACE_MAX_MS = 15 * 60_000;
 	/** `from`: where the last leg started, to notice when it took us nowhere. */
-	let toGate: { gate: Portal; until: number; plannedAt: number; from: Vec2 | null } | null = null;
+	let going: {
+		to: Vec2;
+		name: string;
+		gate: boolean;
+		run: boolean;
+		until: number;
+		plannedAt: number;
+		from: Vec2 | null;
+	} | null = null;
 	/** Walks to `gate` (the nearest one if not given), in as many legs as the way needs. */
 	function goToGate(gate?: Portal): void {
 		const mine = myId ? avatars.get(myId) : undefined;
 		const to = gate ?? (mine ? portals.nearest(poseAt(mine.state.move, conn.hostNow()).pos) : null);
 		if (!to) return;
 		stopGoing();
-		toGate = { gate: to, until: performance.now() + GATE_MAX_MS, plannedAt: 0, from: null };
+		going = {
+			to: to.pos,
+			name: to.name,
+			gate: true,
+			run: true,
+			until: performance.now() + GATE_MAX_MS,
+			plannedAt: 0,
+			from: null,
+		};
 		showToast(`${to.name}へ向かいます`);
 	}
-	function gateStep(t: number): void {
-		if (!toGate) return;
+	/**
+	 * Walks to a place on the map (docs/prd.md 3.4.14) instead of warping: at a walk, so one can talk on the
+	 * way (your AI walks beside you), looking about as one likes.
+	 */
+	function walkToPlace(p: MapPlace): void {
+		const gate = p.gate ? portals.byId(p.id) : undefined;
+		stopGoing();
+		going = {
+			to: gate?.pos ?? p.pos,
+			name: p.name,
+			gate: !!gate,
+			run: false,
+			until: performance.now() + PLACE_MAX_MS,
+			plannedAt: 0,
+			from: null,
+		};
+		showToast(`${p.name}へ歩いて向かいます`);
+	}
+	function goStep(t: number): void {
+		if (!going) return;
 		const mine = myId ? avatars.get(myId) : undefined;
-		if (!mine || t > toGate.until) {
-			toGate = null;
+		if (!mine || t > going.until) {
+			going = null;
 			return;
 		}
 		const pose = poseAt(mine.state.move, conn.hostNow());
 		// still walking a leg
 		if (pose.moving) return;
-		const d = dist(pose.pos, toGate.gate.pos);
-		// there: the button to go through shows
-		if (d <= PORTAL_REACH) {
-			toGate = null;
+		const d = dist(pose.pos, going.to);
+		// there (at a gate, the button to go through shows)
+		if (d <= (going.gate ? PORTAL_REACH : PLACE_REACH_M)) {
+			if (!going.gate && !going.run) showToast(`${going.name}に着きました`);
+			going = null;
 			return;
 		}
-		if (t - toGate.plannedAt < GATE_REPLAN_MS) return;
+		if (t - going.plannedAt < GATE_REPLAN_MS) return;
 		// the last leg took us nowhere (no way there, or the host did not take it)
-		if (toGate.from && dist(pose.pos, toGate.from) < 0.5) {
+		if (going.from && dist(pose.pos, going.from) < 0.5) {
 			showToast("そこへは行けません");
-			toGate = null;
+			going = null;
 			return;
 		}
-		toGate.plannedAt = t;
-		toGate.from = pose.pos;
-		if (!walkTo(toGate.gate.pos, d > GATE_RUN_M ? RUN_SPEED : WALK_SPEED)) {
+		going.plannedAt = t;
+		going.from = pose.pos;
+		if (!walkTo(going.to, going.run && d > GATE_RUN_M ? RUN_SPEED : WALK_SPEED)) {
 			showToast("そこへは行けません");
-			toGate = null;
+			going = null;
 		}
 	}
 
@@ -2017,7 +2170,7 @@ async function startCity(
 		}
 		actsBar.hidden = actsBar.childElementCount === 0;
 	};
-	/** Avatars in their bath towel now, and those whose towel is ready (docs/prd.md 3.8.6). */
+	/** Avatars in their swimsuit now, and those whose swimsuit is ready (docs/prd.md 3.8.6). */
 	const bathers = new WeakSet<AvatarView>();
 	const readied = new WeakSet<AvatarView>();
 	const frame = (t: number) => {
@@ -2035,7 +2188,7 @@ async function startCity(
 			v.attend(near && (talking || mood?.glance) ? owner.eyePosition() : null);
 			v.standFacing(mood ? mood.facing : null);
 			v.update(now, dt, scene);
-			// at the onsen everyone has taken their clothes off and wears a bath towel; the towel is made
+			// at the onsen everyone has taken their clothes off and wears a swimsuit; the swimsuit is made
 			// before they get there (the first one of a model takes a moment)
 			const at = poseAt(v.state.move, now).pos;
 			const bathing = zones.at(at, "bath") !== null;
@@ -2050,6 +2203,9 @@ async function startCity(
 		}
 		items.update(now);
 		pickButton.hidden = nearestThing() === null;
+		const seated = mySeat() !== undefined;
+		seatButton.hidden = !seated && (seatAfter !== null || nearestSeat() === null);
+		seatButton.textContent = seated ? "🧍 立つ" : "🪑 腰かける";
 		patButton.hidden = myAiToPat() === null;
 		const withAi = [...avatars.values()].some((a) => a.state.kind === "ai" && a.state.ownerId === myId);
 		companionRow.hidden = !withAi;
@@ -2076,7 +2232,8 @@ async function startCity(
 		followStep(t);
 		if (companion && withAi) stopStep();
 		pickStep();
-		gateStep(t);
+		seatStep();
+		goStep(t);
 		// stop at the edge of the walkable area instead of walking into walls
 		if (mine?.state.move.kind === "vel") {
 			const move = mine.state.move;
@@ -2120,7 +2277,8 @@ async function startCity(
 				};
 			}
 		}
-		if (mine && followCamera) view.update(mine, poseAt(mine.state.move, now).moving, dt);
+		// (walking somewhere in legs counts as walking all the way, also where one leg ends and the next begins)
+		if (mine && followCamera) view.update(mine, poseAt(mine.state.move, now).moving || going !== null, dt);
 		else scene.controls.update();
 		scene.render();
 		requestAnimationFrame(frame);

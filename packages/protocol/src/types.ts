@@ -18,7 +18,21 @@ export type Motion =
 	| "handstand"
 	| "roll"
 	| "backroll"
-	| "backflip";
+	| "backflip"
+	| "stepback";
+/**
+ * A place to sit (a bench, a sofa, a chair: an area's seats.json): the hips go over `pos`, on the seat's top at
+ * height `y`, facing `face`.
+ */
+export interface Seat {
+	pos: Vec2;
+	y: number;
+	face: Vec2;
+}
+/** An area's seats.json: [X, Z, Y, faceX, faceZ] each. */
+export interface SeatsData {
+	seats: [number, number, number, number, number][];
+}
 /** Two avatars doing something together, after one asked and the other said yes (docs/prd.md 3.4.6). */
 export type Together = "handshake" | "hug";
 /** Host-issued: "i_...". */
@@ -72,8 +86,11 @@ export type AvatarKind = "human" | "ai";
 
 /** `at` is always host time in milliseconds (the moment the state started). */
 export type MoveState =
-	/** `face`: the way it chose to face, standing (a unit vector); otherwise it faces as it likes. */
-	| { kind: "idle"; pos: Vec2; at: number; posture?: Posture; face?: Vec2 }
+	/**
+	 * `face`: the way it chose to face, standing (a unit vector); otherwise it faces as it likes. `seat`: sitting
+	 * on this seat of the area (its seats.json, by index), standing at `pos` just in front of it.
+	 */
+	| { kind: "idle"; pos: Vec2; at: number; posture?: Posture; face?: Vec2; seat?: number }
 	| { kind: "path"; path: Vec2[]; speed: number; at: number }
 	| { kind: "vel"; pos: Vec2; dir: Vec2; speed: number; at: number };
 
@@ -295,7 +312,8 @@ export type ClientToHost =
 	| { t: "AUTH"; sig: string }
 	| { t: "MOVE_PATH"; path: Vec2[]; speed: number; seq: number }
 	| { t: "MOVE_VEL"; pos: Vec2; dir: Vec2; speed: number; seq: number }
-	| { t: "ACTION"; motion: Motion; target?: AvatarId }
+	/** `seat`: sitting down (motion "sit") on this seat of the area, close by (docs/prd.md 3.4.5). */
+	| { t: "ACTION"; motion: Motion; target?: AvatarId; seat?: number }
 	| { t: "SAY"; text: string; to?: AvatarId; convId?: string }
 	| { t: "STATUS"; status: Status }
 	| { t: "INTEREST"; radius: number }

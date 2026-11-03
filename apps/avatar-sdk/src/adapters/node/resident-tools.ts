@@ -68,6 +68,17 @@ export function residentTools(body: boolean, life = false): ResidentTool[] {
 		),
 		tool("eat", "手に持っている食べ物や飲み物を、食べる・飲む。", Type.Object({})),
 		tool(
+			"pick_up",
+			"近くの物（ボールや箱。id は「近くの物」）を拾って手に持つ。遠ければ歩いて行って拾う。手に持てるのは一つだけ。",
+			Type.Object({ thing: Type.String() }),
+		),
+		tool(
+			"throw",
+			"手に持っている物を投げる（6m先に落ちる）。to は人の id（その人の方へ投げる）。省くと前へ。",
+			Type.Object({ to: Type.Optional(Type.String()) }),
+		),
+		tool("put_down", "手に持っている物を足もとに置く。", Type.Object({})),
+		tool(
 			"work",
 			"今いる場所で働く（kind: work）か勉強する（kind: study）。やめるなら kind: stop。1分で1銅貨ふえる。歩いてその場所を出ると終わる。",
 			Type.Object({ kind: Type.Union([Type.Literal("work"), Type.Literal("study"), Type.Literal("stop")]) }),

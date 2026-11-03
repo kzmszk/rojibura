@@ -15,7 +15,8 @@
 (pnpm build:hajimari does all of it.) Writes assets/areas/hajimari: hajimari_town_w.glb and hajimari_town_e.glb (the
 walled town's west and east halves; the half where one arrives is loaded first, areas.json "bounds"),
 hajimari_park.glb (the park, mountain, college and onsen: loaded once in), hajimari_snow.glb
-(the winter snow, loaded only in winter), trees.json, zones.json, shops.json, and the navmesh and landmarks. The Sagrada Família's exterior is its own file, sagrada_exterior.glb, made from
+(the winter snow, loaded only in winter), trees.json, zones.json, shops.json, seats.json (where one can sit), and the
+navmesh and landmarks. The Sagrada Família's exterior is its own file, sagrada_exterior.glb, made from
 ~/work/demos/sagrada-familia (its tools/rj_export.mjs). The layout is in hajimari/plan.py.
 """
 import math, os, sys, time
@@ -69,6 +70,8 @@ def main():
     if 'college' in only:
         from hajimari import college
         college.build(W)
+    if only >= {'town', 'park', 'onsen', 'college'}:
+        print('seats:', meta.write_seats())
     faces = bl.to_objects(W)
     print('faces: %d, objects: %d, %.1f s' % (faces, len(W.b), time.time() - t))
     bl.export(GLB)

@@ -493,24 +493,70 @@ function snowMaterial(
 	return mat;
 }
 
-/** Steam rising softly over the hot springs: puffs that grow and fade, moved in the shader. */
+/**
+ * Steam rising softly over the hot springs: puffs that grow and fade, moved in the shader. They rise from the
+ * water itself (points on its triangles), thin as they leave it, so none lie on the rocks round the bath like
+ * snow, and they are a little grey, not paper white.
+ */
 class Steam {
 	readonly mesh: THREE.Mesh;
 	private readonly mat: THREE.ShaderMaterial;
 
-	constructor(boxes: THREE.Box3[], env: Env, puff: THREE.Texture) {
+	/** `waters`: the meshes, and which of their materials (by index) are the baths' water. */
+	constructor(waters: { mesh: THREE.Mesh; mats: number[] }[], env: Env, puff: THREE.Texture) {
 		const r = new Rng(17);
 		const seeds: number[] = [];
-		const box: number[] = [];
-		const top: number[] = [];
-		for (const b of boxes) {
-			const sx = b.max.x - b.min.x;
-			const sz = b.max.z - b.min.z;
-			const n = Math.max(16, Math.min(400, Math.round(sx * sz * 0.7)));
-			for (let i = 0; i < n; i++) {
+		const base: number[] = [];
+		const a = new THREE.Vector3();
+		const b = new THREE.Vector3();
+		const c = new THREE.Vector3();
+		const ab = new THREE.Vector3();
+		const ac = new THREE.Vector3();
+		for (const { mesh: w, mats } of waters) {
+			// the water's up-facing triangles in the world, and how much of it each is
+			const pos = w.geometry.attributes.position;
+			if (!pos) continue;
+			const idx = w.geometry.index;
+			const n = idx ? idx.count : pos.count;
+			const groups = w.geometry.groups.length
+				? w.geometry.groups
+				: [{ start: 0, count: n, materialIndex: 0 }];
+			const tris: number[] = [];
+			const areas: number[] = [];
+			let total = 0;
+			for (const gr of groups) {
+				if (!mats.includes(gr.materialIndex ?? 0)) continue;
+				for (let t = gr.start; t + 2 < Math.min(n, gr.start + gr.count); t += 3) {
+					a.fromBufferAttribute(pos, idx ? idx.getX(t) : t).applyMatrix4(w.matrixWorld);
+					b.fromBufferAttribute(pos, idx ? idx.getX(t + 1) : t + 1).applyMatrix4(w.matrixWorld);
+					c.fromBufferAttribute(pos, idx ? idx.getX(t + 2) : t + 2).applyMatrix4(w.matrixWorld);
+					const cross = ab.subVectors(b, a).cross(ac.subVectors(c, a));
+					const area = cross.length() / 2;
+					if (area < 1e-6 || Math.abs(cross.y) / (2 * area) < 0.8) continue;
+					tris.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+					areas.push(area);
+					total += area;
+				}
+			}
+			if (total === 0) continue;
+			const count = Math.max(8, Math.min(300, Math.round(total * 0.6)));
+			for (let i = 0; i < count; i++) {
+				// a triangle by its area, a point evenly on it
+				let pick = r.next() * total;
+				let k = 0;
+				while (k < areas.length - 1 && pick > (areas[k] as number)) pick -= areas[k++] as number;
+				let u = r.next();
+				let v = r.next();
+				if (u + v > 1) {
+					u = 1 - u;
+					v = 1 - v;
+				}
+				const o = k * 9;
+				for (let d = 0; d < 3; d++) {
+					const p0 = tris[o + d] as number;
+					base.push(p0 + ((tris[o + 3 + d] as number) - p0) * u + ((tris[o + 6 + d] as number) - p0) * v);
+				}
 				seeds.push(r.next(), r.next(), r.next(), r.next());
-				box.push(b.min.x, b.min.z, sx, sz);
-				top.push(b.max.y);
 			}
 		}
 		const g = new THREE.InstancedBufferGeometry();
@@ -523,9 +569,8 @@ class Steam {
 		);
 		g.setIndex([0, 1, 2, 0, 2, 3]);
 		g.setAttribute("aSeed", new THREE.InstancedBufferAttribute(new Float32Array(seeds), 4));
-		g.setAttribute("aBox", new THREE.InstancedBufferAttribute(new Float32Array(box), 4));
-		g.setAttribute("aTop", new THREE.InstancedBufferAttribute(new Float32Array(top), 1));
-		g.instanceCount = top.length;
+		g.setAttribute("aBase", new THREE.InstancedBufferAttribute(new Float32Array(base), 3));
+		g.instanceCount = seeds.length / 4;
 		this.mat = new THREE.ShaderMaterial({
 			transparent: true,
 			depthWrite: false,
@@ -544,8 +589,7 @@ class Steam {
 		this.mat.uniforms.uMap = { value: puff };
 		this.mat.vertexShader = /* glsl */ `
 			attribute vec4 aSeed;
-			attribute vec4 aBox;
-			attribute float aTop;
+			attribute vec3 aBase;
 			uniform float uTime;
 			uniform vec3 uWind;
 			varying vec2 vUv;
@@ -554,13 +598,13 @@ class Steam {
 			void main() {
 				float life = 6.0 + aSeed.w * 5.0;
 				float t = fract(uTime / life + aSeed.x);
-				vec3 base = vec3(aBox.x + aSeed.y * aBox.z, aTop + 0.05, aBox.y + aSeed.z * aBox.w);
+				vec3 base = aBase + vec3(0.0, 0.05, 0.0);
 				float age = t * life;
 				vec3 c = base + vec3(
 					uWind.x * age * 0.25 + sin(age * 0.9 + aSeed.x * 30.0) * 0.25,
 					age * (0.22 + aSeed.w * 0.12),
 					uWind.z * age * 0.25 + cos(age * 0.8 + aSeed.y * 21.0) * 0.25);
-				float size = mix(0.7, 2.6, sqrt(t)) * (0.8 + aSeed.z * 0.5);
+				float size = mix(0.5, 2.2, sqrt(t)) * (0.8 + aSeed.z * 0.5);
 				vec3 right = vec3(viewMatrix[0][0], viewMatrix[1][0], viewMatrix[2][0]);
 				vec3 up = vec3(viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1]);
 				float a = aSeed.y * 6.283 + age * 0.15;
@@ -568,7 +612,9 @@ class Steam {
 				vec3 wp = c + (right * p.x + up * p.y) * size;
 				vUv = position.xy + 0.5;
 				float d = length(wp - cameraPosition);
-				vA = pow(sin(3.14159 * t), 1.5) * smoothstep(0.6, 3.0, d);
+				// thin as it leaves the water (no white sheet lying on it), thickest a little above it
+				float rise = c.y - base.y;
+				vA = pow(sin(3.14159 * t), 1.5) * smoothstep(0.6, 3.0, d) * smoothstep(0.0, 0.45, rise);
 				vec4 mvPosition = viewMatrix * vec4(wp, 1.0);
 				gl_Position = projectionMatrix * mvPosition;
 				#include <fog_vertex>
@@ -581,9 +627,9 @@ class Steam {
 			varying float vA;
 			#include <fog_pars_fragment>
 			void main() {
-				float a = texture2D(uMap, vUv).a * vA * uAmount * 0.7;
+				float a = texture2D(uMap, vUv).a * vA * uAmount * 0.6;
 				if (a < 0.004) discard;
-				gl_FragColor = vec4(uLight, a);
+				gl_FragColor = vec4(uLight * 0.82, a);
 				#include <colorspace_fragment>
 				#include <fog_fragment>
 			}`;
@@ -658,7 +704,7 @@ export class CityLooks {
 	}
 
 	apply(root: THREE.Object3D): void {
-		const onsenBoxes: THREE.Box3[] = [];
+		const onsenWaters: { mesh: THREE.Mesh; mats: number[] }[] = [];
 		root.updateMatrixWorld(true);
 		root.traverse((o) => {
 			const mesh = o as THREE.Mesh;
@@ -675,18 +721,17 @@ export class CityLooks {
 					this.spots.forEach((p, i) => w.drops.value[i]?.set(p.x, p.y, 1, 0));
 			}
 			if (kinds.includes("onsen") || kinds.includes("onsenClear")) {
-				mesh.geometry.computeBoundingBox();
-				const b = (mesh.geometry.boundingBox as THREE.Box3).clone().applyMatrix4(mesh.matrixWorld);
-				onsenBoxes.push(b);
+				const mats = kinds.flatMap((k, i) => (k === "onsen" || k === "onsenClear" ? [i] : []));
+				onsenWaters.push({ mesh, mats });
 			}
 			if (kinds.includes("snowSoft") || kinds.includes("snowTrod")) {
 				mesh.castShadow = false;
 				mesh.receiveShadow = true;
 			}
 		});
-		if (onsenBoxes.length) {
+		if (onsenWaters.length) {
 			this.steam?.dispose();
-			this.steam = new Steam(onsenBoxes, this.env, this.puff);
+			this.steam = new Steam(onsenWaters, this.env, this.puff);
 			this.scene.add(this.steam.mesh);
 		}
 		this.setSeason(this.season);

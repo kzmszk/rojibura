@@ -11,6 +11,7 @@ import {
 	type Motion,
 	type MoveState,
 	poseAt,
+	type Seat,
 	type Status,
 } from "@rojibura/protocol";
 import * as THREE from "three";
@@ -18,16 +19,34 @@ import { GLTFLoader, type GLTFParser } from "three/examples/jsm/loaders/GLTFLoad
 import { CSS2DObject } from "three/examples/jsm/renderers/CSS2DRenderer.js";
 import { clone as cloneSkinned } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { type BodyParts, BodyRig, BodyScript, type Bones, frameOf, roughSpot, spotOn } from "./body.ts";
-import { groundSpeed, legLength, MOVES, type MoveName, REFERENCE_LEG, referenceRig } from "./moves.ts";
+import {
+	groundSpeed,
+	legLength,
+	MOVES,
+	type MoveName,
+	PERCH_H,
+	REFERENCE_LEG,
+	referenceRig,
+} from "./moves.ts";
 import { retarget } from "./retarget.ts";
 import type { CityScene } from "./scene.ts";
-import { Bath, rigifyBones } from "./towel.ts";
+import { Bath, rigifyBones, type Suit, suitFor, type Torso, torsoUrl } from "./swimsuit.ts";
 
 /** The city's motions on one skeleton, and how fast walk and run cover the ground at normal speed. */
 interface Motions {
 	clips: THREE.AnimationClip[];
 	pace: Partial<Record<MoveName, number>>;
+	/** The legs' length to the reference rig's (the motions' heights scale by it). */
+	legs: number;
 }
+
+/** The area's seats (its seats.json): someone sitting on one is drawn on it (docs/prd.md 3.4.5). */
+let seats: Seat[] = [];
+export function setSeats(list: Seat[]): void {
+	seats = list;
+}
+/** Sitting down on a seat takes this long (ms): meanwhile the body goes from where it stood onto the seat. */
+const ONTO_SEAT_MS = 900;
 
 interface Template {
 	scene: THREE.Object3D;
@@ -78,6 +97,7 @@ function motionsFor(bones: Record<string, THREE.Object3D>): Motions {
 	return {
 		clips: clips.map((c) => retarget(rig, c, bones)),
 		pace: { walk: pace.walk * legs, run: pace.run * legs },
+		legs,
 	};
 }
 
@@ -125,6 +145,8 @@ interface VrmFile {
 	textures: Map<number, Promise<unknown>>;
 	/** The motions on this file's bones, made from the first VRM parsed (at rest). */
 	moves: Motions | null;
+	/** The trunk made for its bath from another body (swimsuit.ts), if it has one. */
+	torso: Torso | null;
 }
 
 /**
@@ -134,12 +156,20 @@ interface VrmFile {
 class VrmCache {
 	private readonly files = new Map<string, Promise<VrmFile | null>>();
 
-	async get(url: string): Promise<{ vrm: VRM; moves: Motions } | null> {
+	async get(url: string): Promise<{ vrm: VRM; moves: Motions; torso: Torso | null } | null> {
 		let p = this.files.get(url);
 		if (!p) {
-			p = fetch(url)
-				.then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(`${r.status}`))))
-				.then((data) => ({ data, textures: new Map(), moves: null }))
+			const extra = torsoUrl(url);
+			const torso = extra
+				? fetch(extra)
+						.then((r) => (r.ok ? (r.json() as Promise<Torso>) : null))
+						.catch(() => null)
+				: Promise.resolve(null);
+			p = Promise.all([
+				fetch(url).then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(`${r.status}`)))),
+				torso,
+			])
+				.then(([data, t]) => ({ data, textures: new Map(), moves: null, torso: t }))
 				.catch(() => null);
 			this.files.set(url, p);
 		}
@@ -164,7 +194,7 @@ class VrmCache {
 			}
 			file.moves = motionsFor(bones);
 		}
-		return { vrm, moves: file.moves };
+		return { vrm, moves: file.moves, torso: file.torso };
 	}
 }
 
@@ -247,6 +277,12 @@ export class AvatarView {
 	private disposed = false;
 	private mixer: THREE.AnimationMixer | null = null;
 	private actions: Record<string, THREE.AnimationAction> = {};
+	/** The legs' length to the reference rig's (VRMs; 1 for others). */
+	private legs = 1;
+	/** The trunk made for its bath from another body, if the model has one (swimsuit.ts). */
+	private torso: Torso | null = null;
+	/** How it bathes, if not as its model and sex say (dev pages comparing looks). */
+	private bathStyle: { suit?: Suit; torso?: boolean } = {};
 	private pace: Motions["pace"] = {};
 	private current = "";
 	/** A gesture playing once, until this host time. */
@@ -296,7 +332,7 @@ export class AvatarView {
 	private landing = false;
 	private facing = 0;
 	private readonly isMe: boolean;
-	/** In the bath: clothes off and a towel on (made the first time). */
+	/** In the bath: clothes off and a swimsuit on (made the first time). */
 	private bathing = false;
 	private bath: Bath | null = null;
 	private readonly modelUrl: string;
@@ -337,7 +373,8 @@ export class AvatarView {
 	private async loadVrm(url: string): Promise<void> {
 		const loaded = await vrms.get(url);
 		if (!loaded) return;
-		const { vrm, moves } = loaded;
+		const { vrm, moves, torso } = loaded;
+		this.torso = torso;
 		if (this.disposed) {
 			disposeVrm(vrm);
 			return;
@@ -360,6 +397,7 @@ export class AvatarView {
 		if (this.inside) this.seenFromInside(true);
 		this.setClips(new THREE.AnimationMixer(vrm.scene), moves.clips);
 		this.pace = moves.pace;
+		this.legs = moves.legs;
 		if (this.bathing) this.setBathing(true);
 	}
 
@@ -678,6 +716,21 @@ export class AvatarView {
 				this.y = Math.abs(ground - this.y) > 2 ? ground : this.y + (ground - this.y) * Math.min(1, dt * 12);
 		}
 		this.root.position.set(pose.pos[0], this.y, pose.pos[1]);
+		// on a seat: it goes from where it stood onto the seat as it sits down, the buttocks on the seat's top
+		const seat =
+			move.kind === "idle" && move.posture === "sit" && move.seat !== undefined
+				? seats[move.seat]
+				: undefined;
+		if (seat) {
+			const k = Math.min(1, Math.max(0, (hostNow - move.at) / ONTO_SEAT_MS));
+			const e = k * k * (3 - 2 * k);
+			const p = this.root.position;
+			p.x += (seat.pos[0] - p.x) * e;
+			p.z += (seat.pos[1] - p.z) * e;
+			// (no lower than the ground: a short seat for long legs)
+			const y = Math.max(this.y, seat.y - PERCH_H * this.legs);
+			p.y = this.y + (y - this.y) * e;
+		}
 		// a roll travels along its path without turning to it (a back roll goes backwards)
 		const rolling = this.gesture !== null && TRAVEL.has(this.gesture.name) && hostNow < this.gesture.until;
 		const posture0 = move.kind === "idle" ? move.posture : undefined;
@@ -739,10 +792,11 @@ export class AvatarView {
 		if (rolling && this.gesture) want = this.gesture.name;
 		else if (pose.moving && fly === undefined) want = speed > 2.5 && this.actions.run ? "run" : "walk";
 		else if (this.gesture && hostNow < this.gesture.until) want = this.gesture.name;
+		else if (seat && this.actions.perch) want = "perch";
 		else if (posture && this.actions[posture]) want = posture;
 		// a posture that began before this avatar was drawn (someone who came later) shows as it is now
-		const settled =
-			posture === want && hostNow - move.at > (this.actions[want]?.getClip().duration ?? 0) * 1000;
+		const held = posture === want || (seat !== undefined && want === "perch");
+		const settled = held && hostNow - move.at > (this.actions[want]?.getClip().duration ?? 0) * 1000;
 		this.play(want, settled);
 		// walk and run keep pace with the ground, so the feet do not slide
 		const pace = this.pace[want as MoveName];
@@ -780,8 +834,8 @@ export class AvatarView {
 	}
 
 	/**
-	 * In the bath or its changing room (or not): clothes off and a bath towel wrapped round from the armpits
-	 * to mid-thigh. Cheap to switch any time, also while walking; the towel is made the first time.
+	 * In the bath or its changing room (or not): clothes off and a swimsuit on (a one-piece, or trunks). Cheap
+	 * to switch any time, also while walking; the swimsuit is made the first time.
 	 */
 	setBathing(on: boolean): void {
 		this.bathing = on;
@@ -790,7 +844,7 @@ export class AvatarView {
 	}
 
 	/**
-	 * Gets the towel ready without going in (the first time for a model takes some hundreds of milliseconds):
+	 * Gets the swimsuit ready without going in (the first time for a model takes some hundreds of milliseconds):
 	 * e.g. when the avatar comes near the bath, or in idle time. Does nothing until the model has loaded.
 	 */
 	prepareBath(): void {
@@ -807,10 +861,37 @@ export class AvatarView {
 				const node = vrm.humanoid.getRawBoneNode(name as VRMHumanBoneName);
 				if (node) bones[name] = node;
 			}
-			return new Bath({ root: vrm.scene, bones, key: this.modelUrl, materials: vrm.materials, vroid: true });
+			const torso = this.bathStyle.torso === false ? null : this.torso;
+			return new Bath({
+				root: vrm.scene,
+				bones,
+				key: this.modelUrl,
+				materials: vrm.materials,
+				vroid: true,
+				suit: this.suit,
+				...(torso ? { torso } : {}),
+			});
 		}
 		if (!this.mixer) return null;
-		return new Bath({ root: this.model, bones: rigifyBones(this.model), key: this.modelUrl, vroid: false });
+		return new Bath({
+			root: this.model,
+			bones: rigifyBones(this.model),
+			key: this.modelUrl,
+			vroid: false,
+			suit: this.suit,
+		});
+	}
+
+	/**
+	 * Bathes another way than its model and sex say (before it first bathes): a dev page comparing looks.
+	 */
+	setBathStyle(style: { suit?: Suit; torso?: boolean }): void {
+		this.bathStyle = style;
+	}
+
+	/** Its model's own swimsuit (Shibu's bikini), else trunks for men and a one-piece for others. */
+	private get suit(): Suit {
+		return this.bathStyle.suit ?? suitFor(this.modelUrl, this.state.assets.sex);
 	}
 
 	/**

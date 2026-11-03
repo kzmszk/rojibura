@@ -448,7 +448,7 @@ ONSEN_GARDEN_ROCKS = [(29.8, -149.0, 0.9), (32.2, -153.5, 0.7), (10.0, -156.3, 0
 
 
 def onsen_zone():
-    """Where an avatar is in its towel: both changing rooms and the open-air baths' garden."""
+    """Where an avatar is in its swimsuit: both changing rooms and the open-air baths' garden."""
     m, w, d = ONSEN['changing_m'], ONSEN['changing_w'], ONSEN['deck']
     return [(m[0], m[3]), (m[2], m[3]), (m[2], d[3]), (w[0], d[3]), (w[0], w[3]), (w[2], w[3]), (w[2], d[3]),
             (d[2], d[3]), (d[2], d[1]), (d[0], d[1]), (d[0], d[3]), (m[0], d[3])]

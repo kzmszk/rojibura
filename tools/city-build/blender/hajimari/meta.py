@@ -2,7 +2,7 @@
 
   out/hajimari/meta.json            landmarks and spawn without heights (build-grid.ts adds them)
   assets/areas/hajimari/trees.json  every tree for the browser (species, position, scale, rotation)
-  assets/areas/hajimari/zones.json  places with a rule: the onsen, where avatars wear a towel
+  assets/areas/hajimari/zones.json  places with a rule: the onsen, where avatars wear a swimsuit
   assets/areas/hajimari/shops.json  the shops, their counters and what they sell
 """
 import json, os
@@ -75,6 +75,17 @@ def write(out_dir):
     write_ground()
     shops = {'shops': [shop_entry(s) for s in plan.SHOPS]}
     json.dump(shops, open(os.path.join(plan.AREA_DIR, 'shops.json'), 'w'), ensure_ascii=False, indent='\t')
+
+
+def write_seats():
+    """assets/areas/hajimari/seats.json: where one can sit (benches, sofas, chairs), collected while building."""
+    from . import geom
+    seats = [[*G(x, y), round(z, 3), *[round(v, 3) for v in G(fx, fy)]] for (x, y, z, fx, fy) in geom.SEATS]
+    with open(os.path.join(plan.AREA_DIR, 'seats.json'), 'w') as f:
+        f.write('{\n\t"format": ["X", "Z", "Y (the seat\'s top)", "faceX", "faceZ"],\n\t"seats": [\n')
+        f.write(',\n'.join('\t\t' + json.dumps(s) for s in seats))
+        f.write('\n\t]\n}\n')
+    return len(seats)
 
 
 GOODS = {

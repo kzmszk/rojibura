@@ -1,6 +1,6 @@
 // Where the camera looks from (docs/prd.md 3.4.8): orbiting the avatar (drag to turn, wheel to zoom), a drone
 // just behind it, or its own eyes. Dragging turns the drone and the eyes; while the avatar walks they come
-// round behind it again.
+// round behind it again, unless one turned them while it walks: then they look that way until it stops.
 
 import * as THREE from "three";
 import type { AvatarView } from "./avatars.ts";
@@ -23,6 +23,8 @@ export class ViewController {
 	private yaw = 0;
 	private pitch = 0;
 	private drag: { x: number; y: number } | null = null;
+	/** Turned by hand while walking: the view stays where it was put until the avatar stops. */
+	private held = false;
 	private orbiting = false;
 	private readonly scene: CityScene;
 	private me: AvatarView | null = null;
@@ -39,6 +41,7 @@ export class ViewController {
 		dom.addEventListener("pointermove", (e) => {
 			if (!this.drag || this.view === "orbit") return;
 			this.yaw -= (e.clientX - this.drag.x) * 0.005;
+			this.held = true;
 			this.pitch = Math.max(
 				-PITCH_LIMIT,
 				Math.min(PITCH_LIMIT, this.pitch - (e.clientY - this.drag.y) * 0.004),
@@ -97,7 +100,8 @@ export class ViewController {
 			this.scene.follow(at, dt);
 			return;
 		}
-		if (moving && !this.drag) {
+		if (!moving) this.held = false;
+		if (moving && !this.drag && !this.held) {
 			const diff = Math.atan2(Math.sin(me.heading - this.yaw), Math.cos(me.heading - this.yaw));
 			this.yaw += diff * Math.min(1, dt * 3);
 		}

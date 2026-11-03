@@ -1,10 +1,10 @@
-// What a body looks like with its clothes off, for the bath (towel.ts). Everything here works on the body at
+// What a body looks like with its clothes off, for the bath (swimsuit.ts). Everything here works on the body at
 // rest, in its skeleton's bind space (where the skinned meshes' vertices are before any bone moves them).
 //
 // A VRoid model's clothes are separate meshes (materials named "…_CLOTH"), but VRoid deletes the skin hidden
 // under them, so taking them off can leave the shoulders, the upper arms or the chest missing. Clothes can
 // also be painted on the skin's own texture (socks, a T-shirt, trousers). So, for a body in the bath:
-// - painted clothes outside the towel are painted over with skin (the colours of the skin around them), and
+// - painted clothes outside the swimsuit are painted over with skin (the colours of the skin around them), and
 // - skin that was deleted is made again: a smooth body is modelled from the bones and the skin that is left
 //   (tubes for the limbs and the neck, slices for the trunk), and the part of it where no skin is gets drawn,
 //   skinned to the bones like the skin around it.
@@ -545,9 +545,10 @@ function radiiAlong(
 
 /**
  * The body as a smooth shape (negative inside): the trunk in slices fitted to its skin (made up where the skin
- * is missing), and tubes for the neck, shoulders, arms and legs, all blended together.
+ * is missing), and tubes for the neck, shoulders, arms and legs, all blended together. `bust`: a woman's body,
+ * with breasts on the chest (the slices alone make a flat, boxy chest where VRoid deleted the skin).
  */
-export function bodyShape(body: Body): ((p: THREE.Vector3) => number) | null {
+export function bodyShape(body: Body, bust = false): ((p: THREE.Vector3) => number) | null {
 	const { at, skin, size: s } = body;
 	const { neck, head, hips, leftUpperArm, rightUpperArm, leftUpperLeg, rightUpperLeg } = at;
 	if (!neck || !head || !hips || !leftUpperArm || !rightUpperArm || !leftUpperLeg || !rightUpperLeg)
@@ -646,6 +647,23 @@ export function bodyShape(body: Body): ((p: THREE.Vector3) => number) | null {
 		tubes.push([from, ua.clone().setY(ua.y + 0.004 * s), 0.035 * s, r * 1.05]);
 	}
 
+	// breasts: two rounded bulges on the front of the chest, a hand's breadth below the shoulders
+	const breasts: THREE.Vector3[] = [];
+	const rBust = 0.047 * s;
+	if (bust) {
+		const yB = yShoulder - 0.125 * s;
+		const sl = sliceAt(table, yB);
+		const { front, left } = body;
+		const reach = 1 / Math.hypot(front.x / sl.a, front.z / sl.b);
+		for (const side of [1, -1]) {
+			const c = new THREE.Vector3(sl.cx, yB, sl.cz)
+				.addScaledVector(front, reach - 0.032 * s)
+				.addScaledVector(left, side * 0.068 * s);
+			breasts.push(c);
+		}
+	}
+	const q = new THREE.Vector3();
+
 	const k = 0.02 * s;
 	const yTop = neckBase.y;
 	return (p: THREE.Vector3) => {
@@ -657,6 +675,11 @@ export function bodyShape(body: Body): ((p: THREE.Vector3) => number) | null {
 			d = Math.max((Math.sqrt(qx * qx + qz * qz) - 1) * Math.min(sl.a, sl.b), y0 - p.y, p.y - yTop);
 		}
 		for (const [a, b, ra, rb] of tubes) d = smin(d, tube(p, a, b, ra, rb), k);
+		for (const c of breasts) {
+			q.subVectors(p, c);
+			q.y *= 1.15;
+			d = smin(d, q.length() - rBust, 0.035 * s);
+		}
 		return d;
 	};
 }

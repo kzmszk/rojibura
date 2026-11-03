@@ -1,7 +1,8 @@
 // Trees: species templates (treegen.ts) drawn instanced, in three levels of detail: full trees near the camera
 // (they alone cast shadows), light ones to the middle distance and camera-facing impostors beyond (baked from the
-// templates at start and whenever the season changes). Instances are culled and sorted into their level every
-// frame on the CPU; one draw per template, part and level that has trees in view.
+// templates at start and whenever the season changes). Broadleaf trees right by the camera (CLOSE) draw their
+// leaves one by one instead of the cards (treegen.ts, issue 46). Instances are culled and sorted into their
+// level every frame on the CPU; one draw per template, part and level that has trees in view.
 // Leaves take their colour in the shader from the species' ramp for the season (species.ts), per tree, per
 // card and leaf by leaf; bare trees in winter draw only their twig cards with the twig cell; snow lies on
 // whatever faces up.
@@ -11,7 +12,15 @@ import { makeLeafAtlas } from "./atlas.ts";
 import { COTANGENT, NOISE, patch, type Uniforms } from "./glsl.ts";
 import type { Season } from "./season.ts";
 import { BARK_SIZE, CELL, SPECIES, SPECIES_NAMES, type Species, speciesIndex } from "./species.ts";
-import { ATLAS_N, makeTree, type PartMesh, type TreeTemplate, VARIANTS } from "./treegen.ts";
+import {
+	ATLAS_N,
+	hasCloseLeaves,
+	type LeafRect,
+	makeTree,
+	type PartMesh,
+	type TreeTemplate,
+	VARIANTS,
+} from "./treegen.ts";
 
 export interface TreeSpec {
 	sp: Species;
@@ -23,7 +32,9 @@ export interface TreeSpec {
 	r: number;
 }
 
-/** Full trees within this distance (metres), light ones to MID, impostors beyond. */
+/** Broadleaf trees within this distance (metres) draw their leaves one by one; full trees within NEAR, light
+ * ones to MID, impostors beyond. */
+export const CLOSE = 13;
 export const NEAR = 55;
 export const MID = 140;
 /** Trees this near are drawn even out of view: their shadows may fall into it. */
@@ -53,7 +64,17 @@ interface Group {
 	lod: 0 | 1;
 	wood: THREE.InstancedMesh;
 	leaves: THREE.InstancedMesh;
+	/**
+	 * The leaves one by one (full templates of broadleaf trees), for trees within CLOSE: made the first time one
+	 * comes that close (`closeMade`), with its single leaf's rectangle in the atlas and room for `cap` trees.
+	 */
+	close: THREE.InstancedMesh | null;
+	closeMade: boolean;
+	rect: LeafRect | undefined;
+	cap: number;
+	/** Trees this frame: all (the wood), and those of them drawn with their leaves one by one. */
 	n: number;
+	nClose: number;
 }
 
 function geometry(m: PartMesh): THREE.BufferGeometry {
@@ -305,7 +326,12 @@ function barkMaterial(u: TreeUniforms, bark: THREE.Texture): THREE.MeshStandardM
  * Leaf cards. Leaves are alpha-tested (crisp); bare winter twigs (`soft`) are not: their fine tips fade into
  * a haze in the distance by alpha to coverage, as real twigs do. Shadows test at 0.5 either way.
  */
-function leafMaterial(u: TreeUniforms, atlas: THREE.Texture, soft: boolean): THREE.MeshStandardMaterial {
+function leafMaterial(
+	u: TreeUniforms,
+	atlas: THREE.Texture,
+	soft: boolean,
+	close = false,
+): THREE.MeshStandardMaterial {
 	const m = new THREE.MeshStandardMaterial({
 		map: atlas,
 		roughness: 0.78,
@@ -317,6 +343,7 @@ function leafMaterial(u: TreeUniforms, atlas: THREE.Texture, soft: boolean): THR
 	m.onBeforeCompile = (shader) => {
 		addUniforms(shader, u);
 		if (soft) shader.defines = { ...(shader.defines ?? {}), NATURE_SOFT: 1 };
+		if (close) shader.defines = { ...(shader.defines ?? {}), NATURE_CLOSE: 1 };
 		shader.vertexShader = patchVertex(shader.vertexShader, true);
 		let f = patch(shader.fragmentShader, "#include <common>", `#include <common>\n${FRAG_PARS}`);
 		f = patch(
@@ -324,7 +351,13 @@ function leafMaterial(u: TreeUniforms, atlas: THREE.Texture, soft: boolean): THR
 			"#include <map_fragment>",
 			/* glsl */ `
 			int sp = int(vInst.y + 0.5);
+			#ifdef NATURE_CLOSE
+			// a single leaf is small on screen: the atlas's smaller levels keep each cell's coverage, which turns
+			// a lone leaf into its whole square; sharper levels keep its shape
+			vec4 tx = texture2D(map, vMapUv, -2.5);
+			#else
 			vec4 tx = texture2D(map, vMapUv);
+			#endif
 			float bare = uBare[sp];
 			vec3 col = leafColor(sp, vInst.x, vData.x, vData.y, tx.g) * (tx.r * 1.15 + 0.18);
 			vec3 twig = uTwig[sp] * (0.55 + tx.r * 0.9);
@@ -341,8 +374,12 @@ function leafMaterial(u: TreeUniforms, atlas: THREE.Texture, soft: boolean): THR
 				vec3 toCam = cameraPosition - vWorldPos;
 				float edge = abs(dot(gn, normalize(toCam)));
 				alpha *= mix(smoothstep(0.06, 0.3, edge), 1.0, smoothstep(12.0, 30.0, length(toCam)));
-				// and a card right at the camera is a blurred sheet: let it go
+				// and a card right at the camera is a blurred sheet: let it go (a single leaf only right at the eye)
+				#ifdef NATURE_CLOSE
+				alpha *= smoothstep(0.12, 0.35, length(toCam));
+				#else
 				alpha *= smoothstep(0.7, 2.2, length(toCam));
+				#endif
 			}
 			if (alpha < 0.01) discard;
 			float snowK = 0.0;
@@ -373,17 +410,29 @@ function leafMaterial(u: TreeUniforms, atlas: THREE.Texture, soft: boolean): THR
 		);
 		shader.fragmentShader = f;
 	};
-	m.customProgramCacheKey = () => (soft ? "nature-twigs" : "nature-leaf");
+	m.customProgramCacheKey = () => (soft ? "nature-twigs" : close ? "nature-leaf-close" : "nature-leaf");
 	return m;
 }
 
-function depthMaterial(u: TreeUniforms, leaf: boolean): THREE.MeshDepthMaterial {
-	const m = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
+/** The depth (shadow) material; `cutout`: cut to the atlas's shapes (single leaves, not their squares). */
+function depthMaterial(u: TreeUniforms, leaf: boolean, cutout?: THREE.Texture): THREE.MeshDepthMaterial {
+	const m = new THREE.MeshDepthMaterial({
+		depthPacking: THREE.RGBADepthPacking,
+		...(cutout ? { map: cutout, alphaTest: 0.5 } : {}),
+	});
 	m.onBeforeCompile = (shader) => {
 		addUniforms(shader, u);
 		shader.vertexShader = `#define NATURE_DEPTH\n${patchVertex(shader.vertexShader, leaf)}`;
+		// (sharper atlas levels for single leaves, as in leafMaterial)
+		if (cutout)
+			shader.fragmentShader = patch(
+				shader.fragmentShader,
+				"#include <map_fragment>",
+				"diffuseColor *= texture2D(map, vMapUv, -2.5);",
+			);
 	};
-	m.customProgramCacheKey = () => (leaf ? "nature-leaf-depth" : "nature-bark-depth");
+	m.customProgramCacheKey = () =>
+		leaf ? (cutout ? "nature-leaf-cutout-depth" : "nature-leaf-depth") : "nature-bark-depth";
 	return m;
 }
 
@@ -527,6 +576,10 @@ export class Trees {
 	private readonly templates: TreeTemplate[] = [];
 	readonly atlas: THREE.DataTexture;
 	private readonly leafMat: THREE.MeshStandardMaterial;
+	private readonly closeMat: THREE.MeshStandardMaterial;
+	private readonly closeDepth: THREE.MeshDepthMaterial;
+	/** Whether trees by the camera draw their leaves one by one (not on phones: many more triangles). */
+	private readonly closeLeaves: boolean;
 	private readonly twigMat: THREE.MeshStandardMaterial;
 	private readonly barkTex: THREE.Texture;
 	private readonly barkNrm: THREE.Texture;
@@ -548,8 +601,10 @@ export class Trees {
 		heightAt: (x: number, z: number) => number | null,
 		texBase: string,
 		atlas?: THREE.DataTexture,
+		closeLeaves = true,
 	) {
 		this.u = makeTreeUniforms();
+		this.closeLeaves = closeLeaves;
 		this.group.name = "nature:trees";
 		this.atlas = atlas ?? makeLeafAtlas();
 		const loader = new THREE.TextureLoader();
@@ -565,9 +620,11 @@ export class Trees {
 		const leaf = leafMaterial(this.u, this.atlas, false);
 		this.twigMat = leafMaterial(this.u, this.atlas, true);
 		this.leafMat = leaf;
+		this.closeMat = leafMaterial(this.u, this.atlas, false, true);
 		const barkDepth = depthMaterial(this.u, false);
 		const leafDepth = depthMaterial(this.u, true);
-		this.mats.push(bark, leaf, barkDepth, leafDepth, this.twigMat);
+		this.closeDepth = depthMaterial(this.u, true, this.atlas);
+		this.mats.push(bark, leaf, barkDepth, leafDepth, this.twigMat, this.closeMat, this.closeDepth);
 
 		// place the trees; templates only for species in use
 		const used = new Set<string>();
@@ -593,24 +650,13 @@ export class Trees {
 			const [sp, v] = key.split("/") as [Species, string];
 			const variant = Number(v);
 			const si = speciesIndex(sp);
+			const rect = leafRect(this.atlas, SPECIES[sp].single);
 			for (const lod of [0, 1] as const) {
-				const tpl = makeTree(sp, variant, lod);
+				const tpl = makeTree(sp, variant, lod, rect);
 				this.templates.push(tpl);
 				const cap = count.get(`${si}/${variant}`) ?? 0;
-				const mk = (part: PartMesh, mat: THREE.Material, depth: THREE.Material): THREE.InstancedMesh => {
-					const g = geometry(part);
-					g.setAttribute("aInst", new THREE.InstancedBufferAttribute(new Float32Array(cap * 4), 4));
-					const mesh = new THREE.InstancedMesh(g, mat, cap);
-					mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-					mesh.frustumCulled = false;
-					mesh.castShadow = lod === 0;
-					mesh.receiveShadow = true;
-					mesh.customDepthMaterial = depth;
-					mesh.count = 0;
-					mesh.visible = false;
-					this.group.add(mesh);
-					return mesh;
-				};
+				const mk = (part: PartMesh, mat: THREE.Material, depth: THREE.Material): THREE.InstancedMesh =>
+					this.instanced(part, mat, depth, cap, lod === 0);
 				const grp: Group = {
 					tpl,
 					si,
@@ -618,7 +664,12 @@ export class Trees {
 					lod,
 					wood: mk(tpl.wood, bark, barkDepth),
 					leaves: mk(tpl.leaves, leaf, leafDepth),
+					close: null,
+					closeMade: lod !== 0 || !closeLeaves || !hasCloseLeaves(sp),
+					rect,
+					cap,
 					n: 0,
+					nClose: 0,
 				};
 				this.groups.push(grp);
 				this.byKey.set(`${si}/${variant}/${lod}`, grp);
@@ -666,6 +717,35 @@ export class Trees {
 		this.imp.receiveShadow = false;
 		this.group.add(this.imp);
 		this.setSeason("autumn");
+	}
+
+	/** An instanced mesh of a template's part, for up to `cap` trees, in the group (hidden until drawn). */
+	private instanced(
+		part: PartMesh,
+		mat: THREE.Material,
+		depth: THREE.Material,
+		cap: number,
+		shadow: boolean,
+	): THREE.InstancedMesh {
+		const g = geometry(part);
+		g.setAttribute("aInst", new THREE.InstancedBufferAttribute(new Float32Array(cap * 4), 4));
+		const mesh = new THREE.InstancedMesh(g, mat, cap);
+		mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+		mesh.frustumCulled = false;
+		mesh.castShadow = shadow;
+		mesh.receiveShadow = true;
+		mesh.customDepthMaterial = depth;
+		mesh.count = 0;
+		mesh.visible = false;
+		this.group.add(mesh);
+		return mesh;
+	}
+
+	/** A template's leaves one by one (some tens of milliseconds), the first time one of its trees comes close. */
+	private makeClose(g: Group): void {
+		g.closeMade = true;
+		const tpl = makeTree(g.tpl.species, g.variant, 0, g.rect, true);
+		if (tpl.close) g.close = this.instanced(tpl.close, this.closeMat, this.closeDepth, g.cap, true);
 	}
 
 	setSeason(season: Season): void {
@@ -738,7 +818,11 @@ export class Trees {
 		this.pv.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
 		this.frustum.setFromProjectionMatrix(this.pv);
 		const cp = camera.getWorldPosition(new THREE.Vector3());
-		for (const g of this.groups) g.n = 0;
+		for (const g of this.groups) g.n = g.nClose = 0;
+		// bare in winter, broadleaf trees draw their twig cards, also close by
+		const closeOk = this.closeLeaves && this.season !== "winter";
+		// (one template's single leaves made a frame, the first time a tree of it comes close)
+		let makeOne = true;
 		let ni = 0;
 		const impM = this.imp.instanceMatrix.array as Float32Array;
 		const impI = this.imp.geometry.getAttribute("aInst") as THREE.InstancedBufferAttribute;
@@ -766,26 +850,41 @@ export class Trees {
 			}
 			const g = this.byKey.get(`${p.si}/${p.variant}/${lod}`);
 			if (!g) continue;
-			const k = g.n++;
-			for (const mesh of [g.wood, g.leaves]) {
+			// right by the camera, the leaves one by one; the cards otherwise (the wood is the same)
+			if (closeOk && d < CLOSE && !g.closeMade && makeOne) {
+				makeOne = false;
+				this.makeClose(g);
+			}
+			const close = closeOk && g.close !== null && d < CLOSE;
+			const put = (mesh: THREE.InstancedMesh, k: number) => {
 				(mesh.instanceMatrix.array as Float32Array).set(p.matrix, k * 16);
 				const a = mesh.geometry.getAttribute("aInst") as THREE.InstancedBufferAttribute;
 				(a.array as Float32Array).set([p.seed, p.si, 0, 0], k * 4);
-			}
+			};
+			put(g.wood, g.n);
+			if (close && g.close) put(g.close, g.nClose++);
+			else put(g.leaves, g.n - g.nClose);
+			g.n++;
 			if (lod === 0) this.drawn.near++;
 			else this.drawn.mid++;
 		}
 		for (const g of this.groups) {
-			for (const mesh of [g.wood, g.leaves]) {
-				mesh.count = g.n;
-				mesh.visible = g.n > 0;
-				if (g.n) {
+			const counts: [THREE.InstancedMesh | null, number][] = [
+				[g.wood, g.n],
+				[g.leaves, g.n - g.nClose],
+				[g.close, g.nClose],
+			];
+			for (const [mesh, n] of counts) {
+				if (!mesh) continue;
+				mesh.count = n;
+				mesh.visible = n > 0;
+				if (n) {
 					mesh.instanceMatrix.clearUpdateRanges();
-					mesh.instanceMatrix.addUpdateRange(0, g.n * 16);
+					mesh.instanceMatrix.addUpdateRange(0, n * 16);
 					mesh.instanceMatrix.needsUpdate = true;
 					const a = mesh.geometry.getAttribute("aInst") as THREE.InstancedBufferAttribute;
 					a.clearUpdateRanges();
-					a.addUpdateRange(0, g.n * 4);
+					a.addUpdateRange(0, n * 4);
 					a.needsUpdate = true;
 				}
 			}
@@ -865,8 +964,10 @@ export class Trees {
 		for (const g of this.groups) {
 			g.wood.geometry.dispose();
 			g.leaves.geometry.dispose();
+			g.close?.geometry.dispose();
 			g.wood.dispose();
 			g.leaves.dispose();
+			g.close?.dispose();
 		}
 		this.imp.geometry.dispose();
 		this.imp.dispose();
@@ -876,6 +977,34 @@ export class Trees {
 		this.barkNrm.dispose();
 		this.impRT.dispose();
 	}
+}
+
+/** Where single leaf `single` lies in its square of the atlas's singles cell (where it is opaque). */
+function leafRect(atlas: THREE.DataTexture, single: number): LeafRect | undefined {
+	const img = atlas.image as { data?: Uint8Array; width?: number; height?: number };
+	const W = img.width ?? 0;
+	if (!img.data || !W || img.height !== W) return undefined;
+	const cell = W / ATLAS_N;
+	const sub = cell / 4;
+	const ox = (CELL.singles % ATLAS_N) * cell + (single % 4) * sub;
+	const oy = Math.floor(CELL.singles / ATLAS_N) * cell + Math.floor(single / 4) * sub;
+	let [x0, y0, x1, y1] = [sub, sub, -1, -1];
+	for (let y = 0; y < sub; y++)
+		for (let x = 0; x < sub; x++)
+			if ((img.data[((oy + y) * W + ox + x) * 4 + 3] as number) > 64) {
+				x0 = Math.min(x0, x);
+				y0 = Math.min(y0, y);
+				x1 = Math.max(x1, x);
+				y1 = Math.max(y1, y);
+			}
+	if (x1 < x0) return undefined;
+	// a texel's margin round it
+	return [
+		Math.max(0, x0 - 1) / sub,
+		Math.max(0, y0 - 1) / sub,
+		Math.min(sub, x1 + 2) / sub,
+		Math.min(sub, y1 + 2) / sub,
+	];
 }
 
 function fract(x: number): number {

@@ -75,6 +75,11 @@ export class PortalsView {
 		return p && Math.hypot(p.pos[0] - pos[0], p.pos[1] - pos[1]) <= PORTAL_REACH ? p : null;
 	}
 
+	/** The portal with this ID, if the area has it. */
+	byId(id: string): Portal | undefined {
+		return this.portals.find((p) => p.id === id);
+	}
+
 	/** The portal nearest to `pos` (in a straight line), or null if the area has none. */
 	nearest(pos: Vec2): Portal | null {
 		let best: { p: Portal; d: number } | null = null;

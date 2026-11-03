@@ -591,6 +591,49 @@ describe("doing things together", () => {
 		expect(a.inbox.some((m) => m.t === "TOGETHER")).toBe(true);
 	});
 
+	test("a hug with your AI beside you: it stays in your arms, then steps back with you", () => {
+		const a = conn("a");
+		const bot = conn("bot");
+		place(a, human("alice"), [-10, -10]);
+		place(bot, ai("bot", "alice"), [-11, -10]);
+		ctx.room.handle(a, { t: "COMPANION", on: true });
+		ctx.clock.advance(2000);
+		const ai0 = ctx.room.members.get(bot);
+		if (ai0) ai0.move = { kind: "idle", pos: [-11, -10], at: ctx.clock.now() };
+		ctx.room.handle(a, { t: "OFFER", kind: "hug", to: "a_bot" });
+		ctx.room.handle(bot, { t: "ANSWER", to: "h_alice", accept: true });
+		const together = a.inbox.find((m) => m.t === "TOGETHER");
+		if (together?.t !== "TOGETHER") throw new Error("no hug");
+		// her page says she has arrived: the AI is not taken to her side, and does not walk off by itself
+		ctx.clock.advance(together.at - ctx.clock.now());
+		a.inbox.length = 0;
+		const spot = (m: Conn) => ctx.room.members.get(m)?.move;
+		const hers = spot(a);
+		const here = hers?.kind === "path" ? (hers.path.at(-1) as Vec2) : [-10, -10];
+		ctx.room.handle(a, { t: "MOVE_VEL", pos: here as Vec2, dir: [0, 0], speed: 0, seq: 1 });
+		expect(a.inbox.some((m) => m.t === "MOVED" && m.id === "a_bot")).toBe(false);
+		bot.inbox.length = 0;
+		ctx.room.handle(bot, {
+			t: "MOVE_PATH",
+			path: [
+				[-10.2, -10],
+				[-12, -10],
+			],
+			speed: 1.4,
+			seq: 1,
+		});
+		expect(bot.inbox.map((m) => m.t)).toEqual(["CORRECT"]);
+		// over: she steps back, and the AI steps back from her
+		ctx.clock.advance(4500);
+		a.inbox.length = 0;
+		ctx.room.handle(a, { t: "ACTION", motion: "stepback" });
+		const back = a.inbox.find((m) => m.t === "MOVED" && m.id === "a_bot");
+		expect(back).toMatchObject({ move: { kind: "path", speed: expect.closeTo(0.3 / 1.1, 3) } });
+		const path = back?.t === "MOVED" && back.move.kind === "path" ? back.move.path : [];
+		expect(path[1]?.[0] ?? 0).toBeCloseTo((path[0]?.[0] ?? 0) - 0.3, 3);
+		expect(a.inbox).toContainEqual(expect.objectContaining({ t: "ACTED", id: "a_bot", motion: "stepback" }));
+	});
+
 	test("a no, a late yes, someone too far or blocked: nothing happens together", () => {
 		const a = conn("a");
 		const b = conn("b");
@@ -612,6 +655,57 @@ describe("doing things together", () => {
 		ctx.room.handle(b, { t: "OFFER", kind: "hug", to: "h_alice" });
 		expect(last(b)).toMatchObject({ t: "NOTICE", kind: "rejected" });
 		expect(a.inbox.some((m) => m.t === "OFFERED")).toBe(false);
+	});
+});
+
+describe("sitting on a seat", () => {
+	const seats = [
+		{ pos: [-10, -9.4] as Vec2, y: 0.46, face: [0, -1] as Vec2 },
+		{ pos: [-30, -30] as Vec2, y: 0.46, face: [0, -1] as Vec2 },
+	];
+	beforeEach(() => {
+		ctx = setup({ seats });
+	});
+
+	test("on one close by and free; not one far off, nor one someone sits on", () => {
+		const a = conn("a");
+		const b = conn("b");
+		place(a, human("alice"), [-10, -10]);
+		place(b, human("bob"), [-10.3, -10]);
+		ctx.room.handle(a, { t: "ACTION", motion: "sit", seat: 0 });
+		expect(ctx.room.members.get(a)?.move).toMatchObject({
+			kind: "idle",
+			posture: "sit",
+			seat: 0,
+			face: [0, -1],
+		});
+		ctx.room.handle(b, { t: "ACTION", motion: "sit", seat: 0 });
+		expect(last(b)).toMatchObject({ t: "NOTICE", kind: "rejected" });
+		ctx.room.handle(b, { t: "ACTION", motion: "sit", seat: 1 });
+		expect(last(b)).toMatchObject({ t: "NOTICE", kind: "rejected" });
+		// without asking for one a person sits on the ground
+		ctx.room.handle(b, { t: "ACTION", motion: "sit" });
+		const move = ctx.room.members.get(b)?.move;
+		expect(move?.kind === "idle" && move.seat).toBeUndefined();
+		// she walks on: the seat is free again
+		ctx.room.handle(a, {
+			t: "MOVE_PATH",
+			path: [
+				[-10, -10],
+				[-12, -10],
+			],
+			speed: 1.4,
+			seq: 1,
+		});
+		ctx.room.handle(b, { t: "ACTION", motion: "sit", seat: 0 });
+		expect(ctx.room.members.get(b)?.move).toMatchObject({ seat: 0 });
+	});
+
+	test("an AI sitting down next to a free seat sits on it", () => {
+		const bot = conn("bot");
+		place(bot, ai("bot", "alice"), [-10, -10]);
+		ctx.room.handle(bot, { t: "ACTION", motion: "sit" });
+		expect(ctx.room.members.get(bot)?.move).toMatchObject({ posture: "sit", seat: 0 });
 	});
 });
 

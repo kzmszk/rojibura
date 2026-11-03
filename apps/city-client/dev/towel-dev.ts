@@ -1,7 +1,9 @@
-// Dev harness for bathing (AvatarView.setBathing): the preset avatars side by side, dressed or in a towel,
+// Dev harness for bathing (AvatarView.setBathing): the preset avatars side by side, dressed or in a swimsuit,
 // standing, walking, sitting, lying or in a gesture, seen from any side. Query options:
-//   who=fumiriya,shibu,…  bath=0|1|skin (skin: clothes off, towel hidden)  pose=stand|walk|run|sit|lie|<gesture>
+//   who=fumiriya,shibu,…  bath=0|1|skin (skin: clothes off, swimsuit hidden)  pose=stand|walk|run|sit|lie|<gesture>
 //   t=seconds into the motion  yaw=degrees the avatars are turned (0 faces the camera)
+//   suit=one-piece,bikini,…  torso=0,1,… (per avatar, in `who` order: the swimsuit, and whether a model's
+//   trunk made from another body is used; to compare looks of the same model side by side)
 //   cam=full|close|low|top  toggles=n (bathing switched on and off n times first)
 // When the picture is ready, document.body.dataset.done is set (for a headless screenshot).
 
@@ -17,6 +19,8 @@ const t = Number(q.get("t") ?? 2.5);
 const yaw = (Number(q.get("yaw") ?? 0) * Math.PI) / 180;
 const cam = q.get("cam") ?? "full";
 const toggles = Number(q.get("toggles") ?? 0);
+const suits = (q.get("suit") ?? "").split(",");
+const torsos = (q.get("torso") ?? "").split(",");
 const GAP = pose === "lie" ? 1.0 : 0.85;
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
@@ -56,7 +60,12 @@ const views = who.map(
 				kind: "ai",
 				name,
 				status: "active",
-				assets: { thumb: "", lod: url(name), vrm: url(name) },
+				assets: {
+					thumb: "",
+					lod: url(name),
+					vrm: url(name),
+					...(name === "fumiriya" || name === "rei" ? { sex: "m" as const } : {}),
+				},
 				move: moveOf(i),
 			},
 			false,
@@ -64,17 +73,25 @@ const views = who.map(
 );
 for (const v of views) scene.add(v.root);
 await Promise.all(views.map((v) => v.ready));
+views.forEach((v, i) => {
+	const suit = suits[i];
+	const torso = torsos[i];
+	v.setBathStyle({
+		...(suit === "one-piece" || suit === "bikini" || suit === "trunks" ? { suit } : {}),
+		...(torso === "0" ? { torso: false } : {}),
+	});
+});
 for (const v of views) {
 	const t0 = performance.now();
 	for (let k = 0; k < toggles; k++) v.setBathing(k % 2 === 0);
 	v.setBathing(bath !== "0");
 	console.log(`${v.state.name}: bathing set in ${Math.round(performance.now() - t0)} ms`);
 }
-// skin: the towel hidden (the new skin shown), to see what is under it
+// skin: the swimsuit hidden (the new skin shown), to see what is under it
 if (bath === "skin")
 	for (const v of views)
 		v.root.traverse((o) => {
-			if (o.name === "rj-towel") o.visible = false;
+			if (o.name === "rj-suit") o.visible = false;
 		});
 // no fidgets (the first comes some 8 s in) and the same picture every time (after loading and bathing:
 // three.js makes its uuids with Math.random)
@@ -124,7 +141,7 @@ if (tex) {
 			| Record<string, { image?: unknown } | undefined>
 			| undefined;
 		const t = m?.[tex === "shade" ? "shadeMultiplyTexture" : "map"];
-		if (!canvas && o.name !== "rj-towel" && t?.image instanceof HTMLCanvasElement) canvas = t.image;
+		if (!canvas && o.name !== "rj-suit" && t?.image instanceof HTMLCanvasElement) canvas = t.image;
 	});
 	if (canvas) {
 		renderer.domElement.remove();

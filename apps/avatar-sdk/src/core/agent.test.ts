@@ -738,3 +738,66 @@ test("a place farther than one walk carries: it goes a leg at a time, then does 
 		vi.useRealTimers();
 	}
 });
+
+test("plays with a ball lying near: walks to it, picks it up, and throws it to someone close", async () => {
+	vi.useFakeTimers();
+	try {
+		const sent: ClientToHost[] = [];
+		const agent = new Agent({
+			persona: { name: "ミナ", personality: "" },
+			llm: { name: "fake", complete: async () => null },
+			memory: memory(),
+			nav: { findPath: (a, b) => [a, b] },
+			landmarks: [],
+			logger: { info: () => {}, warn: () => {} },
+			send: (m) => sent.push(m),
+			wanderMs: [1000, 1000],
+			random: () => 0,
+		});
+		const blank = { thumb: "", lod: "", vrm: "" };
+		agent.handle({
+			t: "WELCOME",
+			you: "a_mina",
+			serverTime: Date.now(),
+			budget: 0,
+			avatars: [
+				{
+					id: "a_mina",
+					kind: "ai",
+					name: "ミナ",
+					status: "active",
+					assets: blank,
+					move: { kind: "idle", pos: [0, 0], at: 0 },
+				},
+				{
+					id: "h_k",
+					kind: "human",
+					name: "Kazu",
+					status: "active",
+					assets: blank,
+					move: { kind: "idle", pos: [0, 5], at: 0 },
+				},
+			],
+			items: [{ id: "i_ball", kind: "ball", pos: [4, 0] }],
+		});
+		await vi.advanceTimersByTimeAsync(3100);
+		expect(sent.find((m) => m.t === "MOVE_PATH")).toMatchObject({
+			path: [
+				[0, 0],
+				[4, 0],
+			],
+		});
+		// there: it picks the ball up
+		agent.handle({ t: "MOVED", id: "a_mina", move: { kind: "idle", pos: [4, 0], at: 0 } });
+		await vi.advanceTimersByTimeAsync(5000);
+		expect(sent).toContainEqual({ t: "PICK", item: "i_ball" });
+		agent.handle({ t: "ITEM", item: { id: "i_ball", kind: "ball", pos: [4, 0], holder: "a_mina" } });
+		// a few seconds on it throws it to Kazu, at (0, 5) from where it stands at (4, 0)
+		await vi.advanceTimersByTimeAsync(10_000);
+		const thrown = sent.find((m) => m.t === "THROW");
+		expect(thrown?.t === "THROW" && thrown.dir[0]).toBeCloseTo(-4 / Math.hypot(4, 5), 3);
+		agent.stop();
+	} finally {
+		vi.useRealTimers();
+	}
+});
