@@ -343,6 +343,24 @@ export type ClientToHost =
 	| { t: "ACT"; activity: string }
 	| { t: "ACT_STOP" }
 	/**
+	 * The owner reads their AI's diary (docs/life.md 8): `id` the AI here, `day` a JST date ("2026-11-02") or
+	 * "life" (its long-term memory); the latest day if omitted. The AI answers with DIARY; the host keeps none.
+	 */
+	| { t: "DIARY_ASK"; id: AvatarId; day?: string }
+	/**
+	 * An AI's answer to its owner's DIARY_ASK, in `parts` messages of `text` (`part` from 0). `day`: the day it
+	 * is (null: no diary); `days`: in the first part, the days with a diary, newest last (DIARY_DAYS_MAX).
+	 */
+	| {
+			t: "DIARY";
+			to: AvatarId;
+			day: string | null;
+			part: number;
+			parts: number;
+			text: string;
+			days?: string[];
+	  }
+	/**
 	 * Humans, where the area allows (docs/prd.md 3.4.13): float at height `alt` (world Y, metres), or come down
 	 * (null) to the ground nearest below. Afloat, you move in straight lines over everything.
 	 */
@@ -440,6 +458,18 @@ export type HostToClient =
 	  }
 	/** To an AI and its owner: its life changed (docs/life.md 2), and the coins in its wallet. */
 	| { t: "LIFE"; id: AvatarId; life: LifeState; coins?: number }
+	/** To an AI: its owner `from` would like to read its diary (DIARY_ASK); it answers with DIARY. */
+	| { t: "DIARY_ASK"; from: AvatarId; day?: string }
+	/** To the owner: a part of their AI `id`'s diary, as it sent it (DIARY). */
+	| {
+			t: "DIARY";
+			id: AvatarId;
+			day: string | null;
+			part: number;
+			parts: number;
+			text: string;
+			days?: string[];
+	  }
 	/** To an AI: a new morning, and how the day before went. */
 	| { t: "DAY"; review: DayReview; life: LifeState }
 	/** A small thing is gone: eaten (`by`), or tidied away (bought things beyond MAX_GOODS, oldest first). */

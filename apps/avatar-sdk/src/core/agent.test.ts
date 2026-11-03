@@ -9,6 +9,7 @@ import {
 } from "@rojibura/protocol";
 import { describe, expect, test, vi } from "vitest";
 import { Agent } from "./agent.ts";
+import { jstDate } from "./journal.ts";
 import { decisionSchema, parseDecision, userPrompt } from "./prompt.ts";
 import type { LLM, Memory } from "./types.ts";
 
@@ -139,6 +140,19 @@ describe("Agent", () => {
 			],
 		});
 		expect(mem.notes.h_k?.[0]).toContain("一緒に行こう");
+	});
+
+	test("its owner reads its diary: what it did today, and its notes on the days before", async () => {
+		const { agent, sent, mem } = setup({ name: "fake", complete: async () => null });
+		mem.notes.self = ["1日目: 07:30 原っぱで体操"];
+		agent.handle({ t: "ACT_DONE", activity: "lawn_nap", share: 1, name: "原っぱで寝ころぶ" });
+		agent.handle({ t: "DIARY_ASK", from: "h_k" });
+		agent.handle({ t: "DIARY_ASK", from: "h_k", day: "life" });
+		await until(() => sent.filter((m) => m.t === "DIARY").length === 2);
+		const [today, life] = sent.filter((m) => m.t === "DIARY");
+		expect(today).toMatchObject({ to: "h_k", day: jstDate(), part: 0, parts: 1, days: [jstDate()] });
+		expect(today?.t === "DIARY" && today.text).toMatch(/^- \d\d:\d\d 原っぱで寝ころぶ$/);
+		expect(life).toMatchObject({ day: "life", text: "1日目: 07:30 原っぱで体操" });
 	});
 
 	test("falls back to a fixed reply when the LLM fails", async () => {

@@ -1188,6 +1188,9 @@ async function startCity(
 				case "LIFE":
 					agentPanel.life(m.id, lifeText(m.life, avatars.get(m.id)?.state.doing, m.coins));
 					break;
+				case "DIARY":
+					agentPanel.diary(m);
+					break;
 				case "NOTICE":
 					showToast(m.message);
 					// a warp refused: the notice says why
@@ -1203,6 +1206,8 @@ async function startCity(
 		},
 	});
 	hostNow = () => conn.hostNow();
+	// the owner reads their AI's diary through this connection (docs/life.md 8)
+	agentPanel.connect((m) => conn.send(m));
 	conn.start();
 	usage?.restore();
 	// debug hook for tools/snap.ts on development builds (cf dev and staging)

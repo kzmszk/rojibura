@@ -5,12 +5,13 @@ import {
 	type AvatarState,
 	CITY_DAY_MS,
 	type ClientToHost,
+	DIARY_PART_MAX,
 	type HostToClient,
 	newLife,
 	realMs,
 } from "@rojibura/protocol";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { dayOf, type Journal, jstDate, searchJournal, tail } from "./journal.ts";
+import { dayOf, diaryMessages, diaryPage, type Journal, jstDate, searchJournal, tail } from "./journal.ts";
 import { type Mind, Resident, residentSystemPrompt } from "./resident.ts";
 
 /** City 07:00 on 2026-11-02 (JST 20:13). */
@@ -156,6 +157,52 @@ describe("the diary", () => {
 		expect(await searchJournal(j, "メロス")).toHaveLength(1);
 		// cut at a line where it can
 		expect(tail("aaaa\nbb\ncc", 7)).toBe("bb\ncc");
+	});
+
+	test("its owner reads it: the latest day, a day asked for, the long-term memory, in parts", async () => {
+		const j = new MemJournal();
+		await j.append("## 07:00 カフェで食事", "2026-11-01");
+		await j.append("## 08:00 図書館で読書", "2026-11-02");
+		j.life = "本が好き。";
+		expect(await diaryPage(j)).toEqual({
+			day: "2026-11-02",
+			text: "## 08:00 図書館で読書\n\n",
+			days: ["2026-11-01", "2026-11-02"],
+		});
+		expect((await diaryPage(j, "2026-10-30")).text).toBe("");
+		expect((await diaryPage(j, "life")).text).toBe("本が好き。");
+		expect(await diaryPage(new MemJournal())).toEqual({ day: null, text: "", days: [] });
+		// a long day in parts, the days listed with the first
+		const long = "あ".repeat(DIARY_PART_MAX * 2 + 10);
+		const parts = diaryMessages("h_saki", { day: "2026-11-02", text: long, days: ["2026-11-02"] });
+		expect(parts.map((p) => [p.part, p.parts, [...p.text].length, p.days])).toEqual([
+			[0, 3, DIARY_PART_MAX, ["2026-11-02"]],
+			[1, 3, DIARY_PART_MAX, undefined],
+			[2, 3, 10, undefined],
+		]);
+		// nothing written: one empty part
+		expect(diaryMessages("h_saki", { day: null, text: "", days: [] })).toEqual([
+			{ t: "DIARY", to: "h_saki", day: null, part: 0, parts: 1, text: "", days: [] },
+		]);
+	});
+
+	test("asked by the host, a resident sends its owner the page", async () => {
+		const journal = new MemJournal();
+		const { resident, sent } = setup([], { journal });
+		await journal.append("## 08:00 図書館で読書", "2026-11-02");
+		resident.handle({ t: "DIARY_ASK", from: "h_saki", day: "2026-11-02" });
+		await vi.waitFor(() => expect(sent.some((m) => m.t === "DIARY")).toBe(true));
+		expect(sent.filter((m) => m.t === "DIARY")).toEqual([
+			{
+				t: "DIARY",
+				to: "h_saki",
+				day: "2026-11-02",
+				part: 0,
+				parts: 1,
+				text: "## 08:00 図書館で読書\n\n",
+				days: ["2026-11-02"],
+			},
+		]);
 	});
 });
 

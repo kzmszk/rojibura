@@ -367,3 +367,65 @@ describe("an AI's life in the room", () => {
 		expect(life?.fitness).toBeCloseTo(50 + 2.5, 1);
 	});
 });
+
+describe("the owner reading their AI's diary (docs/life.md 8)", () => {
+	const page = (part: number, parts: number, text: string) =>
+		({ t: "DIARY", to: "h_kazu", day: "2026-11-03", part, parts, text }) as const;
+
+	test("the owner asks, the AI here is asked, and its answer goes to the owner alone, in order", () => {
+		const { room } = setup();
+		const c = conn("mina");
+		const owner = conn("kazu");
+		const other = conn("ken");
+		room.join(c, ai());
+		room.join(owner, human());
+		room.join(other, { ...human(), id: "h_ken", name: "ken", ownerId: "h_ken" });
+		room.handle(owner, { t: "DIARY_ASK", id: "a_mina", day: "2026-11-03" });
+		expect(of(c, "DIARY_ASK")).toEqual([{ t: "DIARY_ASK", from: "h_kazu", day: "2026-11-03" }]);
+		room.handle(c, { ...page(0, 2, "# 2026-11-03\n"), days: ["2026-11-03"] });
+		// a part out of order, and a part of another count, are not passed on
+		room.handle(c, page(0, 2, "again"));
+		room.handle(c, page(1, 3, "other"));
+		room.handle(c, page(1, 2, "## 08:00 朝ごはん"));
+		expect(of(owner, "DIARY")).toEqual([
+			{
+				t: "DIARY",
+				id: "a_mina",
+				day: "2026-11-03",
+				part: 0,
+				parts: 2,
+				text: "# 2026-11-03\n",
+				days: ["2026-11-03"],
+			},
+			{ t: "DIARY", id: "a_mina", day: "2026-11-03", part: 1, parts: 2, text: "## 08:00 朝ごはん" },
+		]);
+		expect(of(other, "DIARY")).toHaveLength(0);
+		// the answer is over: nothing more goes through
+		room.handle(c, page(0, 1, "more"));
+		expect(of(owner, "DIARY")).toHaveLength(2);
+	});
+
+	test("only one's own AI here, and an AI cannot send its diary unasked or to someone else", () => {
+		const { room, advance } = setup();
+		const c = conn("mina");
+		const owner = conn("kazu");
+		const other = conn("ken");
+		room.join(c, ai());
+		room.join(owner, human());
+		room.join(other, { ...human(), id: "h_ken", name: "ken", ownerId: "h_ken" });
+		room.handle(other, { t: "DIARY_ASK", id: "a_mina" });
+		expect(of(other, "NOTICE").at(-1)?.message).toBe("自分のAIの日記だけ読めます");
+		room.handle(owner, { t: "DIARY_ASK", id: "a_away" });
+		expect(of(owner, "NOTICE").at(-1)?.message).toContain("このエリアにいない");
+		expect(of(c, "DIARY_ASK")).toHaveLength(0);
+		room.handle(c, page(0, 1, "unasked"));
+		expect(of(owner, "DIARY")).toHaveLength(0);
+		room.handle(owner, { t: "DIARY_ASK", id: "a_mina" });
+		room.handle(c, { ...page(0, 1, "to ken"), to: "h_ken" });
+		expect(of(other, "DIARY")).toHaveLength(0);
+		// an answer too late is not passed on
+		advance(16_000);
+		room.handle(c, page(0, 1, "late"));
+		expect(of(owner, "DIARY")).toHaveLength(0);
+	});
+});

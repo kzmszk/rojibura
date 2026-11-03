@@ -100,6 +100,8 @@ const MESSAGE_LABELS: Record<ClientToHost["t"], string> = {
 	BODY: "AIが体を動かす",
 	ACT: "活動を始める",
 	ACT_STOP: "活動をやめる",
+	DIARY_ASK: "AIの日記を読む",
+	DIARY: "AIが日記を見せる",
 	FLY: "空に浮かぶ",
 	WARP: "瞬間移動",
 };

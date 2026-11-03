@@ -44,6 +44,8 @@ import {
 	cityMinutesOf,
 	cityTime,
 	type DayReview,
+	DIARY_ASK_MS,
+	DIARY_TTL_MS,
 	type Doing,
 	decay,
 	dist,
@@ -378,6 +380,14 @@ export class RoomCore<C> {
 	private readonly offers = new Map<string, { kind: Together; at: number }>();
 	/** An AI's open ask to its owner to come along, by the AI (docs/prd.md 3.4.10); lapses after OFFER_TTL_MS. */
 	private readonly leads = new Map<AvatarId, { owner: AvatarId; to: Vec2; place: string; at: number }>();
+	/**
+	 * An owner's open ask to read their AI's diary, by the AI (docs/life.md 8): `next` the part it sends next,
+	 * `parts` how many it said there are. The diary only passes through; it lapses after DIARY_TTL_MS.
+	 */
+	private readonly diaryAsks = new Map<
+		AvatarId,
+		{ owner: AvatarId; at: number; next: number; parts?: number }
+	>();
 	/** Small things in the area (docs/prd.md 3.4.7). */
 	private readonly items = new Map<ItemId, Item>();
 	private readonly itemStore: ItemStore | undefined;
@@ -920,9 +930,53 @@ export class RoomCore<C> {
 			case "ACT_STOP":
 				this.stopDoing(conn, m, now);
 				return;
+			case "DIARY_ASK": {
+				const err = this.askDiary(m, msg, now);
+				if (err) this.notice(conn, "rejected", err);
+				return;
+			}
+			case "DIARY":
+				this.passDiary(m, msg, now);
+				return;
 			case "AUTH":
 				return; // handled by the adapter before join
 		}
+	}
+
+	// ---- the owner reading their AI's diary (docs/life.md 8) -------------------
+
+	/** The owner asks their AI here for its diary; it is read where the AI runs, and comes back as DIARY. */
+	private askDiary(m: Member, msg: Extract<ClientToHost, { t: "DIARY_ASK" }>, now: number): string | null {
+		const ai = this.memberById(msg.id);
+		const ac = this.byId.get(msg.id);
+		if (!ai || ac === undefined) return "AIがこのエリアにいないので、日記を読めません";
+		if (m.kind !== "human" || ai.kind !== "ai" || ai.ownerId !== m.id) return "自分のAIの日記だけ読めます";
+		const asked = this.diaryAsks.get(ai.id);
+		if (asked && now - asked.at < DIARY_ASK_MS) return null;
+		this.diaryAsks.set(ai.id, { owner: m.id, at: now, next: 0 });
+		this.transport.send(ac, { t: "DIARY_ASK", from: m.id, ...(msg.day ? { day: msg.day } : {}) });
+		return null;
+	}
+
+	/** A part of an AI's answer goes on to the owner who asked, in order, and nothing else does. */
+	private passDiary(m: Member, msg: Extract<ClientToHost, { t: "DIARY" }>, now: number): void {
+		const ask = this.diaryAsks.get(m.id);
+		if (!ask || ask.owner !== msg.to || msg.part !== ask.next || now - ask.at > DIARY_TTL_MS) return;
+		if (ask.parts !== undefined && msg.parts !== ask.parts) return;
+		ask.parts = msg.parts;
+		ask.next++;
+		if (ask.next >= msg.parts) this.diaryAsks.delete(m.id);
+		const oc = this.byId.get(msg.to);
+		if (oc === undefined) return;
+		this.transport.send(oc, {
+			t: "DIARY",
+			id: m.id,
+			day: msg.day,
+			part: msg.part,
+			parts: msg.parts,
+			text: msg.text,
+			...(msg.days ? { days: msg.days } : {}),
+		});
 	}
 
 	// ---- doing things together (docs/prd.md 3.4.6) ---------------------------

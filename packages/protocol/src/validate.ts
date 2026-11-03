@@ -11,6 +11,9 @@ import {
 	BUILD_OFFSET_MAX,
 	BUILD_SCALE_MAX,
 	BUILD_SCALE_MIN,
+	DIARY_DAYS_MAX,
+	DIARY_PART_MAX,
+	DIARY_PARTS_MAX,
 	FLY_ALT_MAX,
 	FLY_ALT_MIN,
 	FLY_RUN_SPEED,
@@ -62,6 +65,9 @@ const REF_RE = /^[A-Za-z0-9_-]{1,32}$/;
 const LANDMARK_RE = /^[A-Za-z0-9_-]{1,32}$/;
 const AREA_RE = /^[A-Za-z0-9_-]{1,32}$/;
 const ACTIVITY_RE = /^[A-Za-z0-9_-]{1,32}$/;
+/** A diary's day: a JST date. DIARY_ASK may also ask for "life", the long-term memory. */
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const isDiaryDay = (v: unknown): v is string => typeof v === "string" && (DAY_RE.test(v) || v === "life");
 
 /**
  * Going through a portal, a page closes its connection with this reason (docs/prd.md 3.8.2): the area it goes
@@ -113,6 +119,17 @@ export function sanitizeText(s: string): string {
 		out += ch;
 	}
 	return out.trim();
+}
+
+/** Like sanitizeText for a page of a diary: line breaks and tabs are kept, nothing is trimmed. */
+export function sanitizeDiary(s: string): string {
+	let out = "";
+	for (const ch of s) {
+		const c = ch.codePointAt(0) ?? 0;
+		if (c === 0x0a || c === 0x09) out += ch;
+		else if (!(c < 0x20 || (c >= 0x7f && c < 0xa0) || c === 0x2028 || c === 0x2029)) out += ch;
+	}
+	return out;
 }
 
 /** Length in user-perceived characters (code points), as the limits in the design doc mean. */
@@ -259,6 +276,34 @@ export function parseClientMessage(raw: string | ArrayBuffer): Parsed<ClientToHo
 			return { ok: true, msg: { t: "ACT", activity: v.activity } };
 		case "ACT_STOP":
 			return { ok: true, msg: { t: "ACT_STOP" } };
+		case "DIARY_ASK": {
+			if (!isAvatarId(v.id)) return fail("bad id");
+			if (v.day !== undefined && !isDiaryDay(v.day)) return fail("bad day");
+			const msg: ClientToHost = { t: "DIARY_ASK", id: v.id };
+			if (v.day !== undefined) msg.day = v.day;
+			return { ok: true, msg };
+		}
+		case "DIARY": {
+			if (!isAvatarId(v.to)) return fail("bad to");
+			if (v.day !== null && !isDiaryDay(v.day)) return fail("bad day");
+			const parts = v.parts;
+			const part = v.part;
+			if (typeof parts !== "number" || !Number.isInteger(parts) || parts < 1 || parts > DIARY_PARTS_MAX)
+				return fail("bad parts");
+			if (typeof part !== "number" || !Number.isInteger(part) || part < 0 || part >= parts)
+				return fail("bad part");
+			if (typeof v.text !== "string") return fail("bad text");
+			const text = sanitizeDiary(v.text);
+			if (textLength(text) > DIARY_PART_MAX) return fail("bad text length");
+			const msg: ClientToHost = { t: "DIARY", to: v.to, day: v.day as string | null, part, parts, text };
+			if (v.days !== undefined) {
+				const days = v.days;
+				if (!Array.isArray(days) || days.length > DIARY_DAYS_MAX) return fail("bad days");
+				if (!days.every((d) => typeof d === "string" && DAY_RE.test(d))) return fail("bad days");
+				msg.days = days as string[];
+			}
+			return { ok: true, msg };
+		}
 		case "UNBUILD": {
 			if (!isBuildId(v.id)) return fail("bad id");
 			if (v.ref !== undefined && !(typeof v.ref === "string" && REF_RE.test(v.ref))) return fail("bad ref");

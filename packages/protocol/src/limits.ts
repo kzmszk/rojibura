@@ -102,6 +102,13 @@ export const LEAD_INTERVAL_MS = 60_000; // one ask per AI this often
 export const LEAD_PLACE_MAX = 24;
 export const LEAD_TEXT_MAX = 60;
 
+// the owner reading their AI's diary (docs/life.md 8): it is read where the AI runs, and the host passes it on
+export const DIARY_PART_MAX = 1500; // characters of one DIARY message
+export const DIARY_PARTS_MAX = 10; // DIARY messages to one ask; a longer day is sent from its end
+export const DIARY_DAYS_MAX = 60; // the latest days with a diary, listed with it
+export const DIARY_ASK_MS = 1000; // one ask per owner this often
+export const DIARY_TTL_MS = 15_000; // the AI's answer comes within this
+
 // small things (docs/prd.md 3.4.7)
 export const ITEM_REACH = 1.6; // m: how close a thing must be to pick it up
 export const THROW_RANGE = 6; // m
