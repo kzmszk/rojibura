@@ -3,6 +3,7 @@
 import {
 	type Activity,
 	CITY_DAY_MS,
+	COMPANY_MOOD_MS,
 	EARN_MS,
 	type HostToClient,
 	type LifeState,
@@ -365,6 +366,58 @@ describe("an AI's life in the room", () => {
 		const [id, life] = saved.at(-1) ?? [];
 		expect(id).toBe("a_mina");
 		expect(life?.fitness).toBeCloseTo(50 + 2.5, 1);
+	});
+});
+
+describe("walking with its owner (docs/life.md 2)", () => {
+	test("beside its owner, an AI's mood goes up one a minute; not on its own, and it is kept when it leaves", () => {
+		const { room, saved, advance, now } = setup();
+		const c = conn("mina");
+		const owner = conn("kazu");
+		room.join(owner, human());
+		room.join(c, ai({ life: { ...newLife(SEVEN), mood: 0 } }));
+		const mood = () => of(owner, "LIFE").at(-1)?.life.mood;
+		room.handle(owner, { t: "COMPANION", on: true });
+		advance(COMPANY_MOOD_MS * 3 + 1000);
+		room.sweep(() => now());
+		expect(mood()).toBe(3);
+		expect(of(c, "LIFE").at(-1)?.life.mood).toBe(3);
+		// what is left over counts with the next minute
+		advance(COMPANY_MOOD_MS - 1000);
+		room.sweep(() => now());
+		expect(mood()).toBe(4);
+		// on its own again: no more
+		room.handle(owner, { t: "COMPANION", on: false });
+		advance(COMPANY_MOOD_MS * 5);
+		room.sweep(() => now());
+		expect(mood()).toBe(4);
+		room.leave(c, "quit");
+		expect(saved.at(-1)?.[1].mood).toBe(4);
+	});
+
+	test("coming in to an owner already walking with company, it counts from then", () => {
+		const { room, advance, now } = setup();
+		const c = conn("mina");
+		const owner = conn("kazu");
+		room.join(owner, human());
+		room.handle(owner, { t: "COMPANION", on: true });
+		advance(COMPANY_MOOD_MS * 10);
+		room.join(c, ai({ life: { ...newLife(now()), mood: 0 } }));
+		advance(COMPANY_MOOD_MS + 1000);
+		room.sweep(() => now());
+		expect(of(owner, "LIFE").at(-1)?.life.mood).toBe(1);
+	});
+
+	test("not past 100", () => {
+		const { room, advance, now } = setup();
+		const c = conn("mina");
+		const owner = conn("kazu");
+		room.join(owner, human());
+		room.join(c, ai({ life: { ...newLife(SEVEN), mood: 99.5 } }));
+		room.handle(owner, { t: "COMPANION", on: true });
+		advance(COMPANY_MOOD_MS * 3);
+		room.sweep(() => now());
+		expect(of(owner, "LIFE").at(-1)?.life.mood).toBe(100);
 	});
 });
 

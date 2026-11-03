@@ -34,6 +34,7 @@ import {
 	type ClientToHost,
 	COMPANION_FREE,
 	COMPANION_FREE_STEP,
+	COMPANY_MOOD_MS,
 	CONTEXT_AVATAR_RADIUS,
 	CONTEXT_LANDMARK_RADIUS,
 	CONTEXT_MAX_ITEMS,
@@ -103,6 +104,7 @@ import {
 	type Vec2,
 	WALK_SPEED,
 	WARP_INTERVAL_MS,
+	withCompany,
 } from "@rojibura/protocol";
 import { PRODUCTION_RULES, type RoomRules } from "./rules.ts";
 
@@ -257,6 +259,8 @@ export interface Member extends JoinInfo {
 	lead?: { to: Vec2; place: string; until: number };
 	/** AIs: when it last asked its owner to come along (one ask per LEAD_INTERVAL_MS). */
 	leadAskedAt?: number;
+	/** AIs walking with their owner: host time its mood was last raised for it (docs/life.md 2). */
+	companyAt?: number;
 	/** What it is doing now (docs/life.md 3). */
 	doing?: Doing;
 	/** Working or studying in a zone since host time `since`; `paid` coins of it are in the wallet already. */
@@ -563,6 +567,11 @@ export class RoomCore<C> {
 			const owner = this.memberById(member.ownerId);
 			if (owner?.companion) {
 				this.transport.send(conn, { t: "COMPANY", owner: owner.id, on: true });
+				// its mood goes up from now on
+				if (member.life) {
+					member.companyAt = now;
+					this.transport.persist(conn, member);
+				}
 				this.accompany(owner, now);
 			}
 		}
@@ -1190,9 +1199,15 @@ export class RoomCore<C> {
 
 	/** Tells the owner's AIs here that they walk with the owner now, or no longer. */
 	private tellCompany(owner: Member, on: boolean): void {
+		const now = this.clock();
 		for (const [conn, ai] of this.members)
-			if (ai.kind === "ai" && ai.ownerId === owner.id)
+			if (ai.kind === "ai" && ai.ownerId === owner.id) {
 				this.transport.send(conn, { t: "COMPANY", owner: owner.id, on });
+				// its mood goes up from now on (or no more)
+				if (on && ai.life) ai.companyAt = now;
+				else delete ai.companyAt;
+				this.transport.persist(conn, ai);
+			}
 	}
 
 	// ---- an AI taking its owner somewhere (docs/prd.md 3.4.10) -----------------
@@ -1470,6 +1485,7 @@ export class RoomCore<C> {
 				this.transport.send(conn, { t: "DAY", review, life });
 				this.sendLife(m, false);
 			}
+			if (m.life) this.companyMood(conn, m, now);
 			// too hungry to go on working or studying
 			if (m.job && m.life) {
 				const from = m.job.settled ?? m.job.since;
@@ -1480,6 +1496,23 @@ export class RoomCore<C> {
 				}
 			}
 		}
+	}
+
+	/** Walking with its owner here, an AI feels better: COMPANY_MOOD for each COMPANY_MOOD_MS beside them. */
+	private companyMood(conn: C, m: Member, now: number): void {
+		if (!m.life || !this.accompanying(m)) {
+			if (m.companyAt === undefined) return;
+			delete m.companyAt;
+			this.transport.persist(conn, m);
+			return;
+		}
+		const since = m.companyAt ?? now;
+		const life = withCompany(m.life, now - since);
+		m.companyAt = since + Math.floor((now - since) / COMPANY_MOOD_MS) * COMPANY_MOOD_MS;
+		this.transport.persist(conn, m);
+		if (life === m.life || life.mood === m.life.mood) return;
+		m.life = life;
+		this.sendLife(m);
 	}
 
 	/** Tells an AI (`self`) and its owner here what its life is now. */
