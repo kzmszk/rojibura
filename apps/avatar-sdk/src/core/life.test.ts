@@ -9,6 +9,7 @@ import {
 	type HostToClient,
 	newLife,
 	realMs,
+	type Shop,
 } from "@rojibura/protocol";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { dayOf, diaryMessages, diaryPage, type Journal, jstDate, searchJournal, tail } from "./journal.ts";
@@ -70,7 +71,10 @@ const ACTIVITIES: Activity[] = [
 
 type Call = [tool: string, args: Record<string, unknown>];
 
-function setup(turns: Call[][], o: { journal?: MemJournal; at?: [number, number]; now?: number } = {}) {
+function setup(
+	turns: Call[][],
+	o: { journal?: MemJournal; at?: [number, number]; now?: number; shops?: Shop[] } = {},
+) {
 	const prompts: string[] = [];
 	const results: string[] = [];
 	const ref: { r?: Resident } = {};
@@ -104,6 +108,7 @@ function setup(turns: Call[][], o: { journal?: MemJournal; at?: [number, number]
 		send: (m) => sent.push(m),
 		journal,
 		activities: ACTIVITIES,
+		...(o.shops ? { shops: o.shops } : {}),
 		// notes on people and on itself (its plan for the day), as the CLI gives it
 		memory: { recall: async () => [], remember: async () => {}, all: async () => ({}) },
 		tickMs: [1e9, 1e9],
@@ -184,6 +189,40 @@ describe("the diary", () => {
 		expect(diaryMessages("h_saki", { day: null, text: "", days: [] })).toEqual([
 			{ t: "DIARY", to: "h_saki", day: null, part: 0, parts: 1, text: "", days: [] },
 		]);
+	});
+
+	test("walking with its owner, buy asks them along to the shop, and it buys there", async () => {
+		const shops: Shop[] = [
+			{
+				id: "bakery",
+				name: "パン屋こむぎ",
+				currency: "銅貨",
+				counter: [20, 0],
+				goods: [{ id: "baguette", name: "バゲット", price: 4, color: "#c90", food: true }],
+			},
+		];
+		const buy = ["buy", { shop: "bakery", goods: "baguette" }] as Call;
+		const { resident, sent, results } = setup([[buy], [buy]], { shops });
+		resident.handle({ t: "COMPANY", owner: "h_saki", on: true });
+		await resident.turnNow();
+		expect(results[0]).toMatch(/パン屋こむぎへ寄るか聞いた/);
+		expect(sent.filter((m) => m.t === "LEAD")).toEqual([
+			{
+				t: "LEAD",
+				to: [20, 0],
+				place: "パン屋こむぎ",
+				text: "バゲットを買いに、パン屋こむぎに寄ってもいい？",
+			},
+		]);
+		expect(sent.some((m) => m.t === "BUY")).toBe(false);
+		resident.handle({ t: "LEAD_ANSWERED", by: "h_saki", accept: true, place: "パン屋こむぎ", at: SEVEN });
+		resident.handle({ t: "MOVED", id: "a_haru", move: { kind: "idle", pos: [19, 0], at: SEVEN } });
+		await vi.waitFor(() => expect(sent).toContainEqual({ t: "BUY", shop: "bakery", goods: "baguette" }), {
+			timeout: 3000,
+		});
+		// at the counter already, it just buys
+		await resident.turnNow();
+		expect(results[1]).toMatch(/バゲットを買った/);
 	});
 
 	test("asked by the host, a resident sends its owner the page", async () => {

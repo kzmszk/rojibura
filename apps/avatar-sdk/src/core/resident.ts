@@ -32,6 +32,7 @@ import {
 	type JobZone,
 	LEAD_MIN_DISTANCE,
 	LEAD_PLACE_MAX,
+	LEAD_TEXT_MAX,
 	MAX_SAY_LENGTH,
 	MOTIONS,
 	type Motion,
@@ -212,6 +213,8 @@ export class Resident {
 	private place = { name: "", since: 0 };
 	/** When it last asked its owner along somewhere (Date.now; docs/prd.md 3.4.10). */
 	private leadAskedAt = 0;
+	/** Walking with its owner: what it asked them along to a shop to buy (`place` as asked), until answered. */
+	private leadBuy: { place: string; shop: string; goods: string } | null = null;
 	/** The last rehearsal in the mirror (docs/prd.md 3.4.11). */
 	private practice: Practice | null = null;
 	/** A body script waiting for the resident to arrive where it does it. */
@@ -336,7 +339,7 @@ export class Resident {
 					const owner = this.nameOf(msg.owner);
 					this.push(
 						msg.on
-							? `オーナーの${owner}（id ${msg.owner}）が、いっしょに歩こうと言った。しばらく${owner}のそばを歩く。どこかへ行きたくなったら walk_to でランドマークを選ぶと、${owner}をそこへ誘える。`
+							? `オーナーの${owner}（id ${msg.owner}）が、いっしょに歩こうと言った。しばらく${owner}のそばを歩く。どこかへ行きたくなったら walk_to でランドマークを選ぶと、${owner}をそこへ誘える。おなかがすいたら buy で、${owner}をお店に誘える（カウンターのそばなら、そのまま買える）。`
 							: `${owner}といっしょに歩くのは終わった。また好きに歩ける。`,
 					);
 					return;
@@ -404,6 +407,14 @@ export class Resident {
 			case "LEAD_ANSWERED": {
 				const owner = this.nameOf(msg.by);
 				const place = clean(msg.place, 24);
+				// it asked them along to a shop: there, it buys what it went for
+				const buy = this.leadBuy?.place === msg.place ? this.leadBuy : null;
+				this.leadBuy = null;
+				if (buy && msg.accept)
+					setTimeout(
+						() => this.buyThere(buy.shop, buy.goods),
+						Math.max(0, (msg.at ?? 0) - this.world.hostNow()) + 1000,
+					);
 				this.push(
 					msg.accept
 						? `${owner}が「ついていく」と答えた。${owner}を連れて${place}へ歩いている。`
@@ -792,15 +803,50 @@ export class Resident {
 			);
 		const here = this.world.me ? this.world.positionOf(this.world.me) : null;
 		if (!here) return "まだ街にいない。";
-		if (this.world.company) return "いまはオーナーのそばを歩いている。買い物はオーナーと別れてから。";
 		const name = clean(goods.name, 24);
 		if (dist(here, shop.counter) <= SHOP_REACH - 0.5) {
 			this.o.send({ t: "BUY", shop: shop.id, goods: goods.id });
 			return `${name}を買った（${goods.price}銅貨）。`;
 		}
+		if (this.world.company) return this.askToShop(shop, goods, here);
 		const went = this.walkLegs(shop.counter, () => this.o.send({ t: "BUY", shop: shop.id, goods: goods.id }));
 		if (!went) throw new Error("お店のカウンターまで歩いて行けない。");
 		return `${clean(shop.name, 24)}のカウンターへ歩いて、着いたら${name}を買う（${goods.price}銅貨）。`;
+	}
+
+	/**
+	 * Walking with its owner the host moves it, so it asks them along to the shop (LEAD, docs/prd.md 3.4.10);
+	 * if they come, it buys there.
+	 */
+	private askToShop(shop: Shop, goods: Shop["goods"][number], here: Vec2): string {
+		const owner = this.nameOf(this.world.company ?? "");
+		const shopName = clean(shop.name, 24);
+		const name = clean(goods.name, 24);
+		if (dist(here, shop.counter) < LEAD_MIN_DISTANCE)
+			return `${shopName}はすぐそこ。${owner}がカウンターのそばまで行ったら買える。`;
+		if (Date.now() - this.leadAskedAt < LEAD_AGAIN_MS)
+			return `さっき${owner}を誘ったばかり。しばらく${owner}のそばにいる。`;
+		this.leadAskedAt = Date.now();
+		const place = [...shopName].slice(0, LEAD_PLACE_MAX).join("");
+		this.leadBuy = { place, shop: shop.id, goods: goods.id };
+		const text = [...`${name}を買いに、${shopName}に寄ってもいい？`].slice(0, LEAD_TEXT_MAX).join("");
+		this.o.send({ t: "LEAD", to: shop.counter, place, text });
+		this.o.logger.info(`asking ${owner} along to ${place} for ${goods.name}`);
+		return `${owner}に、${shopName}へ寄るか聞いた。いいと言われたら、着いたところで${name}を買う。`;
+	}
+
+	/** Taken its owner to the shop: buys what it went for, if it is at the counter. */
+	private buyThere(shopId: string, goodsId: string): void {
+		if (this.stopped) return;
+		const shop = this.o.shops?.find((s) => s.id === shopId);
+		const here = this.world.me ? this.world.positionOf(this.world.me) : null;
+		if (!shop || !here) return;
+		if (dist(here, shop.counter) > SHOP_REACH - 0.5) {
+			this.push(`${clean(shop.name, 24)}のカウンターまで届かなかった。`);
+			return;
+		}
+		this.o.send({ t: "BUY", shop: shop.id, goods: goodsId });
+		this.o.logger.info(`buying ${goodsId} at ${shop.name}`);
 	}
 
 	/** The work tool: works or studies where it stands (in a work or study place), or stops. */
@@ -911,6 +957,7 @@ export class Resident {
 				return `さっき${owner}を誘ったばかり。しばらく${owner}のそばにいる。`;
 			if (dist(here, landmark.pos) < LEAD_MIN_DISTANCE) return `${clean(landmark.name, 24)}はすぐそこ。`;
 			this.leadAskedAt = Date.now();
+			this.leadBuy = null;
 			const place = [...clean(landmark.name, 24)].slice(0, LEAD_PLACE_MAX).join("");
 			this.o.send({ t: "LEAD", to: landmark.pos, place });
 			this.o.logger.info(`asking ${owner} along to ${place}`);
