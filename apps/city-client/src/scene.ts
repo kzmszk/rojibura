@@ -46,7 +46,7 @@ export class CityScene {
 	private readonly materials = new Map<string, THREE.Material>();
 	private shadowHalf = SHADOW_HALF;
 	/** The fuller look (AreaView.rich): tone mapping, the sky's light, ambient occlusion. */
-	private rich: RichLook | null = null;
+	rich: RichLook | null = null;
 	private sunOffset = SUN_OFFSET;
 
 	constructor(root: HTMLElement) {

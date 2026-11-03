@@ -1,13 +1,17 @@
 // The fuller look an area can ask for (AreaView.rich, はじまりの街, issue 42), after the VENEZIA demo: filmic tone
 // mapping, the sky as the light that fills the shadows and as what shiny things reflect (a gradient sky with a
-// sun, made into an environment map), and ambient occlusion that darkens corners, reveals and the ground along
-// the walls (GTAO, not on phones and tablets).
+// sun, made into an environment map), ambient occlusion that darkens corners, reveals and the ground along the walls
+// (GTAO, not on phones and tablets), and an exposure that opens up where the view is in shade (exposure.ts).
 
 import * as THREE from "three";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
 import { GTAOPass } from "three/examples/jsm/postprocessing/GTAOPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
+import { adapt, exposureBoost, MeterPass } from "./exposure.ts";
+
+/** The exposure in good light; the meter lifts it from there in shade. */
+const EXPOSURE = 0.95;
 
 const SKY_VERTEX = /* glsl */ `
 varying vec3 vDir;
@@ -43,12 +47,16 @@ export class RichLook {
 	private readonly sky = new THREE.Scene();
 	private readonly skyMat: THREE.ShaderMaterial;
 	private env: THREE.WebGLRenderTarget | null = null;
+	readonly meter = new MeterPass();
+	/** How much the exposure is lifted now (≥ 1), eased toward what the meter asks for. */
+	boost = 1;
+	private last = performance.now();
 
 	constructor(renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.Camera, ao: boolean) {
 		this.renderer = renderer;
 		this.scene = scene;
 		renderer.toneMapping = THREE.ACESFilmicToneMapping;
-		renderer.toneMappingExposure = 0.95;
+		renderer.toneMappingExposure = EXPOSURE;
 		this.pmrem = new THREE.PMREMGenerator(renderer);
 		this.skyMat = new THREE.ShaderMaterial({
 			vertexShader: SKY_VERTEX,
@@ -74,6 +82,7 @@ export class RichLook {
 			this.ao.blendIntensity = 1.0;
 			this.composer.addPass(this.ao);
 		}
+		this.composer.addPass(this.meter);
 		this.composer.addPass(new OutputPass());
 	}
 
@@ -106,6 +115,11 @@ export class RichLook {
 	}
 
 	render(): void {
+		const now = performance.now();
+		const dt = Math.min(0.25, (now - this.last) / 1000);
+		this.last = now;
+		this.boost = adapt(this.boost, exposureBoost(this.meter.logLum, EXPOSURE), dt);
+		this.renderer.toneMappingExposure = EXPOSURE * this.boost;
 		this.composer.render();
 	}
 
