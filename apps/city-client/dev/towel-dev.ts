@@ -2,6 +2,8 @@
 // standing, walking, sitting, lying or in a gesture, seen from any side. Query options:
 //   who=fumiriya,shibu,…  bath=0|1|skin (skin: clothes off, swimsuit hidden)  pose=stand|walk|run|sit|lie|<gesture>
 //   t=seconds into the motion  yaw=degrees the avatars are turned (0 faces the camera)
+//   suit=one-piece,bikini,…  torso=0,1,… (per avatar, in `who` order: the swimsuit, and whether a model's
+//   trunk made from another body is used; to compare looks of the same model side by side)
 //   cam=full|close|low|top  toggles=n (bathing switched on and off n times first)
 // When the picture is ready, document.body.dataset.done is set (for a headless screenshot).
 
@@ -17,6 +19,8 @@ const t = Number(q.get("t") ?? 2.5);
 const yaw = (Number(q.get("yaw") ?? 0) * Math.PI) / 180;
 const cam = q.get("cam") ?? "full";
 const toggles = Number(q.get("toggles") ?? 0);
+const suits = (q.get("suit") ?? "").split(",");
+const torsos = (q.get("torso") ?? "").split(",");
 const GAP = pose === "lie" ? 1.0 : 0.85;
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
@@ -69,6 +73,14 @@ const views = who.map(
 );
 for (const v of views) scene.add(v.root);
 await Promise.all(views.map((v) => v.ready));
+views.forEach((v, i) => {
+	const suit = suits[i];
+	const torso = torsos[i];
+	v.setBathStyle({
+		...(suit === "one-piece" || suit === "bikini" || suit === "trunks" ? { suit } : {}),
+		...(torso === "0" ? { torso: false } : {}),
+	});
+});
 for (const v of views) {
 	const t0 = performance.now();
 	for (let k = 0; k < toggles; k++) v.setBathing(k % 2 === 0);

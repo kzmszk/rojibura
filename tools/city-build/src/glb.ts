@@ -60,7 +60,8 @@ const GLB_MAGIC = 0x46546c67; // "glTF"
 const CHUNK_JSON = 0x4e4f534a; // "JSON"
 const CHUNK_BIN = 0x004e4942; // "BIN\0"
 
-export function parseGlb(data: Uint8Array): Glb {
+/** `allowed`: required extensions the caller can do without (it reads only geometry, say). */
+export function parseGlb(data: Uint8Array, allowed: string[] = []): Glb {
 	const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
 	if (data.byteLength < 20 || view.getUint32(0, true) !== GLB_MAGIC) throw new Error("not a glb file");
 	const version = view.getUint32(4, true);
@@ -77,8 +78,9 @@ export function parseGlb(data: Uint8Array): Glb {
 		offset += 8 + chunkLength;
 	}
 	if (!json) throw new Error("glb has no JSON chunk");
-	if (json.extensionsRequired?.length) {
-		throw new Error(`unsupported required glTF extensions: ${json.extensionsRequired.join(", ")}`);
+	const missing = (json.extensionsRequired ?? []).filter((e) => !allowed.includes(e));
+	if (missing.length) {
+		throw new Error(`unsupported required glTF extensions: ${missing.join(", ")}`);
 	}
 	return { json, bin };
 }

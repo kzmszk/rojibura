@@ -46,11 +46,40 @@ export interface BathModel {
 	 * skin's colour and the feet stay as they are (sandals).
 	 */
 	vroid: boolean;
-	/** Which swimsuit: a woman's one-piece, or a man's trunks (a look with no sex wears the one-piece). */
+	/** Which swimsuit: a woman's one-piece or bikini, or a man's trunks. */
 	suit: Suit;
+	/** The trunk made for it from another body, where VRoid deleted its skin (tools donor-body.ts). */
+	torso?: Torso;
 }
 
-export type Suit = "one-piece" | "trunks";
+export type Suit = "one-piece" | "bikini" | "trunks";
+
+/**
+ * A trunk for a model whose skin VRoid deleted under its clothes, made from another VRoid model's whole body
+ * moved onto its skeleton (tools/city-build/src/donor-body.ts): bind-space positions and triangles.
+ */
+export interface Torso {
+	pos: number[];
+	index: number[];
+}
+
+/** Models that have such a trunk (assets/avatars/<name>.torso.json). */
+const TORSOS = new Set(["shibu"]);
+
+/** Models that bathe in another swimsuit than their sex's (Shibu in a bikini: the user chose it, issue 46). */
+const SUITS: Record<string, Suit> = { shibu: "bikini" };
+
+/** The swimsuit a model wears: its own if it has one, else trunks for men, a one-piece for others. */
+export function suitFor(url: string, sex: string | undefined): Suit {
+	const name = url.slice(url.lastIndexOf("/") + 1).replace(/\.(vrm|glb)$/, "");
+	return SUITS[name] ?? (sex === "m" ? "trunks" : "one-piece");
+}
+
+/** Where a model's trunk from another body is, or null if it has none. */
+export function torsoUrl(url: string): string | null {
+	const name = url.slice(url.lastIndexOf("/") + 1).replace(/\.vrm$/, "");
+	return TORSOS.has(name) ? url.replace(/\.vrm$/, ".torso.json") : null;
+}
 
 /** Bone names of a glTF avatar rigged like Blender's Rigify (Saki), by humanoid name. */
 const RIGIFY: Record<string, string> = {
@@ -213,11 +242,11 @@ export class Bath {
 			if (body === undefined) body = measureBody(parts, this.model.bones);
 			return body;
 		};
-		const key = `${this.model.key} ${this.model.suit}`;
+		const key = `${this.model.key} ${this.model.suit}${this.model.torso ? " torso" : ""}`;
 		let plan = plans.get(key);
 		if (plan === undefined) {
 			const b = measured();
-			plan = b ? planFor(b, parts, this.model.suit) : null;
+			plan = b ? planFor(b, parts, this.model.suit, this.model.torso ?? null) : null;
 			plans.set(key, plan);
 		}
 		if (!plan) return;
@@ -365,32 +394,100 @@ function geometryOf(d: MeshData): THREE.BufferGeometry {
 
 // ---- the plan: new skin and the swimsuit, at rest ----
 
-function planFor(body: Body, parts: Part[], kind: Suit): Plan | null {
+function planFor(body: Body, parts: Part[], kind: Suit, torso: Torso | null): Plan | null {
 	const inside = outline(body, kind);
 	if (!inside) return null;
-	const fill = parts.some((p) => p.kind === "cloth") ? skinFill(body, kind === "one-piece") : null;
+	const fill = parts.some((p) => p.kind === "cloth") ? skinFill(body, kind !== "trunks", torso) : null;
 	const main = mainOf(parts.filter((p) => p.kind === "skin").map((p) => p.mesh));
 	const suit = suitOf(body, main, fill, inside);
 	return suit ? { suit, fill, inside, fillUV: false } : null;
 }
 
-/** Skin made again where VRoid deleted it under clothes (bath-body.ts), or null if nothing is missing. */
-function skinFill(body: Body, bust: boolean): MeshData | null {
+/**
+ * Skin made again where VRoid deleted it under clothes, or null if nothing is missing: the model's trunk made
+ * from another body where it has one (its breasts, collarbones and waist as a body has them), and a smooth body
+ * modelled from its bones and skin (bath-body.ts) for whatever is still missing (the upper arms).
+ */
+function skinFill(body: Body, bust: boolean, torso: Torso | null): MeshData | null {
 	const s = body.size;
-	const shape = bodyShape(body, bust);
-	if (!shape) return null;
-	// only where clothes were: the skin elsewhere is whole
-	const box = new THREE.Box3();
-	const p = new THREE.Vector3();
-	const c = body.cloth;
-	for (let i = 0; i < c.count; i++) box.expandByPoint(p.fromArray(c.pos, i * 3));
-	if (box.isEmpty()) return null;
-	box.expandByScalar(0.03 * s);
-	box.min.y = Math.max(box.min.y, body.floor + 0.02 * s);
-	const surf = surfaceOf(shape, box, 0.011 * s);
+	const parts: Bare[] = [];
+	let covered = body.skinTris;
+	if (torso) {
+		const part = bareOf(surfaceFrom(torso), new TriangleGrid(covered, 0.03 * s), s);
+		if (part) {
+			parts.push(part);
+			covered = withTriangles(covered, part);
+		}
+	}
+	const shape = bodyShape(body, bust && !torso);
+	if (shape) {
+		// only where clothes were: the skin elsewhere is whole
+		const box = new THREE.Box3();
+		const p = new THREE.Vector3();
+		const c = body.cloth;
+		for (let i = 0; i < c.count; i++) box.expandByPoint(p.fromArray(c.pos, i * 3));
+		if (!box.isEmpty()) {
+			box.expandByScalar(0.03 * s);
+			box.min.y = Math.max(box.min.y, body.floor + 0.02 * s);
+			const part = bareOf(surfaceOf(shape, box, 0.011 * s), new TriangleGrid(covered, 0.03 * s), s);
+			if (part) parts.push(part);
+		}
+	}
+	if (parts.length === 0) return null;
+	const pos: number[] = [];
+	const nrm: number[] = [];
+	const idx: number[] = [];
+	for (const part of parts) {
+		const base = pos.length / 3;
+		pos.push(...part.pos);
+		nrm.push(...part.nrm);
+		for (const i of part.index) idx.push(base + i);
+	}
+	const fpos = new Float32Array(pos);
+	const index = new Uint32Array(idx);
+	const sources = mergeClouds([
+		{ cloud: body.skin, keep: (i) => !body.head.has(body.skin.main[i] as number) },
+		{ cloud: body.cloth, keep: () => true },
+	]);
+	const w = weightsFor(fpos, index, sources, 6, 3);
+	return {
+		pos: fpos,
+		nrm: new Float32Array(nrm),
+		uv: new Float32Array((fpos.length / 3) * 2),
+		joints: w.joints,
+		weights: w.weights,
+		index,
+	};
+}
+
+/** A piece of skin made again: positions, normals, triangles. */
+interface Bare {
+	pos: number[];
+	nrm: number[];
+	index: number[];
+}
+
+/** `tris` (9 floats each) and the piece's triangles too. */
+function withTriangles(tris: Float32Array, part: Bare): Float32Array {
+	const out = new Float32Array(tris.length + part.index.length * 3);
+	out.set(tris);
+	part.index.forEach((v, k) => {
+		for (let d = 0; d < 3; d++) out[tris.length + k * 3 + d] = part.pos[v * 3 + d] as number;
+	});
+	return out;
+}
+
+/**
+ * The part of `surf` where there is no skin (`grid`: what is there), with rows round it tucked just under the
+ * skin's edge; null if it is all covered.
+ */
+function bareOf(
+	surf: { pos: Float32Array; nrm: Float32Array; index: Uint32Array },
+	grid: TriangleGrid,
+	s: number,
+): Bare | null {
 	const n = surf.pos.length / 3;
 	if (n === 0) return null;
-	const grid = new TriangleGrid(body.skinTris, 0.03 * s);
 	// a vertex where there is no skin: none near it, or the nearest is off to the side (the edge of a hole),
 	// not under it (where the shape bulges out of the skin) nor over it (inside the body)
 	const bare = new Uint8Array(n);
@@ -437,29 +534,51 @@ function skinFill(body: Body, bust: boolean): MeshData | null {
 	const remap = new Int32Array(n).fill(-1);
 	const pos: number[] = [];
 	const nrm: number[] = [];
-	const index = new Uint32Array(tris.length);
-	tris.forEach((v, i) => {
+	const index = tris.map((v) => {
 		if (remap[v] === -1) {
 			remap[v] = pos.length / 3;
 			pos.push(surf.pos[v * 3] as number, surf.pos[v * 3 + 1] as number, surf.pos[v * 3 + 2] as number);
 			nrm.push(surf.nrm[v * 3] as number, surf.nrm[v * 3 + 1] as number, surf.nrm[v * 3 + 2] as number);
 		}
-		index[i] = remap[v] as number;
+		return remap[v] as number;
 	});
-	const fpos = new Float32Array(pos);
-	const sources = mergeClouds([
-		{ cloud: body.skin, keep: (i) => !body.head.has(body.skin.main[i] as number) },
-		{ cloud: body.cloth, keep: () => true },
-	]);
-	const w = weightsFor(fpos, index, sources, 6, 3);
-	return {
-		pos: fpos,
-		nrm: new Float32Array(nrm),
-		uv: new Float32Array((fpos.length / 3) * 2),
-		joints: w.joints,
-		weights: w.weights,
-		index,
+	return { pos, nrm, index };
+}
+
+/** A trunk from another body as a surface, with its normals (area-weighted, from its triangles). */
+function surfaceFrom(torso: Torso): { pos: Float32Array; nrm: Float32Array; index: Uint32Array } {
+	const pos = new Float32Array(torso.pos);
+	const index = new Uint32Array(torso.index);
+	const nrm = new Float32Array(pos.length);
+	const a = new THREE.Vector3();
+	const b = new THREE.Vector3();
+	const c = new THREE.Vector3();
+	for (let t = 0; t + 2 < index.length; t += 3) {
+		const [i, j, k] = [index[t], index[t + 1], index[t + 2]] as [number, number, number];
+		a.fromArray(pos, i * 3);
+		b.fromArray(pos, j * 3).sub(a);
+		c.fromArray(pos, k * 3).sub(a);
+		b.cross(c);
+		for (const v of [i, j, k])
+			for (let d = 0; d < 3; d++) nrm[v * 3 + d] = (nrm[v * 3 + d] as number) + b.getComponent(d);
+	}
+	for (let v = 0; v < pos.length / 3; v++)
+		a.fromArray(nrm, v * 3)
+			.normalize()
+			.toArray(nrm, v * 3);
+	return { pos, nrm, index };
+}
+
+/** Where a VroId model's breasts are at rest (its J_Sec_*_Bust2 bones, left then right), if it has them. */
+function bustOf(body: Body): [THREE.Vector3, THREE.Vector3] | null {
+	const at = (side: "L" | "R") => {
+		const i = body.skeleton.bones.findIndex((b) => b.name.endsWith(`J_Sec_${side}_Bust2`));
+		const inv = body.skeleton.boneInverses[i];
+		return i >= 0 && inv ? new THREE.Vector3().setFromMatrixPosition(inv.clone().invert()) : null;
 	};
+	const l = at("L");
+	const r = at("R");
+	return l && r ? [l, r] : null;
 }
 
 // ---- the swimsuit's outline and its mesh, at rest ----
@@ -503,6 +622,54 @@ function outline(body: Body, kind: Suit): ((p: THREE.Vector3, bone: number) => n
 	}
 	const crotch = hip - 0.1 * s;
 	const high = hip + 0.04 * s;
+	if (kind === "bikini") {
+		const bust = bustOf(body);
+		if (!bust) return null;
+		const [bl, br] = bust;
+		// the cups: round over each breast, from just below it to a little above, a hand's width across
+		const r = 0.068 * s;
+		const yb = (bl.y + br.y) / 2;
+		// the band under them round the back; from each cup's top a string up to the neck, and round it
+		const band = yb - 0.055 * s;
+		const lc = (Math.abs(bl.clone().sub(centre).dot(left)) + Math.abs(br.clone().sub(centre).dot(left))) / 2;
+		const yTop = yb + r * 0.75;
+		const yNeck = neck.y + 0.02 * s;
+		const lNeck = 0.04 * s;
+		const sw = 0.006 * s;
+		const seg = (l: number, y: number) => {
+			// distance in the front view (across, up) to the line from the cup's top to the neck
+			const ax = lc;
+			const ay = yTop;
+			const bx = lNeck;
+			const by = yNeck;
+			const t = Math.max(
+				0,
+				Math.min(1, ((l - ax) * (bx - ax) + (y - ay) * (by - ay)) / ((bx - ax) ** 2 + (by - ay) ** 2)),
+			);
+			return Math.hypot(l - (ax + (bx - ax) * t), y - (ay + (by - ay) * t));
+		};
+		return (p, bone) => {
+			if (out(bone)) return -1;
+			d.subVectors(p, centre);
+			const l = Math.abs(d.dot(left));
+			// the bottom: briefs cut low at the front and high at the sides
+			const cut = crotch + (high - crotch) * smooth(0.15 * legs, 1.9 * legs, l) ** 0.8;
+			const briefs = Math.min(hip + 0.035 * s - p.y, p.y - cut);
+			// the top: the cups (only in front: none through the back), the band, the strings
+			const front = d.dot(body.front) > 0;
+			// (and a little piece joining them in the middle)
+			const gore = Math.min(0.012 * s - l, 0.018 * s - Math.abs(p.y - (yb - 0.01 * s)));
+			const cups = front ? Math.max(r - p.distanceTo(bl), r - p.distanceTo(br), gore) : -1;
+			const under = 0.011 * s - Math.abs(p.y - band);
+			// strings in front (to the neck) and round the neck at its root
+			const strings = Math.max(
+				front ? sw - seg(l, p.y) : -1,
+				Math.min(sw - Math.abs(p.y - yNeck), 0.09 * s - Math.hypot(d.dot(left), d.dot(body.front))),
+			);
+			// (a band only below the cups, joining them at the sides and the back)
+			return Math.max(briefs, cups, Math.min(under, yb - p.y), strings);
+		};
+	}
 	const strap = shoulders * 0.5;
 	const strapW = 0.013 * s;
 	const over = neck.y + 0.06 * s;
@@ -590,12 +757,13 @@ function suitOf(
 	const mid = (a: V, b: V): V => along(a, b, 0.5);
 	/**
 	 * The part of a triangle inside the outline (none, a triangle, or a quad as two). One the outline crosses
-	 * is first cut in four, twice, so the edge follows the outline's curves (the skin's triangles are large).
+	 * is first cut in four, three times, so the edge follows the outline's curves and thin strings show (the
+	 * skin's triangles are large).
 	 */
 	const clip = (tri: V[], depth = 0) => {
 		const [a, b, c] = tri as [V, V, V];
 		const crossed = tri.some((v) => v.f >= 0) && tri.some((v) => v.f < 0);
-		if (crossed && depth < 2) {
+		if (crossed && depth < 3) {
 			const ab = mid(a, b);
 			const bc = mid(b, c);
 			const ca = mid(c, a);
@@ -728,6 +896,11 @@ function paintOver(
 		if (!fpx) continue;
 		for (let i = 0; i < fuv.count; i += 3) sample(samples, fpx, fs.w, fs.h, fuv.getX(i), fuv.getY(i));
 	}
+	// the trunk's own skin: what skin made again there is coloured like (a face is often lighter than a body)
+	const trunk = new Set(
+		[body.bone.spine, body.bone.chest, body.bone.upperChest].filter((b) => b !== undefined),
+	);
+	const trunkSamples: number[] = [];
 	const uvTris: number[] = [];
 	/** Triangles' middles (UV), where plain skin may be. */
 	const middles: number[] = [];
@@ -761,6 +934,7 @@ function paintOver(
 			const main = mainOf(a);
 			if (faces.length === 0 && t % 3 === 0 && (body.arm.has(main) || body.leg.has(main)))
 				sample(samples, px, w, h, uv.getX(a), uv.getY(a));
+			if (trunk.has(main) && t % 3 === 0) sample(trunkSamples, px, w, h, uv.getX(a), uv.getY(a));
 			if (t % 6 === 0)
 				middles.push((uv.getX(a) + uv.getX(b) + uv.getX(c)) / 3, (uv.getY(a) + uv.getY(b) + uv.getY(c)) / 3);
 			corners[0]?.fromArray(at, a * 3);
@@ -779,16 +953,17 @@ function paintOver(
 		skin[i] = isSkin(tone, px[i * 4] as number, px[i * 4 + 1] as number, px[i * 4 + 2] as number) ? 1 : 0;
 		if (!skin[i] && where[i] && (px[i * 4 + 3] as number) >= 8) some = true;
 	}
-	const spot = plainSkin(middles, px, skin, w, h, tone);
+	const body0 = toneOf(trunkSamples) ?? tone;
+	const spot = plainSkin(middles, px, skin, w, h, body0);
 	if (!some) return { ...unchanged, skin: spot };
 	const local = vroid ? 0.6 : 0;
-	const texture = textureFrom(paintSkin(px, w, h, skin, where, tone.rgb, local), w, h, map);
+	const texture = textureFrom(paintSkin(px, w, h, skin, where, body0.rgb, local), w, h, map);
 	// the shade texture (MToon) the same way, by the same pixels of skin
 	let shaded = shade;
 	if (shade === map) shaded = texture;
 	else if (shade && sizeOf(shade).w === w && sizeOf(shade).h === h) {
 		const spx = pixelsOf(shade.image, w, h);
-		shaded = spx ? textureFrom(paintSkin(spx, w, h, skin, where, tone.rgb, local), w, h, shade) : shade;
+		shaded = spx ? textureFrom(paintSkin(spx, w, h, skin, where, body0.rgb, local), w, h, shade) : shade;
 	}
 	return { texture, shade: shaded, skin: spot };
 }

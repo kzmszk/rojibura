@@ -30,7 +30,7 @@ import {
 } from "./moves.ts";
 import { retarget } from "./retarget.ts";
 import type { CityScene } from "./scene.ts";
-import { Bath, rigifyBones, type Suit } from "./swimsuit.ts";
+import { Bath, rigifyBones, type Suit, suitFor, type Torso, torsoUrl } from "./swimsuit.ts";
 
 /** The city's motions on one skeleton, and how fast walk and run cover the ground at normal speed. */
 interface Motions {
@@ -145,6 +145,8 @@ interface VrmFile {
 	textures: Map<number, Promise<unknown>>;
 	/** The motions on this file's bones, made from the first VRM parsed (at rest). */
 	moves: Motions | null;
+	/** The trunk made for its bath from another body (swimsuit.ts), if it has one. */
+	torso: Torso | null;
 }
 
 /**
@@ -154,12 +156,20 @@ interface VrmFile {
 class VrmCache {
 	private readonly files = new Map<string, Promise<VrmFile | null>>();
 
-	async get(url: string): Promise<{ vrm: VRM; moves: Motions } | null> {
+	async get(url: string): Promise<{ vrm: VRM; moves: Motions; torso: Torso | null } | null> {
 		let p = this.files.get(url);
 		if (!p) {
-			p = fetch(url)
-				.then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(`${r.status}`))))
-				.then((data) => ({ data, textures: new Map(), moves: null }))
+			const extra = torsoUrl(url);
+			const torso = extra
+				? fetch(extra)
+						.then((r) => (r.ok ? (r.json() as Promise<Torso>) : null))
+						.catch(() => null)
+				: Promise.resolve(null);
+			p = Promise.all([
+				fetch(url).then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(`${r.status}`)))),
+				torso,
+			])
+				.then(([data, t]) => ({ data, textures: new Map(), moves: null, torso: t }))
 				.catch(() => null);
 			this.files.set(url, p);
 		}
@@ -184,7 +194,7 @@ class VrmCache {
 			}
 			file.moves = motionsFor(bones);
 		}
-		return { vrm, moves: file.moves };
+		return { vrm, moves: file.moves, torso: file.torso };
 	}
 }
 
@@ -269,6 +279,10 @@ export class AvatarView {
 	private actions: Record<string, THREE.AnimationAction> = {};
 	/** The legs' length to the reference rig's (VRMs; 1 for others). */
 	private legs = 1;
+	/** The trunk made for its bath from another body, if the model has one (swimsuit.ts). */
+	private torso: Torso | null = null;
+	/** How it bathes, if not as its model and sex say (dev pages comparing looks). */
+	private bathStyle: { suit?: Suit; torso?: boolean } = {};
 	private pace: Motions["pace"] = {};
 	private current = "";
 	/** A gesture playing once, until this host time. */
@@ -359,7 +373,8 @@ export class AvatarView {
 	private async loadVrm(url: string): Promise<void> {
 		const loaded = await vrms.get(url);
 		if (!loaded) return;
-		const { vrm, moves } = loaded;
+		const { vrm, moves, torso } = loaded;
+		this.torso = torso;
 		if (this.disposed) {
 			disposeVrm(vrm);
 			return;
@@ -846,6 +861,7 @@ export class AvatarView {
 				const node = vrm.humanoid.getRawBoneNode(name as VRMHumanBoneName);
 				if (node) bones[name] = node;
 			}
+			const torso = this.bathStyle.torso === false ? null : this.torso;
 			return new Bath({
 				root: vrm.scene,
 				bones,
@@ -853,6 +869,7 @@ export class AvatarView {
 				materials: vrm.materials,
 				vroid: true,
 				suit: this.suit,
+				...(torso ? { torso } : {}),
 			});
 		}
 		if (!this.mixer) return null;
@@ -865,9 +882,16 @@ export class AvatarView {
 		});
 	}
 
-	/** Men bathe in trunks, women (and looks with no sex) in a one-piece swimsuit. */
+	/**
+	 * Bathes another way than its model and sex say (before it first bathes): a dev page comparing looks.
+	 */
+	setBathStyle(style: { suit?: Suit; torso?: boolean }): void {
+		this.bathStyle = style;
+	}
+
+	/** Its model's own swimsuit (Shibu's bikini), else trunks for men and a one-piece for others. */
 	private get suit(): Suit {
-		return this.state.assets.sex === "m" ? "trunks" : "one-piece";
+		return this.bathStyle.suit ?? suitFor(this.modelUrl, this.state.assets.sex);
 	}
 
 	/**
