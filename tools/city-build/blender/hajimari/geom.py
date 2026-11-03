@@ -37,7 +37,8 @@ class World:
         return b
 
     def face(self, pts, mat, col=(1, 1, 1), name=None, uv=None, tile=None):
-        """A planar convex polygon (counter-clockwise seen from the side it faces)."""
+        """A planar convex polygon (counter-clockwise seen from the side it faces). `col`: one colour, or one per
+        point."""
         pts = [tuple(map(float, p)) for p in pts]
         cx = sum(p[0] for p in pts) / len(pts)
         cy = sum(p[1] for p in pts) / len(pts)
@@ -47,8 +48,12 @@ class World:
         i0 = len(b.v)
         b.v.extend(pts)
         b.uv.extend(uv)
-        c = tuple(col) + (1.0,) if len(col) == 3 else tuple(col)
-        b.col.extend([c] * len(pts))
+        if isinstance(col[0], (tuple, list)):
+            # one colour per point
+            b.col.extend(tuple(c) + (1.0,) if len(c) == 3 else tuple(c) for c in col)
+        else:
+            c = tuple(col) + (1.0,) if len(col) == 3 else tuple(col)
+            b.col.extend([c] * len(pts))
         b.f.append(tuple(range(i0, i0 + len(pts))))
 
     def tri_mesh(self, V, F, mat, col=None, name=None, uv=None, tile=None):

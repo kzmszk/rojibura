@@ -32,7 +32,7 @@ MATS = {
     'stone': ('PavingStones109', (1, 1, 1), 0.85, 0, 1.6, {}),
     'stone_onsen': ('stone_tiles_02', (0.95, 0.93, 0.9), 0.8, 0, 2.2, {}),
     'rock': ('rock_wall_13', (0.95, 0.92, 0.88), 0.9, 0, 2.0, {}),
-    'glass': (None, (0.06, 0.075, 0.085), 0.1, 0.5, 1, {}),
+    'glass': (None, (0.025, 0.028, 0.03), 0.18, 0.1, 1, {}),
     'glass_shop': (None, (0.55, 0.62, 0.66), 0.08, 0.1, 1, {'alpha': 0.35}),
     'metal': (None, (0.08, 0.08, 0.09), 0.55, 0.8, 1, {}),
     'paint': (None, (1, 1, 1), 0.7, 0, 1, {}),                 # vertex colours: shutters, doors, goods
@@ -55,7 +55,7 @@ MATS = {
     'wall_peel': ('rough_plaster_brick_04', (1, 1, 1), 0.92, 0, 2.2, {'gain': 1.2}),
     'wall_brick': ('red_bricks_04', (1, 1, 1), 0.9, 0, 2.0, {'gain': 1.1}),
     'trim_istrian': ('marble_01', (0.96, 0.94, 0.9), 0.6, 0, 1.2, {}),
-    'shutter': ('worn_shutter', (1, 1, 1), 0.7, 0, 1.0, {'gain': 2.6}),
+    'shutter': ('shutter_venice', (1, 1, 1), 0.75, 0, 1.2, {'gain': 1.6}),
     'wood_door': ('weathered_planks', (1, 1, 1), 0.8, 0, 1.2, {'gain': 1.4}),
     'wood_altana': ('weathered_planks', (0.85, 0.8, 0.74), 0.85, 0, 1.6, {'gain': 1.4}),
     'roof_coppi': ('clay_roof_tiles_03', (1, 1, 1), 0.8, 0, 2.4, {}),
@@ -69,6 +69,7 @@ MATS = {
     'stone_path': ('stone_pathway', (1, 1, 1), 0.85, 0, 2.6, {}),
     'pebbles': ('river_small_rocks', (1, 1, 1), 0.9, 0, 1.4, {'gain': 1.25}),
     'water_onsen_clear': (None, (0.55, 0.72, 0.7), 0.05, 0, 1, {}),
+    'water_onsen_fall': (None, (0.85, 0.9, 0.88), 0.05, 0, 1, {}),
     'stone_college': ('large_sandstone_blocks', (1.0, 0.95, 0.84), 0.85, 0, 2.6, {'gain': 1.5}),
     'roof_college': ('roof_slates_03', (0.85, 0.87, 0.92), 0.7, 0, 2.2, {}),
 }

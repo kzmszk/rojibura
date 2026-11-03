@@ -206,15 +206,22 @@ def build():
         R.block(circle(x, y, 0.2))
     bx, by = plan.ONSEN_BUCKETS
     R.block([(bx - 0.25, by - 0.25), (bx + 0.7, by - 0.25), (bx + 0.7, by + 0.25), (bx - 0.25, by + 0.25)])
-    sx, sy = SPOUT
-    R.block(circle(sx - 1.0, sy, 1.0))   # the rock with the spout
+    for sp in SPOUTS:                    # the rocks and stones the hot water comes out of
+        x, y, r = sp['rock']
+        R.block(circle(x, y, r + 0.05))
     for s in (-1, 1):                    # the entrance porch's posts
         R.block(circle(on['door_x'] + s * 1.9, on['inn'][3] + 1.2, 0.2))
     return R
 
 
-# the spout of hot water: a bamboo pipe out of a rock at the west end of the big bath
-SPOUT = (11.4, -150.6)
+# かけ流し: hot water runs into every bath all the time. 'rock': (x, y, radius) of the rock or stone it comes out of
+# (blocked); 'from', 'to': (x, y, z) of the bamboo pipe or the stone channel, the water leaving at 'to' and falling
+# into the bath; 'kind': 'bamboo' (a pipe, a round stream) or 'stone' (a carved stone lip, a wide thin sheet).
+SPOUTS = [
+    {'kind': 'bamboo', 'rock': (12.2, -150.6, 0.95), 'from': (12.4, -150.6, 1.08), 'to': (14.1, -150.6, 1.0)},
+    {'kind': 'stone', 'rock': (47.2, -154.6, 0.7), 'from': (47.2, -154.4, 0.8), 'to': (47.2, -153.25, 0.74)},
+    {'kind': 'bamboo', 'rock': (61.7, -151.2, 0.7), 'from': (61.5, -151.2, 1.0), 'to': (60.0, -151.2, 0.94)},
+]
 
 
 def bath_steps(pool):

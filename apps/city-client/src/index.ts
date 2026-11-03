@@ -387,7 +387,7 @@ async function startCity(
 	/** Free play builds only in areas that allow it (the main one). */
 	const building = freePlay && area.build === true;
 	const scene = new CityScene(root);
-	scene.applyView(area.view);
+	scene.applyView(area.view, sceneFiles(area, params).lite);
 	const loading = el("div", "rj-toast show", `${area.name}を読み込んでいます…`);
 	root.append(loading);
 	// what is needed to enter, fetched together: the walkable area, the 3D near where you arrive, the trees (their

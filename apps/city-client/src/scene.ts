@@ -6,12 +6,18 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { CSS2DRenderer } from "three/examples/jsm/renderers/CSS2DRenderer.js";
+import { RichLook } from "./look.ts";
 import { applyTriplanar, wantsTriplanar } from "./triplanar.ts";
 import { applyWeathering, wantsWeathering } from "./weathering.ts";
 
 /** The sun's direction (from the target) and the default reach of its shadow (metres around the camera). */
 const SUN_OFFSET = new THREE.Vector3(30, 50, 20);
+/** In the rich look a lower afternoon sun (about 34° up): longer shadows, the walls lit across. */
+const RICH_SUN_OFFSET = new THREE.Vector3(42, 38, 30);
 const SHADOW_HALF = 50;
+/** In the rich look (AreaView.rich) the sky's environment light does much of the hemisphere light's work. */
+const RICH_HEMI = 0.35;
+const RICH_SUN = 1.3;
 /** The orbiting camera goes no lower than this above the ground under it. */
 const CAMERA_ABOVE_GROUND = 0.25;
 
@@ -39,6 +45,9 @@ export class CityScene {
 	 */
 	private readonly materials = new Map<string, THREE.Material>();
 	private shadowHalf = SHADOW_HALF;
+	/** The fuller look (AreaView.rich): tone mapping, the sky's light, ambient occlusion. */
+	private rich: RichLook | null = null;
+	private sunOffset = SUN_OFFSET;
 
 	constructor(root: HTMLElement) {
 		this.root = root;
@@ -79,9 +88,17 @@ export class CityScene {
 		addEventListener("resize", () => this.resize());
 	}
 
-	/** The area's sky, fog, view distance, water, shadow reach and sun (docs/prd.md 3.8). */
-	applyView(view: AreaView | undefined): void {
+	/**
+	 * The area's sky, fog, view distance, water, shadow reach and sun (docs/prd.md 3.8). `lite`: lighter 3D (phones
+	 * and tablets), so no ambient occlusion.
+	 */
+	applyView(view: AreaView | undefined, lite = false): void {
 		if (!view) return;
+		if (view.rich) {
+			this.rich = new RichLook(this.renderer, this.scene, this.camera, !lite);
+			this.sunOffset = RICH_SUN_OFFSET;
+			this.resize();
+		}
 		if (view.sky) {
 			const sky = new THREE.Color(view.sky);
 			this.scene.background = sky;
@@ -110,6 +127,18 @@ export class CityScene {
 		// an invisible light is left out, and with it the shadow pass
 		if (view.sun === false) this.sun.visible = false;
 		if (view.camera) this.controls.maxDistance = view.camera;
+		if (this.rich) this.skyFrom(new THREE.Color(view.sky ?? "#c4d9ea"), this.sun.color, this.sun.intensity);
+	}
+
+	/** The rich look's sky from a sky colour (the horizon a little lighter, the zenith a deeper blue) and the sun. */
+	private skyFrom(sky: THREE.Color, sunColor: THREE.Color, sunIntensity: number): void {
+		if (!this.rich) return;
+		const horizon = sky.clone().lerp(new THREE.Color(1, 1, 1), 0.2);
+		const zenith = sky.clone().offsetHSL(0.02, 0.35, -0.42);
+		const ground = new THREE.Color(0x5b5446);
+		const sun = sunColor.clone().multiplyScalar(sunIntensity * 0.4);
+		this.rich.setSky(zenith, horizon, ground, this.sunOffset, sun);
+		if (this.scene.fog) this.scene.fog.color.copy(horizon);
 	}
 
 	private setShadow(half: number): void {
@@ -152,7 +181,7 @@ export class CityScene {
 		// the sun's shadow over the whole area while drawing it
 		this.setShadow(Math.max(w, h) / 2 + 10);
 		this.sun.target.position.set((x0 + x1) / 2, 0, (z0 + z1) / 2);
-		this.sun.position.copy(this.sun.target.position).add(SUN_OFFSET.clone().multiplyScalar(6));
+		this.sun.position.copy(this.sun.target.position).add(this.sunOffset.clone().multiplyScalar(6));
 		const pixels = new Uint8Array(width * ss * height * ss * 4);
 		try {
 			this.renderer.setRenderTarget(target);
@@ -242,7 +271,7 @@ export class CityScene {
 		const sky = new THREE.Color(v.sky);
 		this.scene.background = sky;
 		if (this.scene.fog instanceof THREE.Fog) {
-			this.scene.fog.color = sky;
+			this.scene.fog.color.copy(sky);
 			this.scene.fog.near = v.fog[0];
 			this.scene.fog.far = Math.min(v.fog[1], this.camera.far);
 		}
@@ -251,6 +280,12 @@ export class CityScene {
 		this.hemi.color.setHex(v.hemiSky);
 		this.hemi.groundColor.setHex(v.hemiGround);
 		this.hemi.intensity = v.hemiIntensity;
+		// the rich look: the sky lights the shadows (the environment), the sun is stronger
+		if (this.rich) {
+			this.hemi.intensity = v.hemiIntensity * RICH_HEMI;
+			this.sun.intensity = v.sunIntensity * RICH_SUN;
+			this.skyFrom(sky, this.sun.color, v.sunIntensity);
+		}
 	}
 
 	/** Things people can walk on that were built (decks, bridges) count as ground too. */
@@ -314,13 +349,14 @@ export class CityScene {
 		const x = Math.round(t.x / texel) * texel;
 		const z = Math.round(t.z / texel) * texel;
 		this.sun.target.position.set(x, 0, z);
-		this.sun.position.set(x + SUN_OFFSET.x, SUN_OFFSET.y, z + SUN_OFFSET.z);
+		this.sun.position.set(x + this.sunOffset.x, this.sunOffset.y, z + this.sunOffset.z);
 		this.water?.position.set(t.x, this.water.position.y, t.z);
 	}
 
 	render(): void {
 		this.track();
-		this.renderer.render(this.scene, this.camera);
+		if (this.rich) this.rich.render();
+		else this.renderer.render(this.scene, this.camera);
 		this.labels.render(this.scene, this.camera);
 	}
 
@@ -328,6 +364,7 @@ export class CityScene {
 		const w = this.root.clientWidth || innerWidth;
 		const h = this.root.clientHeight || innerHeight;
 		this.renderer.setSize(w, h);
+		this.rich?.setSize(w, h);
 		this.labels.setSize(w, h);
 		this.camera.aspect = w / h;
 		this.camera.updateProjectionMatrix();
