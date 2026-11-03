@@ -103,7 +103,11 @@ function seasonal(orig: THREE.Material, grade: Grade | null, dust: number, dustL
 		uDust: { value: dust },
 		uDustLo: { value: dustLo },
 	};
-	m.onBeforeCompile = (shader) => {
+	// the glb material's own patch (the Sagrada Família's projected stone, triplanar.ts) comes first
+	const own = orig.onBeforeCompile.bind(orig);
+	const ownKey = orig.customProgramCacheKey();
+	m.onBeforeCompile = (shader, renderer) => {
+		own(shader, renderer);
 		Object.assign(shader.uniforms, uniforms);
 		shader.vertexShader = patchWorldVertex(shader.vertexShader);
 		let f = patch(
@@ -160,7 +164,7 @@ function seasonal(orig: THREE.Material, grade: Grade | null, dust: number, dustL
 		);
 		shader.fragmentShader = f;
 	};
-	m.customProgramCacheKey = () => `nature-seasonal-${orig.type}`;
+	m.customProgramCacheKey = () => `nature-seasonal-${orig.type}-${ownKey}`;
 	return m;
 }
 

@@ -6,6 +6,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { CSS2DRenderer } from "three/examples/jsm/renderers/CSS2DRenderer.js";
+import { applyTriplanar, wantsTriplanar } from "./triplanar.ts";
 
 /** The sun's direction (from the target) and the default reach of its shadow (metres around the camera). */
 const SUN_OFFSET = new THREE.Vector3(30, 50, 20);
@@ -189,6 +190,8 @@ export class CityScene {
 						// trees' crowns, water and the winter's snow (feet sink into it) are not ground
 						if (!/^(tree_crown|snow_|water_)/.test(o.name) && !o.name.includes("fountain_water"))
 							this.ground.push(o);
+						const m = (o as THREE.Mesh).material;
+						if (!Array.isArray(m) && wantsTriplanar(m)) applyTriplanar(m as THREE.MeshStandardMaterial);
 					}
 				});
 				this.scene.add(gltf.scene);

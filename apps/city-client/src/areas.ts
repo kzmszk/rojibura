@@ -27,6 +27,37 @@ export async function currentArea(
 	return { area: { ...info, id, assetBase: withSlash(override ?? info.assets ?? info.dir) }, all };
 }
 
+/** How much 3D detail to draw: the area's lighter files (`sceneLite`) on phones and tablets, or as chosen. */
+export type Detail = "auto" | "full" | "lite";
+export const DETAIL_KEY = "rj.detail";
+
+/** The detail chosen in the settings (kept in this browser), "auto" when none. */
+export function savedDetail(): Detail {
+	try {
+		const v = localStorage.getItem(DETAIL_KEY);
+		return v === "full" || v === "lite" ? v : "auto";
+	} catch {
+		return "auto";
+	}
+}
+
+/** A phone or a tablet: the main pointer is a finger. */
+export function touchFirst(): boolean {
+	return matchMedia("(pointer: coarse)").matches;
+}
+
+/**
+ * The glb files to draw: `sceneLite` when the area has it and `?detail=lite` (or `full`), else the setting, asks
+ * for it, or, left to "auto", on a device whose main pointer is a finger (a phone or a tablet).
+ */
+export function sceneFiles(area: AreaInfo, params: URLSearchParams): { files: string[]; lite: boolean } {
+	if (!area.sceneLite) return { files: area.scene, lite: false };
+	const asked = params.get("detail");
+	const detail = asked === "full" || asked === "lite" ? asked : savedDetail();
+	const lite = detail === "auto" ? touchFirst() : detail === "lite";
+	return { files: lite ? area.sceneLite : area.scene, lite };
+}
+
 /** The page in the other area, arriving next to the portal back. */
 export function travelUrl(portal: Portal, avatar: string): string {
 	const q = new URLSearchParams({ area: portal.to, at: portal.at, avatar });

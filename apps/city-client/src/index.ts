@@ -45,7 +45,7 @@ import * as THREE from "three";
 import { AgentPanel } from "./agent-panel.ts";
 import { api, onApiUsage } from "./api.ts";
 import { AreaNature, SEASON_LABEL } from "./area-nature.ts";
-import { currentArea, travelUrl } from "./areas.ts";
+import { currentArea, DETAIL_KEY, savedDetail, sceneFiles, touchFirst, travelUrl } from "./areas.ts";
 import { AvatarView, TRAVEL } from "./avatars.ts";
 import { BuildPanel } from "./build-ui.ts";
 import { BuildsView, makeObject, modelsFromHost } from "./builds.ts";
@@ -378,7 +378,9 @@ async function startCity(
 	let mesh = NavMesh.fromJSON(base);
 	let nav = navigatorFor(mesh);
 	scene.heightHint = (x, z) => mesh.heightAt([x, z]);
-	const sceneUrls = area.scene.map((f) => new URL(f, new URL(area.assetBase, location.href)).href);
+	const sceneUrls = sceneFiles(area, params).files.map(
+		(f) => new URL(f, new URL(area.assetBase, location.href)).href,
+	);
 	const cityRoots = await scene.loadCity(sceneUrls, (n) => {
 		loading.textContent = `${area.name}を読み込んでいます…（${n}/${sceneUrls.length}）`;
 	});
@@ -524,6 +526,32 @@ async function startCity(
 		seasonSelect.title = "自分の画面だけ変わります";
 		seasonSelect.onchange = () => void nature.setSeason(seasonSelect.value as Season);
 		settings.row("🍁 季節", seasonSelect);
+	}
+	// lighter 3D for phones (docs/prd.md 3.8.1): only where the area has it; the page loads again to change it
+	if (area.sceneLite) {
+		const detailSelect = el("select", "");
+		for (const [v, label] of [
+			["auto", touchFirst() ? "自動（この端末は軽い）" : "自動（この端末は細かい）"],
+			["full", "細かい"],
+			["lite", "軽い（スマホ向け）"],
+		] as const) {
+			const o = el("option", "", label);
+			o.value = v;
+			detailSelect.append(o);
+		}
+		detailSelect.value = savedDetail();
+		detailSelect.title = "変えると読み込み直します";
+		detailSelect.onchange = () => {
+			try {
+				localStorage.setItem(DETAIL_KEY, detailSelect.value);
+			} catch {
+				// private mode: nothing to keep it in
+			}
+			const q = new URLSearchParams(location.search);
+			q.delete("detail");
+			location.search = q.toString();
+		};
+		settings.row("🖼️ 3Dの細かさ", detailSelect);
 	}
 	// your own AIs walk with you (docs/prd.md 3.4.9); shown while one of them is here
 	const companionBox = el("input", "");

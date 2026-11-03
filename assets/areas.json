@@ -5,6 +5,7 @@
 			"name": "はじまりの街",
 			"dir": "/areas/hajimari",
 			"scene": ["hajimari.glb", "sagrada_exterior.glb"],
+			"sceneLite": ["hajimari.glb", "sagrada_exterior_lite.glb"],
 			"winter": ["hajimari_snow.glb"],
 			"build": true,
 			"fly": true,
@@ -20,13 +21,23 @@
 			"name": "サグラダ・ファミリア",
 			"dir": "/areas/sagrada",
 			"scene": [
-				"3d/2026-11-02/sagrada_00.glb",
-				"3d/2026-11-02/sagrada_01.glb",
-				"3d/2026-11-02/sagrada_02.glb",
-				"3d/2026-11-02/sagrada_03.glb"
+				"3d/2026-11-03/sagrada_00.glb",
+				"3d/2026-11-03/sagrada_01.glb",
+				"3d/2026-11-03/sagrada_02.glb",
+				"3d/2026-11-03/sagrada_03.glb",
+				"3d/2026-11-03/sagrada_04.glb",
+				"3d/2026-11-03/sagrada_05.glb"
+			],
+			"sceneLite": [
+				"3d/2026-11-03-lite/sagrada_00.glb",
+				"3d/2026-11-03-lite/sagrada_01.glb",
+				"3d/2026-11-03-lite/sagrada_02.glb",
+				"3d/2026-11-03-lite/sagrada_03.glb",
+				"3d/2026-11-03-lite/sagrada_04.glb",
+				"3d/2026-11-03-lite/sagrada_05.glb"
 			],
 			"view": { "sky": "#c9d8e6", "fog": [120, 360], "far": 500, "shadow": 60, "camera": 6, "mapCut": 12 },
-			"credit": "3D：SAGRADA FAMÍLIA（demos.polynous.io/sagrada-familia） ｜ ステンドグラス・彫刻の写真：R. Mortel（CC BY 2.0）、A. Meskens・Smiley.toerist・A. Alikhan（CC BY-SA 4.0）、J. L. B. Ribeiro（CC BY-SA 3.0）、K. Knöfler（CC BY 3.0）／Wikimedia Commons、加工あり ｜ 出典の一覧：/areas/sagrada/credits.html",
+			"credit": "3D：SAGRADA FAMÍLIA（demos.polynous.io/sagrada-familia） ｜ ステンドグラス・彫刻の写真：R. Mortel（CC BY 2.0）、A. Meskens・Smiley.toerist・A. Alikhan（CC BY-SA 4.0）、J. L. B. Ribeiro（CC BY-SA 3.0）、K. Knöfler（CC BY 3.0）／Wikimedia Commons、加工あり ｜ 石のテクスチャ：Poly Haven（CC0） ｜ 出典の一覧：/areas/sagrada/credits.html",
 			"portals": [
 				{ "id": "gate_hajimari", "name": "はじまりの街への門（生誕の門）", "pos": [52.5, 34.5], "to": "main", "at": "gate_sagrada", "quiet": true },
 				{ "id": "gate_hajimari_passion", "name": "はじまりの街への門（受難の門）", "pos": [52.5, -34.5], "to": "main", "at": "gate_sagrada_passion", "quiet": true }
