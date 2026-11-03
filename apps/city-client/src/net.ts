@@ -53,6 +53,11 @@ export class CityConnection {
 		return Date.now() + this.offset;
 	}
 
+	/** Connected now (what is sent gets to the host). */
+	get connected(): boolean {
+		return this.ws?.readyState === WebSocket.OPEN;
+	}
+
 	start(): void {
 		this.stopped = false;
 		void this.enter();

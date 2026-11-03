@@ -97,6 +97,8 @@ const PAT: BodyKey[] = [
 ];
 /** An AI this close to its owner attends to them (docs/prd.md 3.4.9). */
 const ATTEND_M = 5;
+/** A warp not answered in this long did not happen (ms). */
+const WARP_WAIT_MS = 3_000;
 /** After a line between an AI and its owner, it faces them and looks them in the eye this long. */
 const TALK_FACE_MS = 20_000;
 /** Beside its owner, not talking: how it stands changes this often; it turns this far to them, at most. */
@@ -1004,6 +1006,10 @@ async function startCity(
 					if (v && m.id === myId && m.move.kind === "idle") {
 						const at = poseAt(v.state.move, conn.hostNow()).pos;
 						if (dist(at, m.move.pos) > 15) placed = false;
+						if (warping) {
+							showToast(`${warping.name}へ瞬間移動しました`);
+							warping = null;
+						}
 					}
 					v?.setMove(m.move);
 					break;
@@ -1098,6 +1104,8 @@ async function startCity(
 					break;
 				case "NOTICE":
 					showToast(m.message);
+					// a warp refused: the notice says why
+					if (m.kind === "rejected") warping = null;
 					break;
 				case "USAGE":
 					usage?.onUsage(m);
@@ -1734,10 +1742,26 @@ async function startCity(
 		}
 	}
 	/** At a place of the area at once (from the map). */
+	/** A warp asked for and not answered yet: said done only when the host has moved you (or says why not). */
+	let warping: { name: string; at: number } | null = null;
 	function warpTo(p: MapPlace): void {
+		if (!conn.connected) {
+			showToast("接続が切れています。つながってから、もう一度押してください");
+			return;
+		}
 		stopGoing();
 		conn.send({ t: "WARP", to: p.id });
-		showToast(`${p.name}へ瞬間移動しました`);
+		warping = { name: p.name, at: performance.now() };
+	}
+	/** No answer to a warp: say so (the connection may have dropped). */
+	function warpStep(t: number): void {
+		if (!warping || t - warping.at < WARP_WAIT_MS) return;
+		showToast(
+			conn.connected
+				? `${warping.name}へ瞬間移動できませんでした`
+				: "接続が切れていて、瞬間移動できませんでした。つながってから、もう一度押してください",
+		);
+		warping = null;
 	}
 
 	/** Stops following someone or going to a portal (the person moves on their own). */
@@ -1968,6 +1992,7 @@ async function startCity(
 			if (!clearAhead(poseAt(move, now).pos, move.dir, move.speed, 0.15)) steer(t, true);
 		}
 		liftStep(mine, dt, t);
+		warpStep(t);
 		portals.update(mine ? poseAt(mine.state.move, now).pos : null);
 		if (cityMap.open)
 			cityMap.update(
