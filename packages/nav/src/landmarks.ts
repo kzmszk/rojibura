@@ -7,6 +7,8 @@ export interface Landmark {
 	pos: Vec2;
 	/** Height of the marker (glTF Y, metres). */
 	y: number;
+	/** One of the area's main places: named on the map and listed to warp to (docs/prd.md 3.4.14). */
+	major?: boolean;
 }
 
 /** Where new avatars appear (the `SPAWN` node). */

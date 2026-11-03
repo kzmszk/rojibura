@@ -143,7 +143,7 @@ def build():
     R.block(circle(fx, fy, fr + 0.2))
     for (x, y, rot) in plan.STALLS:
         R.block(lots.rect(x, y, 1, 0, -1.7, 1.7, -1.1, 1.1))
-    for (x, y) in plan.WELLS:
+    for (x, y) in lots.wells():
         R.block(circle(x, y, 1.4))
     px, py, pr = plan.PARK_FOUNTAIN
     R.block(circle(px, py, pr + 0.2))
@@ -343,10 +343,23 @@ def benches():
     mx, my = plan.MOUNT
     for a in (math.radians(200), math.radians(250), math.radians(300)):
         out.append((mx + math.cos(a) * 7.5, my + math.sin(a) * 7.5, a + math.pi / 2))
-    x0, y0, x1, y1 = plan.SQUARE
-    for x in np.arange(x0 + 13.5, x1 - 8, 22.0):
-        out.append((float(x), y1 - 9.5, 0.0))
-        out.append((float(x), y0 + 9.5, 0.0))
+    # round the square inside the ring of plane trees, facing the church; and in the small parks
+    cx, cy = plan.TOWN_C
+    r = plan.SQUARE_R - 8.0
+    trees = plan.square_trees()
+    for k in range(24):
+        a = 2 * math.pi * (k + 0.25) / 24
+        x, y = cx + r * math.cos(a), cy + r * math.sin(a)
+        if min(abs(x - cx), abs(y - cy)) < 9.0 or any(math.hypot(x - sx, y - sy) < 6 for (sx, sy, _) in plan.STALLS):
+            continue
+        if math.cos(a) > 0.8:      # the plaza in front of the door stays open
+            continue
+        if any(plan._inside_poly(np.array([x]), np.array([y]), offset_poly(p, 3.0))[0] for p in plan.church_polys()):
+            continue
+        if any(math.hypot(x - tx, y - ty) < 2.0 for (tx, ty) in trees):
+            continue
+        out.append((x, y, a + math.pi / 2))
+    out += lots.park_benches()
     return out
 
 

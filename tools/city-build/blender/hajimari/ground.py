@@ -118,24 +118,54 @@ def town(W):
     VS = V.copy()
     VS[:, 2] = TROD
     W.tri_mesh(VS, _grid_faces(nx, ny), 'snow_trod', None, name='snow_trod_town', tile=2.0)
-    # the church square and the plaza in front of the door (one outline), with a kerb
-    x0, y0, x1, y1 = plan.SQUARE
-    px0, py0, px1, py1 = plan.PLAZA
-    outline = [(x0, y0), (x1, y0), (x1, py0), (px1, py0), (px1, py1), (x1, py1), (x1, y1), (x0, y1)]
+    # the round church square, with a kerb
+    cx, cy = plan.TOWN_C
+    R = plan.SQUARE_R
     z = 0.08
-    pts = [(x, y, z) for x, y in outline]
-    # split into the two rectangles (the outline is not convex)
-    W.face([(x0, y0, z), (x1, y0, z), (x1, y1, z), (x0, y1, z)], 'cobble_square', name='square')
-    W.face([(px0, py0, z), (px1, py0, z), (px1, py1, z), (px0, py1, z)], 'cobble_square', name='square')
-    for i in range(len(pts)):
-        a, b = pts[i], pts[(i + 1) % len(pts)]
-        if (a[0] == x1 and b[0] == x1 and abs(a[1]) < py1 + 0.1 and abs(b[1]) < py1 + 0.1):
-            continue   # the plaza continues there
+    seg = 120
+    ring = [(cx + math.cos(2 * math.pi * i / seg) * R, cy + math.sin(2 * math.pi * i / seg) * R) for i in range(seg)]
+    for i in range(seg):
+        a, b = ring[i], ring[(i + 1) % seg]
+        W.face([(cx, cy, z), (a[0], a[1], z), (b[0], b[1], z)], 'cobble_square', name='square')
         W.face([(a[0], a[1], 0), (b[0], b[1], 0), (b[0], b[1], z), (a[0], a[1], z)], 'stone', name='square')
-    W.face([(x0, y0, z + 0.12), (x1, y0, z + 0.12), (x1, y1, z + 0.12), (x0, y1, z + 0.12)], 'snow_trod',
-           name='snow_trod_square', tile=2.0)
-    W.face([(px0, py0, z + 0.12), (px1, py0, z + 0.12), (px1, py1, z + 0.12), (px0, py1, z + 0.12)], 'snow_trod',
-           name='snow_trod_square', tile=2.0)
+        W.face([(cx, cy, z + 0.12), (a[0], a[1], z + 0.12), (b[0], b[1], z + 0.12)], 'snow_trod',
+               name='snow_trod_square', tile=2.0)
+    parks(W)
+
+
+def parks(W):
+    """The small parks' lawns, a little above the cobbles: a quad per run of 0.5 m cells along each row."""
+    from . import lots
+    res = lots.OCC_RES
+    z = 0.03
+    for (mk, area, _) in lots.parks():
+        for j in np.nonzero(mk.any(1))[0]:
+            row = mk[j]
+            d = np.diff(np.concatenate([[0], row.astype(np.int8), [0]]))
+            y0 = lots.GY0 + j * res
+            for i0, i1 in zip(np.nonzero(d == 1)[0], np.nonzero(d == -1)[0]):
+                x0, x1 = lots.GX0 + i0 * res, lots.GX0 + i1 * res
+                # an end on the outer ring road follows its curve (exactly at the row's two edges)
+                a = [_on_ring(x0, y, -1) for y in (y0, y0 + res)]
+                b = [_on_ring(x1, y, 1) for y in (y0, y0 + res)]
+                W.face([(a[0], y0, z), (b[0], y0, z), (b[1], y0 + res, z), (a[1], y0 + res, z)], 'grass',
+                       (0.92, 1.0, 0.85), name='ground_parks')
+
+
+def _on_ring(x, y, side):
+    """`x` moved onto the lawns' edge along the outer ring road at height `y`, if it is that edge; `side` -1 for a
+    run's west end, 1 for its east end."""
+    from . import lots
+    cx, cy = plan.TOWN_C
+    R = plan.RING_OUT + 0.3
+    dy = y - cy
+    if abs(dy) >= R:
+        return x
+    for xc in (cx - math.sqrt(R * R - dy * dy), cx + math.sqrt(R * R - dy * dy)):
+        # the west end of a run sits on the ring's east half and the other way round
+        if abs(xc - x) <= lots.OCC_RES * 1.5 and (xc - cx) * side < 0:
+            return xc
+    return x
 
 
 def paths(W):

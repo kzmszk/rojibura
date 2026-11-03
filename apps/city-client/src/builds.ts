@@ -5,8 +5,8 @@ import { boxNav, type ModelNav, type PlacedModel } from "@rojibura/nav";
 import { type Build, type BuildId, type ModelId, modelUrl } from "@rojibura/protocol";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
-import { CSS2DObject } from "three/examples/jsm/renderers/CSS2DRenderer.js";
 import type { CityScene } from "./scene.ts";
+import { disposeSign, signSprite } from "./signs.ts";
 
 const BLOCK_COLOR = "#dbc8a6";
 
@@ -18,7 +18,7 @@ interface Model {
 interface View {
 	build: Build;
 	root: THREE.Object3D;
-	label?: CSS2DObject;
+	label?: THREE.Sprite;
 }
 
 const loader = new GLTFLoader();
@@ -142,10 +142,13 @@ export class BuildsView {
 		root.userData.buildId = b.id;
 		const view: View = { build: b, root };
 		if (b.label) {
-			const tag = document.createElement("div");
-			tag.className = "rj-build-label";
-			tag.textContent = b.label;
-			view.label = new CSS2DObject(tag);
+			// hidden behind buildings like the portals' names
+			view.label = signSprite(b.label, {
+				background: "rgba(255,255,255,.85)",
+				color: "#333",
+				border: "#c9b48a",
+				size: 12,
+			});
 			const top = new THREE.Box3().setFromObject(root).max.y;
 			view.label.position.set(b.pos[0], top + 0.4, b.pos[1]);
 			this.scene.scene.add(view.label);
@@ -163,7 +166,7 @@ export class BuildsView {
 		this.scene.removeGround(v.root);
 		if (v.label) {
 			this.scene.scene.remove(v.label);
-			v.label.element.remove();
+			disposeSign(v.label);
 		}
 		this.views.delete(id);
 	}

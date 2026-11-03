@@ -1123,3 +1123,60 @@ describe("going through a portal", () => {
 		expect(other.inbox.filter((m) => m.t === "FOLLOW")).toEqual([]);
 	});
 });
+
+describe("floating and warping (docs/prd.md 3.4.13, 3.4.14)", () => {
+	test("afloat a human moves straight over the building, and comes down on the ground nearest below", () => {
+		ctx = setup({ fly: true });
+		const a = conn("a");
+		const b = conn("b");
+		ctx.room.join(a, human("alice"));
+		ctx.room.join(b, human("bob"));
+		const welcome = b.inbox[0];
+		const start = welcome?.t === "WELCOME" ? welcome.avatars.find((x) => x.id === "h_alice") : undefined;
+		if (start?.move.kind !== "idle") throw new Error("not standing");
+		const here = start.move.pos;
+		ctx.room.handle(a, { t: "FLY", alt: 12 });
+		expect(last(b)).toEqual({ t: "FLEW", id: "h_alice", alt: 12 });
+		// into the building: fine afloat
+		ctx.room.handle(a, { t: "MOVE_PATH", path: [here, [0, 0]], speed: 4, seq: 1 });
+		expect(last(b)).toMatchObject({ t: "MOVED", id: "h_alice", move: { kind: "path" } });
+		ctx.clock.advance(20_000);
+		// down: not inside the building but on the ground nearest it
+		ctx.room.handle(a, { t: "FLY", alt: null });
+		expect(b.inbox.some((m) => m.t === "FLEW" && m.alt === null)).toBe(true);
+		const moved = last(b);
+		if (moved?.t !== "MOVED" || moved.move.kind !== "idle") throw new Error("no landing");
+		expect(walk.isWalkable(moved.move.pos)).toBe(true);
+		// on foot again the building blocks
+		ctx.room.handle(a, { t: "MOVE_PATH", path: [moved.move.pos, [0, 0]], speed: 4, seq: 2 });
+		expect(last(a)?.t).toBe("CORRECT");
+	});
+
+	test("not where the area does not allow it, and never for AIs", () => {
+		const a = conn("a");
+		ctx.room.join(a, human("alice"));
+		ctx.room.handle(a, { t: "FLY", alt: 10 });
+		expect(last(a)).toMatchObject({ t: "NOTICE", kind: "rejected" });
+		ctx = setup({ fly: true });
+		const x = conn("x");
+		ctx.room.join(x, ai("x", "kazu"));
+		ctx.room.handle(x, { t: "FLY", alt: 10 });
+		expect(last(x)).toMatchObject({ t: "NOTICE", kind: "rejected" });
+	});
+
+	test("a warp puts you by a landmark at once, not too often", () => {
+		const a = conn("a");
+		const b = conn("b");
+		ctx.room.join(a, human("alice"));
+		ctx.room.join(b, human("bob"));
+		ctx.room.handle(a, { t: "WARP", to: "cafe" });
+		const moved = last(b);
+		expect(moved?.t).toBe("MOVED");
+		if (moved?.t !== "MOVED" || moved.move.kind !== "idle") throw new Error("no move");
+		expect(Math.hypot(moved.move.pos[0] - 10, moved.move.pos[1] - 10)).toBeLessThanOrEqual(3.01);
+		ctx.room.handle(a, { t: "WARP", to: "cafe" });
+		expect(last(a)).toMatchObject({ t: "NOTICE", kind: "rejected" });
+		ctx.room.handle(a, { t: "WARP", to: "nowhere" });
+		expect(last(a)).toMatchObject({ t: "NOTICE", kind: "rejected" });
+	});
+});

@@ -61,40 +61,91 @@ GATES = {             # gaps in the wall (centre, half width): the arch above is
     'north': ('E', 108.0, 3.0),   # out to the college in the park
 }
 
-# ---------------------------------------------------------------- streets (polylines, width)
+# ---------------------------------------------------------------- the town's layout
 
-SQUARE = (-178.0, -82.0, -62.0, 82.0)            # the church square, paved
-PLAZA = (-62.0, -26.0, -38.0, 26.0)              # its east end in front of the door
-STREETS = [
-    # (name, width, points)
-    ('main', 10.0, [(-40, 0), (-24, 0), (-1, 0)]),
-    ('west', 7.0, [(-178, 0), (-205, 0), (-236, 0)]),
-    ('n1', 6.5, [(-118, 80), (-116, 98), (-121, 118), (-119, 136), (-124, 151)]),
-    ('n2', 6.0, [(-70, 80), (-64, 100), (-52, 118), (-40, 132), (-34, 151)]),
-    ('ncross', 6.0, [(-228, 116), (-200, 118), (-160, 112), (-121, 118), (-90, 114), (-52, 118), (-18, 110), (-6, 108), (-1, 108)]),   # out through the north-east gate
-    ('nw', 6.0, [(-178, 46), (-196, 58), (-210, 84), (-206, 118)]),
-    ('ne', 6.5, [(-24, 5), (-26, 38), (-20, 72), (-18, 110)]),
-    ('s1', 6.5, [(-118, -80), (-114, -98), (-120, -116), (-117, -134), (-122, -151)]),
-    ('s2', 6.0, [(-70, -80), (-62, -98), (-48, -112), (-30, -120), (-1, -120)]),
-    ('scross', 6.0, [(-228, -112), (-200, -114), (-160, -110), (-120, -116), (-86, -112), (-48, -112)]),
-    ('sw', 6.0, [(-178, -46), (-196, -58), (-212, -84), (-200, -114)]),
-    ('se', 6.5, [(-24, -5), (-27, -40), (-22, -76), (-30, -120)]),
-    ('lane1', 4.0, [(-196, 58), (-226, 64)]),
-    ('lane2', 4.0, [(-90, 114), (-88, 148)]),
-    ('lane3', 4.0, [(-86, -112), (-84, -148)]),
-    ('lane4', 4.0, [(-160, 112), (-164, 148)]),
-    ('lane5', 4.0, [(-160, -110), (-158, -148)]),
-]
+# The church stands in a round square. Round it the town goes in rings: a ring road, a ring of houses facing the
+# church, a second ring road with houses on both sides; four main streets go out from the church's doors and
+# ends (east to the main gate, west to the Venice gate, north and south to towers on the wall), with lanes
+# through the ring between them. Beyond the second ring the streets are a grid of blocks, houses round each
+# block; what is left between the rings and the blocks is small parks (lots.parks).
+TOWN_C = (-120.0, 0.0)            # the centre of the rings (the church's crossing)
+SQUARE_R = 68.0                   # the square, paved
+RING1 = (71.7, 7.4)               # ring roads: radius of the centre line, width
+RING2 = (100.0, 6.8)
+RING_OUT = RING2[0] + RING2[1] / 2    # beyond this the grid
+LANE_W = 5.0                      # the lane inside the walls
+
+
+def ring_pts(r, n=180):
+    """A ring road's centre line, anticlockwise, closed."""
+    cx, cy = TOWN_C
+    return [(cx + r * math.cos(2 * math.pi * i / n), cy + r * math.sin(2 * math.pi * i / n)) for i in range(n + 1)]
+
+
+def _clip_out(a, b, R):
+    """The parts of segment ab outside the circle of radius R round TOWN_C."""
+    a = np.array(a, float)
+    b = np.array(b, float)
+    c = np.array(TOWN_C)
+    d = b - a
+    f = a - c
+    A, B, C = d @ d, 2 * f @ d, f @ f - R * R
+    disc = B * B - 4 * A * C
+    if disc <= 0:
+        return [(tuple(a), tuple(b))]
+    t0, t1 = (-B - math.sqrt(disc)) / (2 * A), (-B + math.sqrt(disc)) / (2 * A)
+    out = []
+    if t0 > 0:
+        out.append((tuple(a), tuple(a + d * min(t0, 1))))
+    if t1 < 1:
+        out.append((tuple(a + d * max(t1, 0)), tuple(b)))
+    return [(p, q) for p, q in out if math.dist(p, q) > 1.0]
+
+
+def _streets():
+    cx, cy = TOWN_C
+    r0 = SQUARE_R - 0.5
+    wl = LANE_W / 2 + 0.05
+    lx0, lx1 = WALL_W + WALL_T / 2 + wl, WALL_E - WALL_T / 2 - wl     # the lanes' centre lines
+    ly0, ly1 = WALL_S + WALL_T / 2 + wl, WALL_N - WALL_T / 2 - wl
+    out = [
+        # (name, width, points); the main streets first
+        ('main', 10.0, [(cx + r0, 0.0), (-1.0, 0.0)]),
+        ('west', 8.0, [(cx - r0, 0.0), (-236.0, 0.0)]),
+        ('north', 8.0, [(cx, r0), (cx, ly1)]),
+        ('south', 8.0, [(cx, -r0), (cx, ly0)]),
+        ('ring1', RING1[1], ring_pts(RING1[0])),
+        ('ring2', RING2[1], ring_pts(RING2[0])),
+    ]
+    for k, a in enumerate((45, 135, 225, 315)):   # lanes through the ring between the main streets
+        u = (math.cos(math.radians(a)), math.sin(math.radians(a)))
+        out.append(('lane%d' % k, 4.0, [(cx + u[0] * r0, cy + u[1] * r0), (cx + u[0] * (RING_OUT + 0.5),
+                                                                            cy + u[1] * (RING_OUT + 0.5))]))
+    # the grid beyond the rings (north-east and south-east ones run out to the college and onsen gates)
+    grid = [('gy%d' % i, 6.0, (lx0, y), (lx1 + 6.0 if y in (108.0, -120.0) else lx1, y))
+            for i, y in enumerate((-120.0, -62.0, 62.0, 108.0))]
+    grid += [('gx%d' % i, 6.0, (x, ly0), (x, ly1)) for i, x in enumerate((-195.0, -158.0, -82.0, -45.0))]
+    for name, w, a, b in grid:
+        for k, (p, q) in enumerate(_clip_out(a, b, RING_OUT - 0.5)):
+            out.append(('%s_%d' % (name, k), w, [p, q]))
+    # the lane inside the walls
+    out += [('lane_w', LANE_W, [(lx0, ly0), (lx0, ly1)]), ('lane_e', LANE_W, [(lx1, ly0), (lx1, ly1)]),
+            ('lane_n', LANE_W, [(lx0, ly1), (lx1, ly1)]), ('lane_s', LANE_W, [(lx0, ly0), (lx1, ly0)])]
+    return out
+
+
+STREETS = _streets()
 
 # ---------------------------------------------------------------- shops (front on the main street)
 
-# lot: (x0, y0, x1, y1) of the building; door: x of the door centre on the front; front: 'N' or 'S'
+# lot: (x0, y0, x1, y1) of the building; door: x of the door centre on the front; front: 'N' or 'S'. In the ring of
+# houses where the main street crosses it, a few steps from the square.
 SHOPS = [
-    {'id': 'seven', 'name': 'セブンイレブン', 'lot': (-37.0, -19.0, -23.0, -5.0), 'front': 'N', 'door': -27.0,
+    {'id': 'seven', 'name': 'セブンイレブン', 'lot': (-44.5, -18.0, -30.5, -5.5), 'front': 'N', 'door': -34.5,
      'style': 'seven'},
-    {'id': 'books', 'name': '本屋「ひなた書房」', 'lot': (-38.0, 5.0, -26.5, 18.0), 'front': 'S', 'door': -32.0,
+    {'id': 'books', 'name': '本屋「ひなた書房」', 'lot': (-44.5, 5.5, -34.5, 17.5), 'front': 'S', 'door': -39.5,
      'style': 'books'},
-    {'id': 'bakery', 'name': 'パン屋「こむぎ」', 'lot': (-21.0, 5.0, -10.0, 15.0), 'front': 'S', 'door': -15.5,
+    {'id': 'bakery', 'name': 'パン屋「こむぎ」', 'lot': (-34.0, 5.5, -25.5, 15.5), 'front': 'S', 'door': -29.75,
      'style': 'bakery'},
 ]
 
@@ -116,13 +167,12 @@ COLLEGE = {
     'name': '学校「はじまりカレッジ」',
 }
 # the market stalls are a workplace too: this rectangle round them (x0, y0, x1, y1), north and south rows
-STALL_WORK = [(-74.0, 31.0, -50.0, 38.0), (-74.0, -38.0, -50.0, -31.0)]
+STALL_WORK = [(-80.0, 21.0, -56.0, 28.0), (-80.0, -28.0, -56.0, -21.0)]
 
-# market stalls on the square (x, y, rot degrees, goods colour)
-STALLS = [(-70.0, 34.0, 180), (-62.0, 34.0, 180), (-54.0, 34.0, 180), (-70.0, -34.0, 0), (-62.0, -34.0, 0),
-          (-54.0, -34.0, 0)]
-FOUNTAIN = (-50.0, 0.0, 5.0)     # x, y, radius (in front of the church door)
-WELLS = [(-205.0, 30.0), (-160.0, -128.0)]
+# market stalls on the square (x, y, rot degrees), either side of the way from the door to the main street
+STALLS = [(-76.0, 24.0, 180), (-68.0, 24.0, 180), (-60.0, 24.0, 180), (-76.0, -24.0, 0), (-68.0, -24.0, 0),
+          (-60.0, -24.0, 0)]
+FOUNTAIN = (-64.0, 0.0, 5.0)     # x, y, radius (in front of the church door)
 
 # ---------------------------------------------------------------- terrain
 
@@ -387,12 +437,12 @@ def landmarks():
     return [
         ('plaza', '教会前の広場', dx + fx * 22, dy + fy * 22 - 8),
         ('fountain', '広場の噴水', FOUNTAIN[0] + 7.5, FOUNTAIN[1] - 2),
-        ('market', '広場の市場', -62.0, 28.0),
-        ('square_north', '教会の北の並木', -120.0, 74.0),
-        ('square_south', '教会の南の並木', -120.0, -74.0),
-        ('seven', 'セブンイレブン', -27.0, -8.0),
-        ('books', '本屋「ひなた書房」', -32.0, 11.0),
-        ('bakery', 'パン屋「こむぎ」', -15.5, 10.0),
+        ('market', '広場の市場', -68.0, 19.5),
+        ('square_north', '教会の北の並木', -120.0, 58.0),
+        ('square_south', '教会の南の並木', -120.0, -62.0),
+        ('seven', 'セブンイレブン', -34.5, -8.5),
+        ('books', '本屋「ひなた書房」', -39.5, 8.5),
+        ('bakery', 'パン屋「こむぎ」', -29.75, 8.5),
         ('north_gate', '北東の門', 4.0, 106.0),
         ('college_gate', '学校「はじまりカレッジ」の門', 34.0, 83.0),
         ('college_court', 'カレッジの中庭', 34.0, 113.0),
@@ -401,7 +451,7 @@ def landmarks():
         ('chapel', 'カレッジの礼拝堂の前', 34.0, 132.0),
         ('main_gate', '東の門', 4.0, 0.0),
         ('south_gate', '南の門', 4.0, -120.0),
-        ('old_lane', '北の路地', -121.0, 126.0),
+        ('old_lane', '北の路地', -158.0, 126.0),
         ('west_gate', '西の門', -224.0, 0.0),
         ('avenue', 'イチョウ並木', 28.0, 4.0),
         ('park_fountain', '公園の噴水広場', 58.0, 8.0),
@@ -416,6 +466,10 @@ def landmarks():
     ]
 
 
+# the main places: named on the map and listed there to warp to (docs/prd.md 3.4.14)
+MAJOR = {'plaza', 'market', 'square_north', 'square_south', 'seven', 'books', 'bakery', 'main_gate', 'west_gate',
+         'park_fountain', 'lawn', 'pond', 'summit', 'onsen', 'college_court', 'library'}
+
 SPAWN = None   # set from the landmarks: on the plaza
 
 
@@ -424,14 +478,43 @@ def spawn():
     return lm['plaza'][2], lm['plaza'][3] - 3.0
 
 
-# portals: (id, name, x, y, to, at)
+# the Passion façade's door, on the west, opposite the Nativity's (it opens on the west main street)
+PASSION_DOOR = (-156.5, 0.0)
+
+
+# portals (assets/areas.json): (id, name, x, y, to, at). Both church doors lead inside, to the crossing (the roomiest
+# place there); they stand just outside the doors, quiet (no arch).
 def portals():
     dx, dy = CHURCH_DOOR
     fx, fy = CHURCH_FACING
     return [
-        ('gate_sagrada', 'サグラダ・ファミリアの入口', dx + fx * 4.0, dy + fy * 4.0, 'sagrada', 'gate_hajimari'),
+        ('gate_sagrada', 'サグラダ・ファミリアの入口（生誕の門）', dx + fx * 1.5, dy + fy * 1.5, 'sagrada', 'crossing'),
+        ('gate_sagrada_passion', 'サグラダ・ファミリアの入口（受難の門）', PASSION_DOOR[0] - 1.5, PASSION_DOOR[1], 'sagrada',
+         'crossing'),
         ('gate_venezia', 'ヴェネツィアへの門', -236.0, 0.0, 'venezia', 'gate_main'),
     ]
+
+
+def square_trees():
+    """Plane trees in a ring round the square, clear of the streets coming in, the church and the stalls."""
+    cx, cy = TOWN_C
+    r = SQUARE_R - 4.5
+    out = []
+    n = int(2 * math.pi * r / 10.5)
+    for k in range(n):
+        a = 2 * math.pi * (k + 0.5) / n
+        x, y = cx + r * math.cos(a), cy + r * math.sin(a)
+        if min(abs(x - cx), abs(y - cy)) < 9.0:                       # the main streets
+            continue
+        if any(abs(math.sin(a - math.radians(d))) < 0.09 and math.cos(a - math.radians(d)) > 0
+               for d in (45, 135, 225, 315)):                         # the lanes
+            continue
+        if any(math.hypot(x - sx, y - sy) < 4.5 for (sx, sy, _) in STALLS):
+            continue
+        if any(_inside_poly(np.array([x]), np.array([y]), p)[0] for p in church_polys()):
+            continue
+        out.append((x, y))
+    return out
 
 
 def to_gltf(x, y):
@@ -483,13 +566,12 @@ def trees():
         o /= np.linalg.norm(o)
         p = c + o * 6.5
         add('sakura' if i % 3 else 'momiji', p[0], p[1], 1.0)
-    # town: plane trees round the church square and on the plaza
-    x0, y0, x1, y1 = SQUARE
-    for x in np.arange(x0 + 8, x1 - 4, 11.0):
-        for y in (y0 + 6, y1 - 6):
-            add('platanus', x, y, 1.0)
-    for y in np.arange(y0 + 20, y1 - 16, 12.0):
-        add('platanus', x0 + 6, y, 1.0)
+    # town: plane trees in a ring round the church square, and in the small parks (lots.parks)
+    for (x, y) in square_trees():
+        add('platanus', x, y, 1.0)
+    from . import lots
+    for (sp, x, y, s) in lots.park_trees():
+        add(sp, x, y, s)
     # onsen: maples round the bath, a pine by the gate
     for (x, y) in [(10, -140), (62, -139), (66, -150), (6, -154), (66, -158), (48, -110), (20, -110)]:
         add('momiji', x, y, 0.9)

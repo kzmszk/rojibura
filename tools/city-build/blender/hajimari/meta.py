@@ -19,7 +19,8 @@ def write(out_dir):
     os.makedirs(plan.AREA_DIR, exist_ok=True)
     sx, sy = plan.spawn()
     meta = {
-        'landmarks': [{'id': i, 'name': n, 'pos': G(x, y), 'y': 0} for (i, n, x, y) in plan.landmarks()],
+        'landmarks': [{'id': i, 'name': n, 'pos': G(x, y), 'y': 0, **({'major': True} if i in plan.MAJOR else {})}
+                      for (i, n, x, y) in plan.landmarks()],
         'spawn': {'pos': G(sx, sy), 'y': 0},
     }
     json.dump(meta, open(os.path.join(out_dir, 'meta.json'), 'w'), ensure_ascii=False, indent='\t')

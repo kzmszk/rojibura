@@ -31,6 +31,7 @@ export class CityScene {
 	private readonly sun: THREE.DirectionalLight;
 	private readonly hemi: THREE.HemisphereLight;
 	private water: THREE.Mesh | null = null;
+	private shadowHalf = SHADOW_HALF;
 
 	constructor(root: HTMLElement) {
 		this.root = root;
@@ -103,11 +104,74 @@ export class CityScene {
 	}
 
 	private setShadow(half: number): void {
+		this.shadowHalf = half;
 		const s = this.sun.shadow.camera;
 		s.left = s.bottom = -half;
 		s.right = s.top = half;
 		s.far = 100 + half * 2;
 		s.updateProjectionMatrix();
+	}
+
+	/**
+	 * The area seen from straight above, north up (docs/prd.md 3.4.14): `bounds` in metres (x0, z0, x1, z1), `width`
+	 * pixels wide. With `cut`, from that height (under a roof). `hide` is left out while drawing.
+	 */
+	renderMap(
+		bounds: [number, number, number, number],
+		width: number,
+		cut: number | undefined,
+		hide: THREE.Object3D[],
+	): HTMLCanvasElement {
+		const [x0, z0, x1, z1] = bounds;
+		const w = x1 - x0;
+		const h = z1 - z0;
+		const height = Math.round((width * h) / w);
+		// drawn twice the size and scaled down, for smooth edges
+		const ss = 2;
+		const top = cut ?? 600;
+		const cam = new THREE.OrthographicCamera(-w / 2, w / 2, h / 2, -h / 2, 0.05, top + 200);
+		cam.up.set(0, 0, -1);
+		cam.position.set((x0 + x1) / 2, top, (z0 + z1) / 2);
+		cam.lookAt((x0 + x1) / 2, 0, (z0 + z1) / 2);
+		const target = new THREE.WebGLRenderTarget(width * ss, height * ss);
+		target.texture.colorSpace = THREE.SRGBColorSpace;
+		const fog = this.scene.fog;
+		const half = this.shadowHalf;
+		const shown = hide.filter((o) => o.visible);
+		for (const o of shown) o.visible = false;
+		this.scene.fog = null;
+		// the sun's shadow over the whole area while drawing it
+		this.setShadow(Math.max(w, h) / 2 + 10);
+		this.sun.target.position.set((x0 + x1) / 2, 0, (z0 + z1) / 2);
+		this.sun.position.copy(this.sun.target.position).add(SUN_OFFSET.clone().multiplyScalar(6));
+		const pixels = new Uint8Array(width * ss * height * ss * 4);
+		try {
+			this.renderer.setRenderTarget(target);
+			this.renderer.render(this.scene, cam);
+			this.renderer.readRenderTargetPixels(target, 0, 0, width * ss, height * ss, pixels);
+		} finally {
+			this.renderer.setRenderTarget(null);
+			target.dispose();
+			this.scene.fog = fog;
+			this.setShadow(half);
+			for (const o of shown) o.visible = true;
+		}
+		// GL rows go up from the bottom
+		const big = document.createElement("canvas");
+		big.width = width * ss;
+		big.height = height * ss;
+		const image = new ImageData(width * ss, height * ss);
+		const row = width * ss * 4;
+		for (let y = 0; y < height * ss; y++)
+			image.data.set(pixels.subarray((height * ss - 1 - y) * row, (height * ss - y) * row), y * row);
+		(big.getContext("2d") as CanvasRenderingContext2D).putImageData(image, 0, 0);
+		const out = document.createElement("canvas");
+		out.width = width;
+		out.height = height;
+		const ctx = out.getContext("2d") as CanvasRenderingContext2D;
+		ctx.imageSmoothingQuality = "high";
+		ctx.drawImage(big, 0, 0, width, height);
+		return out;
 	}
 
 	/** Loads the area's glb files (meshopt-compressed ones too); `onFile` after each. Resolves to their roots. */

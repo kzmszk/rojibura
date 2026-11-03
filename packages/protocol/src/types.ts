@@ -100,6 +100,8 @@ export interface AvatarState {
 	doing?: Doing;
 	/** Working or studying now (docs/prd.md 3.8.6): it earns coins. */
 	job?: JobKind;
+	/** Humans floating in the air (docs/prd.md 3.4.13): the height they float at (world Y, metres). */
+	fly?: number;
 }
 
 /** Earning coins (docs/prd.md 3.8.6): working at a shop or the inn, or studying at school or the bookshop. */
@@ -203,6 +205,8 @@ export interface AreaInfo {
 	winter?: string[];
 	/** Free play builds here (docs/prd.md 3.7). */
 	build?: boolean;
+	/** People may float in the air here (docs/prd.md 3.4.13). */
+	fly?: boolean;
 	view?: AreaView;
 	/** Shown in a corner while in the area: the licences of what is drawn. */
 	credit?: string;
@@ -222,6 +226,11 @@ export interface AreaView {
 	shadow?: number;
 	/** How far the camera may orbit from your avatar (metres): less inside a building, so it stays in. */
 	camera?: number;
+	/**
+	 * The map (docs/prd.md 3.4.14) is the area seen from straight above; inside a building it is seen from this
+	 * height (metres), under the roof.
+	 */
+	mapCut?: number;
 }
 
 /** A way to another area. People walk up to it and travel; it is also one of the area's landmarks. */
@@ -232,6 +241,8 @@ export interface Portal {
 	to: AreaId;
 	/** A landmark or portal of `to` where travellers appear. */
 	at: string;
+	/** Drawn without the glowing arch, its name shown only close by: a door that is a way in. */
+	quiet?: true;
 }
 
 /** GET /api/models: what can be built. */
@@ -299,7 +310,14 @@ export type ClientToHost =
 	| { t: "BODY"; keys: BodyKey[]; to?: AvatarId }
 	/** Starts an activity of the area where one stands (docs/life.md 3); moving or ACT_STOP ends it. */
 	| { t: "ACT"; activity: string }
-	| { t: "ACT_STOP" };
+	| { t: "ACT_STOP" }
+	/**
+	 * Humans, where the area allows (docs/prd.md 3.4.13): float at height `alt` (world Y, metres), or come down
+	 * (null) to the ground nearest below. Afloat, you move in straight lines over everything.
+	 */
+	| { t: "FLY"; alt: number | null }
+	/** Humans: be at one of the area's landmarks or portals at once (docs/prd.md 3.4.14). */
+	| { t: "WARP"; to: string };
 
 export type LeaveReason = "quit" | "timeout" | "kicked" | "closing";
 export type ConvEndReason = "max_turns" | "timeout" | "left" | "budget";
@@ -327,6 +345,8 @@ export type HostToClient =
 	| { t: "JOINED"; avatar: AvatarState }
 	| { t: "LEFT"; id: AvatarId; reason: LeaveReason }
 	| { t: "MOVED"; id: AvatarId; move: MoveState }
+	/** Floating at `alt` now, or back on the ground (null; where it lands comes as MOVED). */
+	| { t: "FLEW"; id: AvatarId; alt: number | null }
 	| { t: "CORRECT"; move: MoveState }
 	| { t: "ACTED"; id: AvatarId; motion: Motion; target?: AvatarId; at: number }
 	| { t: "SAID"; id: AvatarId; text: string; to?: AvatarId; convId?: string; at: number }
