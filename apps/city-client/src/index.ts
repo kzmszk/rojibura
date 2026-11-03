@@ -2170,7 +2170,7 @@ async function startCity(
 		}
 		actsBar.hidden = actsBar.childElementCount === 0;
 	};
-	/** Avatars in their bath towel now, and those whose towel is ready (docs/prd.md 3.8.6). */
+	/** Avatars in their swimsuit now, and those whose swimsuit is ready (docs/prd.md 3.8.6). */
 	const bathers = new WeakSet<AvatarView>();
 	const readied = new WeakSet<AvatarView>();
 	const frame = (t: number) => {
@@ -2188,7 +2188,7 @@ async function startCity(
 			v.attend(near && (talking || mood?.glance) ? owner.eyePosition() : null);
 			v.standFacing(mood ? mood.facing : null);
 			v.update(now, dt, scene);
-			// at the onsen everyone has taken their clothes off and wears a bath towel; the towel is made
+			// at the onsen everyone has taken their clothes off and wears a swimsuit; the swimsuit is made
 			// before they get there (the first one of a model takes a moment)
 			const at = poseAt(v.state.move, now).pos;
 			const bathing = zones.at(at, "bath") !== null;

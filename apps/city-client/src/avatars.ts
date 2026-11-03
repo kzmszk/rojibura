@@ -30,7 +30,7 @@ import {
 } from "./moves.ts";
 import { retarget } from "./retarget.ts";
 import type { CityScene } from "./scene.ts";
-import { Bath, rigifyBones } from "./towel.ts";
+import { Bath, rigifyBones, type Suit } from "./swimsuit.ts";
 
 /** The city's motions on one skeleton, and how fast walk and run cover the ground at normal speed. */
 interface Motions {
@@ -318,7 +318,7 @@ export class AvatarView {
 	private landing = false;
 	private facing = 0;
 	private readonly isMe: boolean;
-	/** In the bath: clothes off and a towel on (made the first time). */
+	/** In the bath: clothes off and a swimsuit on (made the first time). */
 	private bathing = false;
 	private bath: Bath | null = null;
 	private readonly modelUrl: string;
@@ -819,8 +819,8 @@ export class AvatarView {
 	}
 
 	/**
-	 * In the bath or its changing room (or not): clothes off and a bath towel wrapped round from the armpits
-	 * to mid-thigh. Cheap to switch any time, also while walking; the towel is made the first time.
+	 * In the bath or its changing room (or not): clothes off and a swimsuit on (a one-piece, or trunks). Cheap
+	 * to switch any time, also while walking; the swimsuit is made the first time.
 	 */
 	setBathing(on: boolean): void {
 		this.bathing = on;
@@ -829,7 +829,7 @@ export class AvatarView {
 	}
 
 	/**
-	 * Gets the towel ready without going in (the first time for a model takes some hundreds of milliseconds):
+	 * Gets the swimsuit ready without going in (the first time for a model takes some hundreds of milliseconds):
 	 * e.g. when the avatar comes near the bath, or in idle time. Does nothing until the model has loaded.
 	 */
 	prepareBath(): void {
@@ -846,10 +846,28 @@ export class AvatarView {
 				const node = vrm.humanoid.getRawBoneNode(name as VRMHumanBoneName);
 				if (node) bones[name] = node;
 			}
-			return new Bath({ root: vrm.scene, bones, key: this.modelUrl, materials: vrm.materials, vroid: true });
+			return new Bath({
+				root: vrm.scene,
+				bones,
+				key: this.modelUrl,
+				materials: vrm.materials,
+				vroid: true,
+				suit: this.suit,
+			});
 		}
 		if (!this.mixer) return null;
-		return new Bath({ root: this.model, bones: rigifyBones(this.model), key: this.modelUrl, vroid: false });
+		return new Bath({
+			root: this.model,
+			bones: rigifyBones(this.model),
+			key: this.modelUrl,
+			vroid: false,
+			suit: this.suit,
+		});
+	}
+
+	/** Men bathe in trunks, women (and looks with no sex) in a one-piece swimsuit. */
+	private get suit(): Suit {
+		return this.state.assets.sex === "m" ? "trunks" : "one-piece";
 	}
 
 	/**

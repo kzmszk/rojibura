@@ -1,10 +1,10 @@
-// What a body looks like with its clothes off, for the bath (towel.ts). Everything here works on the body at
+// What a body looks like with its clothes off, for the bath (swimsuit.ts). Everything here works on the body at
 // rest, in its skeleton's bind space (where the skinned meshes' vertices are before any bone moves them).
 //
 // A VRoid model's clothes are separate meshes (materials named "…_CLOTH"), but VRoid deletes the skin hidden
 // under them, so taking them off can leave the shoulders, the upper arms or the chest missing. Clothes can
 // also be painted on the skin's own texture (socks, a T-shirt, trousers). So, for a body in the bath:
-// - painted clothes outside the towel are painted over with skin (the colours of the skin around them), and
+// - painted clothes outside the swimsuit are painted over with skin (the colours of the skin around them), and
 // - skin that was deleted is made again: a smooth body is modelled from the bones and the skin that is left
 //   (tubes for the limbs and the neck, slices for the trunk), and the part of it where no skin is gets drawn,
 //   skinned to the bones like the skin around it.

@@ -1,5 +1,5 @@
 // Places with a rule of their own (an area's zones.json, docs/prd.md 3.8.6): indoors, where the camera looks from
-// your eyes (it would be above the ceiling otherwise); the onsen, where everyone wears a bath towel; its changing
+// your eyes (it would be above the ceiling otherwise); the onsen, where everyone wears a swimsuit; its changing
 // rooms, which only men or only women go into.
 
 import { type KeepOut, roomsKeptOut } from "@rojibura/nav";

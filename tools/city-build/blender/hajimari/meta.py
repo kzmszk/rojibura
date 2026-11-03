@@ -2,7 +2,7 @@
 
   out/hajimari/meta.json            landmarks and spawn without heights (build-grid.ts adds them)
   assets/areas/hajimari/trees.json  every tree for the browser (species, position, scale, rotation)
-  assets/areas/hajimari/zones.json  places with a rule: the onsen, where avatars wear a towel
+  assets/areas/hajimari/zones.json  places with a rule: the onsen, where avatars wear a swimsuit
   assets/areas/hajimari/shops.json  the shops, their counters and what they sell
 """
 import json, os

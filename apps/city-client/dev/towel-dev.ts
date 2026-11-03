@@ -1,6 +1,6 @@
-// Dev harness for bathing (AvatarView.setBathing): the preset avatars side by side, dressed or in a towel,
+// Dev harness for bathing (AvatarView.setBathing): the preset avatars side by side, dressed or in a swimsuit,
 // standing, walking, sitting, lying or in a gesture, seen from any side. Query options:
-//   who=fumiriya,shibu,…  bath=0|1|skin (skin: clothes off, towel hidden)  pose=stand|walk|run|sit|lie|<gesture>
+//   who=fumiriya,shibu,…  bath=0|1|skin (skin: clothes off, swimsuit hidden)  pose=stand|walk|run|sit|lie|<gesture>
 //   t=seconds into the motion  yaw=degrees the avatars are turned (0 faces the camera)
 //   cam=full|close|low|top  toggles=n (bathing switched on and off n times first)
 // When the picture is ready, document.body.dataset.done is set (for a headless screenshot).
@@ -56,7 +56,12 @@ const views = who.map(
 				kind: "ai",
 				name,
 				status: "active",
-				assets: { thumb: "", lod: url(name), vrm: url(name) },
+				assets: {
+					thumb: "",
+					lod: url(name),
+					vrm: url(name),
+					...(name === "fumiriya" || name === "rei" ? { sex: "m" as const } : {}),
+				},
 				move: moveOf(i),
 			},
 			false,
@@ -70,11 +75,11 @@ for (const v of views) {
 	v.setBathing(bath !== "0");
 	console.log(`${v.state.name}: bathing set in ${Math.round(performance.now() - t0)} ms`);
 }
-// skin: the towel hidden (the new skin shown), to see what is under it
+// skin: the swimsuit hidden (the new skin shown), to see what is under it
 if (bath === "skin")
 	for (const v of views)
 		v.root.traverse((o) => {
-			if (o.name === "rj-towel") o.visible = false;
+			if (o.name === "rj-suit") o.visible = false;
 		});
 // no fidgets (the first comes some 8 s in) and the same picture every time (after loading and bathing:
 // three.js makes its uuids with Math.random)
@@ -124,7 +129,7 @@ if (tex) {
 			| Record<string, { image?: unknown } | undefined>
 			| undefined;
 		const t = m?.[tex === "shade" ? "shadeMultiplyTexture" : "map"];
-		if (!canvas && o.name !== "rj-towel" && t?.image instanceof HTMLCanvasElement) canvas = t.image;
+		if (!canvas && o.name !== "rj-suit" && t?.image instanceof HTMLCanvasElement) canvas = t.image;
 	});
 	if (canvas) {
 		renderer.domElement.remove();

@@ -1,22 +1,21 @@
-// In the bath (the onsen inn's open-air bath and its changing room): an avatar takes its clothes off and has a
-// white bath towel wrapped round it from the armpits to mid-thigh, tucked in at the chest, like a modest
-// onsen scene on television. The towel always covers the chest to the thighs; shoulders, arms and legs are
-// bare.
+// In the bath (the onsen inn's open-air bath and its changing room): everyone bathes in a swimsuit
+// (2026-11-03, issue 46; a bath towel before). Women wear a one-piece with shoulder straps, cut high at the
+// legs; men wear swimming trunks.
 //
-// The towel is a skinned mesh on the avatar's own skeleton, made from the body at rest: rings round the trunk
-// and the thighs (the body's outline at each height, taut over the waist like cloth, hanging a little loose
-// below the hips), each vertex moved by the bones that move the skin under it, so it walks, sits, lies and
-// hugs with the body. Clothes are hidden (VRoid's "…_CLOTH" meshes); skin VRoid deleted under them and
-// clothes painted on the skin are dealt with in bath-body.ts. Everything is made the first time the avatar
-// bathes (and what does not depend on the avatar is kept for the next one of the same model); after that,
-// going in and out is only switching meshes and materials.
+// The swimsuit is a skinned mesh on the avatar's own skeleton, cut from the body's own surface at rest: the
+// skin's triangles (and the skin made again where VRoid deleted it under clothes, bath-body.ts) inside the
+// suit's outline, cut cleanly along it and lifted a few millimetres off the skin, each vertex moved by the
+// bones that move the skin under it, so it fits the body as it is and walks, sits, lies and hugs with it.
+// Clothes are hidden (VRoid's "…_CLOTH" meshes); clothes painted on the skin outside the suit are painted
+// over (bath-body.ts). Everything is made the first time the avatar bathes (and what does not depend on the
+// avatar is kept for the next one of the same model); after that, going in and out is only switching meshes
+// and materials.
 
 import { MToonMaterial } from "@pixiv/three-vrm";
 import * as THREE from "three";
 import {
 	type Body,
 	bodyShape,
-	type Cloud,
 	isSkin,
 	kindOf,
 	maskOf,
@@ -47,7 +46,11 @@ export interface BathModel {
 	 * skin's colour and the feet stay as they are (sandals).
 	 */
 	vroid: boolean;
+	/** Which swimsuit: a woman's one-piece, or a man's trunks (a look with no sex wears the one-piece). */
+	suit: Suit;
 }
+
+export type Suit = "one-piece" | "trunks";
 
 /** Bone names of a glTF avatar rigged like Blender's Rigify (Saki), by humanoid name. */
 const RIGIFY: Record<string, string> = {
@@ -82,7 +85,7 @@ export function rigifyBones(root: THREE.Object3D): Partial<Record<string, THREE.
 	return out;
 }
 
-/** A mesh's vertices: what a towel or new skin is made of. Shared by every avatar of the model. */
+/** A mesh's vertices: what a swimsuit or new skin is made of. Shared by every avatar of the model. */
 interface MeshData {
 	pos: Float32Array;
 	nrm: Float32Array;
@@ -94,12 +97,11 @@ interface MeshData {
 
 /** What bathing does to a model, worked out once per model. */
 interface Plan {
-	towel: MeshData;
+	suit: MeshData;
 	/** Skin made again where it was deleted under clothes; on the main skin's material. */
 	fill: MeshData | null;
-	/** The towel's top and bottom (bind space y). */
-	top: number;
-	bottom: number;
+	/** How far a point (bind space) is inside the suit's outline (metres; negative outside). */
+	inside: (p: THREE.Vector3, bone: number) => number;
 	/** Whether the new skin's UVs point at plain skin on the main skin texture yet. */
 	fillUV: boolean;
 }
@@ -118,16 +120,13 @@ interface Painted {
 	skin: [number, number] | null;
 }
 
-const towelColor = new THREE.Color(1, 1, 1);
-const towelShade = new THREE.Color(0.74, 0.74, 0.79);
-
-/** Ours: the towel and the new skin (not the model's own meshes). */
-const OURS = "rj-towel";
+/** Ours: the swimsuit and the new skin (not the model's own meshes). */
+const OURS = "rj-suit";
 
 export class Bath {
 	private built = false;
 	private on = false;
-	private towel: THREE.SkinnedMesh | null = null;
+	private suit: THREE.SkinnedMesh | null = null;
 	private fill: THREE.SkinnedMesh | null = null;
 	/** Each skin material and what it is in the bath (clothes painted over). */
 	private readonly swap = new Map<THREE.Material, THREE.Material>();
@@ -142,14 +141,14 @@ export class Bath {
 	}
 
 	/**
-	 * In the bath or not: switching meshes and materials. The first time in, the towel is made: some hundreds
+	 * In the bath or not: switching meshes and materials. The first time in, the swimsuit is made: some hundreds
 	 * of milliseconds for the first avatar of a model, some tens for the next (see `prepare`).
 	 */
 	set(on: boolean): void {
 		if (on) this.prepare();
 		this.on = on;
-		if (!this.towel) return;
-		this.towel.visible = on;
+		if (!this.suit) return;
+		this.suit.visible = on;
 		if (this.fill) this.fill.visible = on;
 		const back = new Map([...this.swap].map(([a, b]) => [b, a]));
 		const to = on ? this.swap : back;
@@ -176,14 +175,14 @@ export class Bath {
 		return this.on;
 	}
 
-	/** Makes the towel (and the rest) now, if not made yet, without going in: e.g. when the avatar is idle. */
+	/** Makes the swimsuit (and the rest) now, if not made yet, without going in: e.g. when the avatar is idle. */
 	prepare(): void {
 		if (!this.built) this.build();
 	}
 
 	dispose(): void {
 		if (this.on) this.set(false);
-		for (const m of [this.towel, this.fill]) {
+		for (const m of [this.suit, this.fill]) {
 			if (!m) continue;
 			m.removeFromParent();
 			m.geometry.dispose();
@@ -194,7 +193,7 @@ export class Bath {
 			const i = list?.indexOf(m) ?? -1;
 			if (list && i >= 0) list.splice(i, 1);
 		}
-		this.towel = null;
+		this.suit = null;
 		this.fill = null;
 	}
 
@@ -214,11 +213,12 @@ export class Bath {
 			if (body === undefined) body = measureBody(parts, this.model.bones);
 			return body;
 		};
-		let plan = plans.get(this.model.key);
+		const key = `${this.model.key} ${this.model.suit}`;
+		let plan = plans.get(key);
 		if (plan === undefined) {
 			const b = measured();
-			plan = b ? planFor(b, parts) : null;
-			plans.set(this.model.key, plan);
+			plan = b ? planFor(b, parts, this.model.suit) : null;
+			plans.set(key, plan);
 		}
 		if (!plan) return;
 		const main = mainOf(skins);
@@ -234,9 +234,9 @@ export class Bath {
 			plan.fillUV = true;
 		}
 
-		const towel = new THREE.SkinnedMesh(geometryOf(plan.towel), towelMaterial(main.material));
-		this.towel = this.attach(towel, `${OURS}`, main.skeleton, parent);
-		this.own.push(towel.material as THREE.Material);
+		const suit = new THREE.SkinnedMesh(geometryOf(plan.suit), suitMaterial(main.material, this.model));
+		this.suit = this.attach(suit, `${OURS}`, main.skeleton, parent);
+		this.own.push(suit.material as THREE.Material);
 		if (plan.fill) {
 			// the skin's own material (not its outline)
 			const first = [main.material].flat()[0] as THREE.Material;
@@ -258,7 +258,7 @@ export class Bath {
 		parent: THREE.Object3D,
 	): THREE.SkinnedMesh {
 		mesh.name = name;
-		// on the main skin's skeleton (the towel's bone indices are its), in bind space
+		// on the main skin's skeleton (the suit's bone indices are its), in bind space
 		mesh.bind(skeleton, new THREE.Matrix4());
 		mesh.castShadow = true;
 		mesh.frustumCulled = false;
@@ -269,7 +269,7 @@ export class Bath {
 
 	/**
 	 * Bath materials for the skin: clothes painted on the skin texture are painted over with skin where the
-	 * towel does not cover them (socks, trousers, a T-shirt's shoulders). Underwear under the towel stays.
+	 * suit does not cover them (socks, trousers, a T-shirt's shoulders). Underwear under the suit stays.
 	 */
 	private paint(measured: () => Body | null, plan: Plan, skins: THREE.SkinnedMesh[], parts: Part[]): void {
 		const byMap = new Map<THREE.Texture, THREE.SkinnedMesh[]>();
@@ -299,10 +299,12 @@ export class Bath {
 					.flatMap((m) => [m.material].flat())
 					.find((m) => (m as THREE.MeshBasicMaterial).map === map) as MToonMaterial | undefined;
 				const shade = like?.isMToonMaterial ? like.shadeMultiplyTexture : null;
-				// out of the towel: what reaches above its top or below its hem (by a little), and the arms
-				done = paintOver(map, shade, meshes, faces, boneIndex, this.model.vroid, body, (low, high, bone) => {
+				// out of the suit: a triangle with a corner outside it, or within a little of its edge (not the
+				// head: a model in one piece has its hair, eyes and brows there)
+				done = paintOver(map, shade, meshes, faces, boneIndex, this.model.vroid, body, (corners, bone) => {
+					if (body.head.has(bone)) return false;
 					if (!this.model.vroid && isFoot(body, bone, feet)) return false;
-					return high > plan.top - 0.03 * s || low < plan.bottom + 0.03 * s || body.arm.has(bone);
+					return corners.some((c) => plan.inside(c, bone) < 0.015 * s);
 				});
 				painted.set(map.source, done);
 			}
@@ -361,23 +363,15 @@ function geometryOf(d: MeshData): THREE.BufferGeometry {
 	return g;
 }
 
-// ---- the plan: new skin and the towel, at rest ----
+// ---- the plan: new skin and the swimsuit, at rest ----
 
-function planFor(body: Body, parts: Part[]): Plan | null {
-	const s = body.size;
-	const { at } = body;
-	const ua = [at.leftUpperArm, at.rightUpperArm];
-	const ul = [at.leftUpperLeg, at.rightUpperLeg];
-	const ll = [at.leftLowerLeg, at.rightLowerLeg];
-	if (!ua[0] || !ua[1] || !ul[0] || !ul[1] || !ll[0] || !ll[1]) return null;
-	const armpit = (ua[0].y + ua[1].y) / 2 - 0.085 * s;
-	const hip = (ul[0].y + ul[1].y) / 2;
-	const knee = (ll[0].y + ll[1].y) / 2;
-	const top = armpit;
-	const bottom = hip - (hip - knee) * 0.45;
+function planFor(body: Body, parts: Part[], kind: Suit): Plan | null {
+	const inside = outline(body, kind);
+	if (!inside) return null;
 	const fill = parts.some((p) => p.kind === "cloth") ? skinFill(body) : null;
-	const towel = towelOf(body, fill, top, bottom);
-	return towel ? { towel, fill, top, bottom, fillUV: false } : null;
+	const main = mainOf(parts.filter((p) => p.kind === "skin").map((p) => p.mesh));
+	const suit = suitOf(body, main, fill, inside);
+	return suit ? { suit, fill, inside, fillUV: false } : null;
 }
 
 /** Skin made again where VRoid deleted it under clothes (bath-body.ts), or null if nothing is missing. */
@@ -468,347 +462,215 @@ function skinFill(body: Body): MeshData | null {
 	};
 }
 
-const RINGS = 18;
-const COLUMNS = 72;
-/** Where the towel's end is tucked in: this far round from the front towards the wearer's left (radians). */
-const TUCK = 0.5;
-/** How far round the end lies over the towel (radians). */
-const OVERLAP = 1.4;
+// ---- the swimsuit's outline and its mesh, at rest ----
+
+const smooth = (a: number, b: number, x: number) => {
+	const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+	return t * t * (3 - 2 * t);
+};
 
 /**
- * The towel at rest: rings from mid-thigh up to the armpits round the body's outline (the trunk and both
- * thighs together, not the arms), taut over hollows, with a rolled hem at the top and the bottom, the end
- * lying over the towel and tucked in at the chest, soft folds below the hips, and a terry texture.
+ * How far a point of the body at rest (bind space) is inside the swimsuit's outline, in metres (negative
+ * outside); `bone` is the bone that moves it most (the arms and the head are never in it). Null if the body
+ * lacks the bones to measure it by.
+ * - one-piece: up to just over the armpits in front (a little lower at the back), straps over the shoulders,
+ *   and leg openings cut from the crotch up over the hip bones at the sides;
+ * - trunks: from below the navel to a hand's breadth down the thighs.
  */
-function towelOf(body: Body, fill: MeshData | null, top: number, bottom: number): MeshData | null {
+function outline(body: Body, kind: Suit): ((p: THREE.Vector3, bone: number) => number) | null {
 	const s = body.size;
-	const { front, left } = body;
-	// the outline at each height, from the skin and the new skin (not arms, not the head)
-	const pts: [number, number, number][] = [];
-	const skin = body.skin;
-	for (let i = 0; i < skin.count; i++) {
-		const b = skin.main[i] as number;
-		if (body.arm.has(b) || body.head.has(b)) continue;
-		pts.push([skin.pos[i * 3] as number, skin.pos[i * 3 + 1] as number, skin.pos[i * 3 + 2] as number]);
-	}
-	if (fill)
-		for (let i = 0; i < fill.pos.length / 3; i++) {
-			if (body.arm.has(fill.joints[i * 4] as number)) continue;
-			pts.push([fill.pos[i * 3] as number, fill.pos[i * 3 + 1] as number, fill.pos[i * 3 + 2] as number]);
-		}
-	const ys = Array.from({ length: RINGS }, (_, k) => bottom + ((top - bottom) * k) / (RINGS - 1));
-	const half = ((top - bottom) / (RINGS - 1)) * 0.8;
-	const hulls = ys.map((y) => hull2(pts.filter((p) => Math.abs(p[1] - y) < half).map((p) => [p[0], p[2]])));
-	// one upright axis through the middle of them all
-	let cx = 0;
-	let cz = 0;
-	let nh = 0;
-	for (const h of hulls) {
-		if (h.length < 3) continue;
-		const [x, z] = centroid(h);
-		cx += x;
-		cz += z;
-		nh++;
-	}
-	if (nh === 0) return null;
-	cx /= nh;
-	cz /= nh;
-	// radius at each ring and column (angle from the front towards the left, starting at the tuck)
-	const angle = (j: number) => TUCK - (j / COLUMNS) * Math.PI * 2;
-	const dirOf = (a: number): [number, number] => [
-		front.x * Math.cos(a) + left.x * Math.sin(a),
-		front.z * Math.cos(a) + left.z * Math.sin(a),
+	const { at, front, left } = body;
+	const [ul, ur, al, ar, neck] = [
+		at.leftUpperLeg,
+		at.rightUpperLeg,
+		at.leftUpperArm,
+		at.rightUpperArm,
+		at.neck,
 	];
-	const r: number[][] = hulls.map((h) =>
-		Array.from({ length: COLUMNS + 1 }, (_, j) => (h.length >= 3 ? rayHull(h, cx, cz, dirOf(angle(j))) : -1)),
-	);
-	// rings with no outline take their neighbours'
-	for (let k = 0; k < RINGS; k++) {
-		if ((r[k] as number[])[0] !== -1) continue;
-		const below = [...r.slice(0, k)].reverse().find((x) => x[0] !== -1);
-		const above = r.slice(k + 1).find((x) => x[0] !== -1);
-		r[k] = (above ?? below ?? []).slice();
-		if ((r[k] as number[]).length === 0) return null;
+	if (!ul || !ur || !al || !ar || !neck) return null;
+	const centre = ul.clone().add(ur).multiplyScalar(0.5);
+	const hip = centre.y;
+	// half the hips' width (between the thighs' joints), and the shoulders'
+	const legs = Math.abs(ul.clone().sub(ur).dot(left)) / 2;
+	const shoulders = Math.abs(al.clone().sub(ar).dot(left)) / 2;
+	const armpit = (al.y + ar.y) / 2 - 0.085 * s;
+	const d = new THREE.Vector3();
+	const out = (bone: number) => body.arm.has(bone) || body.head.has(bone);
+	if (kind === "trunks") {
+		const top = hip + 0.1 * s;
+		const bottom = hip - 0.15 * s;
+		return (p, bone) => (out(bone) ? -1 : Math.min(top - p.y, p.y - bottom));
 	}
-	// smooth round each ring
-	for (const ring of r)
-		for (let pass = 0; pass < 3; pass++) {
-			const old = ring.slice(0, COLUMNS);
-			for (let j = 0; j < COLUMNS; j++)
-				ring[j] =
-					((old[(j + COLUMNS - 1) % COLUMNS] as number) +
-						2 * (old[j] as number) +
-						(old[(j + 1) % COLUMNS] as number)) /
-					4;
-			ring[COLUMNS] = ring[0] as number;
-		}
-	// up each column: taut over hollows (the waist), and hanging from the hips rather than hugging the thighs
-	for (let j = 0; j <= COLUMNS; j++) {
-		const col = r.map((ring) => ring[j] as number);
-		const env = upperEnvelope(ys, col);
-		let hipK = 0;
-		for (let k = 0; k < Math.ceil(RINGS * 0.6); k++) if ((env[k] as number) > (env[hipK] as number)) hipK = k;
-		const rh = env[hipK] as number;
-		const yh = ys[hipK] as number;
-		for (let k = 0; k < RINGS; k++) {
-			let v = env[k] as number;
-			if (k < hipK)
-				v = Math.max(v, rh * (1 - 0.1 * ((yh - (ys[k] as number)) / Math.max(1e-6, yh - bottom))));
-			(r[k] as number[])[j] = v;
-		}
-	}
-
-	// the cloth: rings out from the body, with a hem rolled at each end and the end lying over the towel
-	const gap = 0.013 * s;
-	const thick = 0.005 * s;
-	const rand = mulberry32(7);
-	// the profile from the inside of the bottom hem round to the inside of the top one: ring, radial offset,
-	// height offset, texture v (0 top, 1 bottom)
-	const profile: [k: number, dr: number, dy: number, v: number][] = [];
-	profile.push(
-		[0, -0.011 * s, 0.03 * s, 1.0],
-		[0, -0.008 * s, 0.002 * s, 1.0],
-		[0, -0.002 * s, -0.006 * s, 0.99],
-	);
-	for (let k = 0; k < RINGS; k++) profile.push([k, 0, 0, 0.97 - (k / (RINGS - 1)) * 0.94]);
-	profile.push(
-		[RINGS - 1, -0.001 * s, 0.006 * s, 0.01],
-		[RINGS - 1, -0.007 * s, 0.004 * s, 0.0],
-		[RINGS - 1, -0.01 * s, -0.03 * s, 0.0],
-	);
-	const rows = profile.length;
-	const pos: number[] = [];
-	const uv: number[] = [];
-	const radiusAt = (k: number, j: number, dr: number, row: number) => {
-		const phi = (j / COLUMNS) * Math.PI * 2;
-		// the end lies over the towel for OVERLAP before the tuck, thickening in from nothing
-		const over =
-			phi > Math.PI * 2 - OVERLAP ? Math.min(1, (phi - (Math.PI * 2 - OVERLAP)) / 0.35) * thick : 0;
-		const y = ys[k] as number;
-		// soft folds below the hips, deeper towards the hem
-		const low = Math.max(0, Math.min(1, (bottom + (top - bottom) * 0.45 - y) / ((top - bottom) * 0.45)));
-		const fold = low * low * 0.0045 * s * (0.5 + 0.5 * Math.sin(phi * 7 + Math.sin(phi * 3) * 1.3));
-		const noise = (rand() - 0.5) * 0.0012 * s * (row > 2 && row < rows - 3 ? 1 : 0);
-		return ((r[k] as number[])[j] as number) + gap + over + fold + noise + dr;
-	};
-	for (let row = 0; row < rows; row++) {
-		const [k, dr, dy, v] = profile[row] as [number, number, number, number];
-		for (let j = 0; j <= COLUMNS; j++) {
-			const [dx, dz] = dirOf(angle(j));
-			const rad = radiusAt(k, j, dr, row);
-			pos.push(cx + dx * rad, (ys[k] as number) + dy, cz + dz * rad);
-			uv.push((j / COLUMNS) * 5, v);
-		}
-	}
-	const index: number[] = [];
-	const at = (row: number, j: number) => row * (COLUMNS + 1) + j;
-	for (let row = 0; row < rows - 1; row++)
-		for (let j = 0; j < COLUMNS; j++) {
-			const a = at(row, j);
-			const b = at(row, j + 1);
-			const c = at(row + 1, j + 1);
-			const d = at(row + 1, j);
-			// the columns go round from the front to the right: this way faces out
-			index.push(a, c, b, a, d, c);
-		}
-	// smooth normals over the cloth; the edge and the tucked corner below keep theirs
-	const sheet = new THREE.BufferGeometry();
-	sheet.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
-	sheet.setIndex(index);
-	sheet.computeVertexNormals();
-	const nrm = Array.from((sheet.attributes.normal as THREE.BufferAttribute).array as Float32Array);
-	sheet.dispose();
-	// the end's edge: from the outer layer (last column) down to the towel under it (first column), both ways
-	for (let row = 2; row < rows - 3; row++) {
-		const a = at(row, COLUMNS);
-		const b = at(row, 0);
-		const c = at(row + 1, 0);
-		const d = at(row + 1, COLUMNS);
-		index.push(a, b, c, a, c, d, a, c, b, a, d, c);
-	}
-	// the tucked corner: a little fold of the end standing out at the top, by the tuck (both ways)
-	const tuckBase = pos.length / 3;
-	const kTop = RINGS - 1;
-	const corner = (j: number, dk: number, out: number) => {
-		const [dx, dz] = dirOf(angle(j));
-		const rad = radiusAt(kTop - dk, j, out, 5);
-		pos.push(cx + dx * rad, (ys[kTop - dk] as number) + 0.002 * s, cz + dz * rad);
-		nrm.push(dx, 0.3, dz);
-		uv.push((j / COLUMNS) * 5, 0.05 + dk * 0.05);
-	};
-	corner(COLUMNS - 1, 0, 0.004 * s);
-	corner(COLUMNS - 6, 0, 0.003 * s);
-	corner(COLUMNS - 2, 3, 0.002 * s);
-	corner(COLUMNS - 4, 1, 0.006 * s);
-	for (const [a, b, c] of [
-		[0, 3, 1],
-		[0, 2, 3],
-		[3, 2, 1],
-	] as const)
-		index.push(tuckBase + a, tuckBase + b, tuckBase + c, tuckBase + a, tuckBase + c, tuckBase + b);
-
-	const fpos = new Float32Array(pos);
-	const findex = new Uint32Array(index);
-	// the bones that move the skin under each part (not the arms, not the head)
-	const trunk = (cloud: Cloud) => (i: number) =>
-		!body.arm.has(cloud.main[i] as number) && !body.head.has(cloud.main[i] as number);
-	const parts = [{ cloud: skin, keep: trunk(skin) }];
-	if (fill) {
-		const fc = cloudFrom(fill);
-		parts.push({ cloud: fc, keep: trunk(fc) });
-	}
-	const w = weightsFor(fpos, findex, mergeClouds(parts), 10, 2);
-	legsUnder(body, fpos, w, cx, cz);
-	return {
-		pos: fpos,
-		nrm: new Float32Array(nrm),
-		uv: new Float32Array(uv),
-		joints: w.joints,
-		weights: w.weights,
-		index: findex,
+	const crotch = hip - 0.1 * s;
+	const high = hip + 0.04 * s;
+	const strap = shoulders * 0.5;
+	const strapW = 0.013 * s;
+	const over = neck.y + 0.06 * s;
+	return (p, bone) => {
+		if (out(bone)) return -1;
+		d.subVectors(p, centre);
+		const l = Math.abs(d.dot(left));
+		const f = d.dot(front);
+		// higher in front than at the back, scooped a little between the straps
+		const top =
+			armpit -
+			0.04 * s +
+			0.09 * s * smooth(-0.06 * s, 0.04 * s, f) -
+			0.04 * s * (1 - smooth(0.3 * strap, strap, l));
+		// the leg openings: at the crotch in the middle, rising over the hip bones at the sides
+		const cut = crotch + (high - crotch) * smooth(0.15 * legs, 1.9 * legs, l) ** 0.8;
+		const body0 = Math.min(top - p.y, p.y - cut);
+		// a strap over each shoulder, from the top in front to the top at the back
+		const band = Math.min(strapW - Math.abs(l - strap), over - p.y, p.y - (top - 0.02 * s));
+		return Math.max(body0, band);
 	};
 }
+
+/** How far the swimsuit stands off the skin (times the body's size, metres). */
+const LIFT = 0.0035;
 
 /**
- * Below the crotch the towel goes with the thighs: each side with its own thigh, the middle (front and back)
- * half and half, so it lies over the lap and is sat on rather than hanging from the hips.
+ * The swimsuit at rest: the skin's triangles inside the outline (the main skin mesh, and the skin made again
+ * where VRoid deleted it), cut along the outline, lifted off the skin along its normals, each vertex moved by
+ * the bones of the skin under it.
  */
-function legsUnder(
+function suitOf(
 	body: Body,
-	pos: Float32Array,
-	w: { joints: Uint16Array; weights: Float32Array },
-	cx: number,
-	cz: number,
-): void {
-	const { leftUpperLeg: l, rightUpperLeg: r } = body.at;
-	const bl = body.bone.leftUpperLeg;
-	const br = body.bone.rightUpperLeg;
-	if (!l || !r || bl === undefined || br === undefined) return;
+	main: THREE.SkinnedMesh,
+	fill: MeshData | null,
+	inside: (p: THREE.Vector3, bone: number) => number,
+): MeshData | null {
 	const s = body.size;
-	const crotch = (l.y + r.y) / 2 - 0.06 * s;
-	const half = Math.max(0.02, Math.abs(l.clone().sub(r).dot(body.left)) / 2);
-	for (let i = 0; i < pos.length / 3; i++) {
-		const y = pos[i * 3 + 1] as number;
-		const f = Math.max(0, Math.min(1, (crotch + 0.03 * s - y) / (0.08 * s)));
-		if (f <= 0) continue;
-		const side =
-			((pos[i * 3] as number) - cx) * body.left.x + ((pos[i * 3 + 2] as number) - cz) * body.left.z;
-		const toLeft = Math.max(0, Math.min(1, 0.5 + side / half));
+	const pos: number[] = [];
+	const nrm: number[] = [];
+	const joints: number[] = [];
+	const weights: number[] = [];
+	interface V {
+		p: THREE.Vector3;
+		n: THREE.Vector3;
+		j: number[];
+		w: number[];
+		f: number;
+	}
+	const emit = (v: V) => {
+		pos.push(v.p.x + v.n.x * LIFT * s, v.p.y + v.n.y * LIFT * s, v.p.z + v.n.z * LIFT * s);
+		nrm.push(v.n.x, v.n.y, v.n.z);
+		joints.push(...v.j);
+		weights.push(...v.w);
+	};
+	const heaviest = (j: number[], w: number[]) => {
+		let best = 0;
+		for (let c = 1; c < 4; c++) if ((w[c] as number) > (w[best] as number)) best = c;
+		return j[best] as number;
+	};
+	/**
+	 * A point `t` along the edge from `a` to `b`: its bones are both ends' blended (the same whichever way
+	 * round the edge is taken, so the two triangles on it move it alike and do not part).
+	 */
+	const along = (a: V, b: V, t: number): V => {
 		const sum = new Map<number, number>();
-		for (let c = 0; c < 4; c++) {
-			const b = w.joints[i * 4 + c] as number;
-			sum.set(b, (sum.get(b) ?? 0) + (w.weights[i * 4 + c] as number) * (1 - f));
+		for (const [v, k] of [
+			[a, 1 - t],
+			[b, t],
+		] as const)
+			v.j.forEach((j, c) => sum.set(j, (sum.get(j) ?? 0) + (v.w[c] as number) * k));
+		const top = [...sum].sort((x, y) => y[1] - x[1] || x[0] - y[0]).slice(0, 4);
+		while (top.length < 4) top.push([0, 0]);
+		const total = top.reduce((m, [, w]) => m + w, 0) || 1;
+		const j = top.map(([i]) => i);
+		const w = top.map(([, x]) => x / total);
+		const p = a.p.clone().lerp(b.p, t);
+		return { p, n: a.n.clone().lerp(b.n, t).normalize(), j, w, f: inside(p, heaviest(j, w)) };
+	};
+	// where an edge crosses the outline (on it)
+	const cross = (a: V, b: V): V => ({ ...along(a, b, a.f / (a.f - b.f)), f: 0 });
+	// the middle of an edge, for cutting finer along the outline
+	const mid = (a: V, b: V): V => along(a, b, 0.5);
+	/**
+	 * The part of a triangle inside the outline (none, a triangle, or a quad as two). One the outline crosses
+	 * is first cut in four, twice, so the edge follows the outline's curves (the skin's triangles are large).
+	 */
+	const clip = (tri: V[], depth = 0) => {
+		const [a, b, c] = tri as [V, V, V];
+		const crossed = tri.some((v) => v.f >= 0) && tri.some((v) => v.f < 0);
+		if (crossed && depth < 2) {
+			const ab = mid(a, b);
+			const bc = mid(b, c);
+			const ca = mid(c, a);
+			for (const t of [
+				[a, ab, ca],
+				[ab, b, bc],
+				[ca, bc, c],
+				[ab, bc, ca],
+			])
+				clip(t, depth + 1);
+			return;
 		}
-		sum.set(bl, (sum.get(bl) ?? 0) + f * toLeft);
-		sum.set(br, (sum.get(br) ?? 0) + f * (1 - toLeft));
-		const top = [...sum].sort((a, b) => b[1] - a[1]).slice(0, 4);
-		const total = top.reduce((t, [, v]) => t + v, 0) || 1;
-		for (let c = 0; c < 4; c++) {
-			const e = top[c];
-			w.joints[i * 4 + c] = e ? e[0] : 0;
-			w.weights[i * 4 + c] = e ? e[1] / total : 0;
+		const poly: V[] = [];
+		for (let i = 0; i < 3; i++) {
+			const a = tri[i] as V;
+			const b = tri[(i + 1) % 3] as V;
+			if (a.f >= 0) poly.push(a);
+			if (a.f >= 0 !== b.f >= 0) poly.push(cross(a, b));
+		}
+		for (let i = 1; i + 1 < poly.length; i++) {
+			emit(poly[0] as V);
+			emit(poly[i] as V);
+			emit(poly[i + 1] as V);
+		}
+	};
+	// the main skin, in bind space (its skeleton is the body's)
+	const g = main.geometry;
+	const gp = g.attributes.position;
+	const gn = g.attributes.normal;
+	const gj = g.attributes.skinIndex;
+	const gw = g.attributes.skinWeight;
+	if (gp && gn && gj && gw) {
+		const nm = new THREE.Matrix3().getNormalMatrix(main.bindMatrix);
+		const verts: V[] = [];
+		for (let i = 0; i < gp.count; i++) {
+			const j = [0, 1, 2, 3].map((c) => gj.getComponent(i, c));
+			const w = [0, 1, 2, 3].map((c) => gw.getComponent(i, c));
+			const p = new THREE.Vector3().fromBufferAttribute(gp, i).applyMatrix4(main.bindMatrix);
+			const n = new THREE.Vector3().fromBufferAttribute(gn, i).applyMatrix3(nm).normalize();
+			verts.push({ p, n, j, w, f: inside(p, heaviest(j, w)) });
+		}
+		const idx = g.index;
+		const count = idx ? idx.count : gp.count;
+		for (let t = 0; t + 2 < count; t += 3) {
+			const tri = [0, 1, 2].map((k) => verts[idx ? idx.getX(t + k) : t + k] as V);
+			if (tri.some((v) => v.f >= 0)) clip(tri);
 		}
 	}
-}
-
-function cloudFrom(d: MeshData): Cloud {
-	const count = d.pos.length / 3;
-	const main = new Uint16Array(count);
-	for (let i = 0; i < count; i++) main[i] = d.joints[i * 4] as number;
-	return { count, pos: d.pos, nrm: d.nrm, joints: d.joints, weights: d.weights, main };
-}
-
-/** Convex hull of 2D points (counter-clockwise), Andrew's monotone chain. */
-function hull2(points: [number, number][]): [number, number][] {
-	const p = points.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-	if (p.length < 3) return p;
-	const cross = (o: [number, number], a: [number, number], b: [number, number]) =>
-		(a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
-	const lower: [number, number][] = [];
-	for (const q of p) {
-		while (
-			lower.length >= 2 &&
-			cross(lower[lower.length - 2] as [number, number], lower[lower.length - 1] as [number, number], q) <= 0
-		)
-			lower.pop();
-		lower.push(q);
-	}
-	const upper: [number, number][] = [];
-	for (let i = p.length - 1; i >= 0; i--) {
-		const q = p[i] as [number, number];
-		while (
-			upper.length >= 2 &&
-			cross(upper[upper.length - 2] as [number, number], upper[upper.length - 1] as [number, number], q) <= 0
-		)
-			upper.pop();
-		upper.push(q);
-	}
-	return lower.slice(0, -1).concat(upper.slice(0, -1));
-}
-
-function centroid(h: [number, number][]): [number, number] {
-	let x = 0;
-	let z = 0;
-	for (const p of h) {
-		x += p[0];
-		z += p[1];
-	}
-	return [x / h.length, z / h.length];
-}
-
-/** How far from (cx, cz) along `dir` the ray leaves the convex polygon `h` (0 if it starts outside). */
-function rayHull(h: [number, number][], cx: number, cz: number, dir: [number, number]): number {
-	let best = 0;
-	for (let i = 0; i < h.length; i++) {
-		const a = h[i] as [number, number];
-		const b = h[(i + 1) % h.length] as [number, number];
-		const ex = b[0] - a[0];
-		const ez = b[1] - a[1];
-		const den = dir[0] * ez - dir[1] * ex;
-		if (Math.abs(den) < 1e-9) continue;
-		const t = ((a[0] - cx) * ez - (a[1] - cz) * ex) / den;
-		const u = ((a[0] - cx) * dir[1] - (a[1] - cz) * dir[0]) / den;
-		if (t > 0 && u >= -1e-6 && u <= 1 + 1e-6) best = Math.max(best, t);
-	}
-	return best;
-}
-
-/** The least concave curve over (x, y) points (x ascending): their upper hull, read at each x. */
-function upperEnvelope(xs: number[], ys: number[]): number[] {
-	const hull: number[] = [];
-	for (let i = 0; i < xs.length; i++) {
-		while (hull.length >= 2) {
-			const a = hull[hull.length - 2] as number;
-			const b = hull[hull.length - 1] as number;
-			const cross =
-				((xs[b] as number) - (xs[a] as number)) * ((ys[i] as number) - (ys[a] as number)) -
-				((ys[b] as number) - (ys[a] as number)) * ((xs[i] as number) - (xs[a] as number));
-			if (cross >= 0) hull.pop();
-			else break;
+	// the skin made again where clothes were
+	if (fill) {
+		const verts: V[] = [];
+		for (let i = 0; i < fill.pos.length / 3; i++) {
+			const j = [...fill.joints.subarray(i * 4, i * 4 + 4)];
+			const w = [...fill.weights.subarray(i * 4, i * 4 + 4)];
+			const p = new THREE.Vector3().fromArray(fill.pos, i * 3);
+			verts.push({
+				p,
+				n: new THREE.Vector3().fromArray(fill.nrm, i * 3),
+				j,
+				w,
+				f: inside(p, heaviest(j, w)),
+			});
 		}
-		hull.push(i);
+		for (let t = 0; t + 2 < fill.index.length; t += 3) {
+			const tri = [0, 1, 2].map((k) => verts[fill.index[t + k] as number] as V);
+			if (tri.some((v) => v.f >= 0)) clip(tri);
+		}
 	}
-	const out: number[] = [];
-	let h = 0;
-	for (let i = 0; i < xs.length; i++) {
-		while (h < hull.length - 2 && (xs[hull[h + 1] as number] as number) < (xs[i] as number)) h++;
-		const a = hull[h] as number;
-		const b = hull[Math.min(h + 1, hull.length - 1)] as number;
-		const xa = xs[a] as number;
-		const xb = xs[b] as number;
-		const u = xb > xa ? ((xs[i] as number) - xa) / (xb - xa) : 0;
-		out.push((ys[a] as number) + ((ys[b] as number) - (ys[a] as number)) * Math.max(0, Math.min(1, u)));
-	}
-	return out;
-}
-
-function mulberry32(seed: number): () => number {
-	let a = seed;
-	return () => {
-		a = (a + 0x6d2b79f5) | 0;
-		let t = Math.imul(a ^ (a >>> 15), 1 | a);
-		t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+	const n = pos.length / 3;
+	if (n === 0) return null;
+	return {
+		pos: new Float32Array(pos),
+		nrm: new Float32Array(nrm),
+		uv: new Float32Array(n * 2),
+		joints: new Uint16Array(joints),
+		weights: new Float32Array(weights),
+		index: Uint32Array.from({ length: n }, (_, i) => i),
 	};
 }
 
@@ -816,8 +678,8 @@ function mulberry32(seed: number): () => number {
 
 /**
  * The skin texture `map` (and its shade texture) with what is not skin painted over on the triangles of
- * `meshes` that `uncovered(lowest y, highest y, bone)` says are out of the towel (the textures themselves if
- * they cannot be read or have nothing to paint over), and a spot of plain skin on it.
+ * `meshes` that `uncovered(corners, bone)` says are out of the suit (the textures themselves if they cannot be
+ * read or have nothing to paint over), and a spot of plain skin on it.
  */
 function paintOver(
 	map: THREE.Texture,
@@ -827,7 +689,7 @@ function paintOver(
 	boneIndex: (bone: THREE.Object3D | undefined) => number,
 	vroid: boolean,
 	body: Body,
-	uncovered: (low: number, high: number, bone: number) => boolean,
+	uncovered: (corners: THREE.Vector3[], bone: number) => boolean,
 ): Painted {
 	const unchanged: Painted = { texture: map, shade, skin: null };
 	const { w, h } = sizeOf(map);
@@ -881,24 +743,28 @@ function paintOver(
 			for (let c = 1; c < 4; c++) if (sw.getComponent(i, c) > sw.getComponent(i, best)) best = c;
 			return boneIndex(bones[si.getComponent(i, best)]);
 		};
-		const ys = new Float32Array(pos.count);
-		for (let i = 0; i < pos.count; i++) ys[i] = p.fromBufferAttribute(pos, i).applyMatrix4(m.bindMatrix).y;
+		const at = new Float32Array(pos.count * 3);
+		for (let i = 0; i < pos.count; i++)
+			p.fromBufferAttribute(pos, i)
+				.applyMatrix4(m.bindMatrix)
+				.toArray(at, i * 3);
+		const corners = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
 		const idx = g.index;
 		const n = idx ? idx.count : pos.count;
 		for (let t = 0; t + 2 < n; t += 3) {
 			const a = idx ? idx.getX(t) : t;
 			const b = idx ? idx.getX(t + 1) : t + 1;
 			const c = idx ? idx.getX(t + 2) : t + 2;
-			const ya = ys[a] as number;
-			const yb = ys[b] as number;
-			const yc = ys[c] as number;
-			// with no face to go by, the arms and the legs (bare, or the towel would hide them anyway)
+			// with no face to go by, the arms and the legs (bare, or the suit would hide them anyway)
 			const main = mainOf(a);
 			if (faces.length === 0 && t % 3 === 0 && (body.arm.has(main) || body.leg.has(main)))
 				sample(samples, px, w, h, uv.getX(a), uv.getY(a));
 			if (t % 6 === 0)
 				middles.push((uv.getX(a) + uv.getX(b) + uv.getX(c)) / 3, (uv.getY(a) + uv.getY(b) + uv.getY(c)) / 3);
-			if (!uncovered(Math.min(ya, yb, yc), Math.max(ya, yb, yc), main)) continue;
+			corners[0]?.fromArray(at, a * 3);
+			corners[1]?.fromArray(at, b * 3);
+			corners[2]?.fromArray(at, c * 3);
+			if (!uncovered(corners, main)) continue;
 			uvTris.push(uv.getX(a), uv.getY(a), uv.getX(b), uv.getY(b), uv.getX(c), uv.getY(c));
 		}
 	}
@@ -986,65 +852,34 @@ function plainSkin(
 	return best;
 }
 
-// ---- the towel's look ----
+// ---- the swimsuit's look ----
 
-let terryTexture: THREE.Texture | null = null;
+/** Swimsuit colours (sRGB): each model always wears the same one. */
+const ONE_PIECE = ["#1f2b4d", "#7b1e2e", "#135a5c", "#262626", "#3d2b5c"];
+const TRUNKS = ["#1f2b4d", "#262626", "#2f4a2a", "#5a1f1f"];
 
-/** Terry cloth: off-white, a fine weave of loops, and a woven band near each hem (v: 0 top, 1 bottom). */
-function terry(): THREE.Texture {
-	if (terryTexture) return terryTexture;
-	const W = 256;
-	const H = 512;
-	const c = document.createElement("canvas");
-	c.width = W;
-	c.height = H;
-	const g = c.getContext("2d") as CanvasRenderingContext2D;
-	g.fillStyle = "#f2efe8";
-	g.fillRect(0, 0, W, H);
-	const rand = mulberry32(11);
-	for (let i = 0; i < 14000; i++) {
-		const x = rand() * W;
-		const y = rand() * H;
-		const l = rand();
-		g.strokeStyle =
-			l < 0.5 ? `rgba(150,140,125,${0.12 + l * 0.2})` : `rgba(255,255,252,${0.25 + (l - 0.5) * 0.4})`;
-		g.lineWidth = 0.8;
-		g.beginPath();
-		g.arc(x, y, 0.8 + rand() * 1.1, 0, Math.PI * 2);
-		g.stroke();
-	}
-	// the woven bands: flat ribs across, a little darker
-	for (const [y0, y1] of [
-		[0.045, 0.085],
-		[0.915, 0.955],
-	] as const) {
-		g.fillStyle = "rgba(205,196,182,0.55)";
-		g.fillRect(0, y0 * H, W, (y1 - y0) * H);
-		g.fillStyle = "rgba(255,255,255,0.5)";
-		for (let y = y0 * H; y < y1 * H; y += 3) g.fillRect(0, y, W, 1);
-	}
-	const t = new THREE.CanvasTexture(c);
-	t.flipY = false;
-	t.wrapS = THREE.RepeatWrapping;
-	t.wrapT = THREE.ClampToEdgeWrapping;
-	t.colorSpace = THREE.SRGBColorSpace;
-	t.anisotropy = 4;
-	terryTexture = t;
-	return t;
+/** A number in [0, 1) from a string (FNV-1a). */
+function hash01(s: string): number {
+	let h = 0x811c9dc5;
+	for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x01000193);
+	return (h >>> 0) / 2 ** 32;
 }
 
-/** The towel's material: toon-shaded like the avatar (MToon) or lit like it (standard). */
-function towelMaterial(like: THREE.Material | THREE.Material[]): THREE.Material {
+/** The swimsuit's material: toon-shaded like the avatar (MToon) or lit like it (standard), a little glossy. */
+function suitMaterial(like: THREE.Material | THREE.Material[], model: BathModel): THREE.Material {
+	const list = model.suit === "trunks" ? TRUNKS : ONE_PIECE;
+	const color = new THREE.Color(list[Math.floor(hash01(model.key) * list.length)] as string);
 	const first = [like].flat()[0] as THREE.Material | undefined;
 	if ((first as MToonMaterial | undefined)?.isMToonMaterial)
 		return new MToonMaterial({
-			color: towelColor,
-			map: terry(),
-			shadeColorFactor: towelShade,
-			shadeMultiplyTexture: terry(),
-			shadingToonyFactor: 0.7,
+			color,
+			shadeColorFactor: color.clone().multiplyScalar(0.55),
+			shadingToonyFactor: 0.8,
 			shadingShiftFactor: -0.1,
 			giEqualizationFactor: 0.9,
+			rimLightingMixFactor: 1,
+			parametricRimColorFactor: new THREE.Color(0.22, 0.22, 0.24),
+			parametricRimFresnelPowerFactor: 4,
 		});
-	return new THREE.MeshStandardMaterial({ color: 0xffffff, map: terry(), roughness: 0.95, metalness: 0 });
+	return new THREE.MeshStandardMaterial({ color, roughness: 0.45, metalness: 0 });
 }
