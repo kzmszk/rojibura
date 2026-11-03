@@ -206,6 +206,11 @@ export interface AreaInfo {
 	 * for it (docs/prd.md 3.8.1).
 	 */
 	sceneLite?: string[];
+	/**
+	 * How many of the `scene` (and `sceneLite`) files are drawn before you enter the area: the rest load while
+	 * you are in it, one after another. All of them when omitted.
+	 */
+	first?: number;
 	/** glb files drawn only in winter (the snow lying on everything), relative to `assets`. */
 	winter?: string[];
 	/** Free play builds here (docs/prd.md 3.7). */

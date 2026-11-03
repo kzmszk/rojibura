@@ -48,14 +48,22 @@ export function touchFirst(): boolean {
 
 /**
  * The glb files to draw: `sceneLite` when the area has it and `?detail=lite` (or `full`), else the setting, asks
- * for it, or, left to "auto", on a device whose main pointer is a finger (a phone or a tablet).
+ * for it, or, left to "auto", on a device whose main pointer is a finger (a phone or a tablet). `files` are drawn
+ * before entering, `later` once in (the area's `first`).
  */
-export function sceneFiles(area: AreaInfo, params: URLSearchParams): { files: string[]; lite: boolean } {
-	if (!area.sceneLite) return { files: area.scene, lite: false };
+export function sceneFiles(
+	area: AreaInfo,
+	params: URLSearchParams,
+): { files: string[]; later: string[]; lite: boolean } {
+	const split = (files: string[]) => {
+		const n = area.first ?? files.length;
+		return { files: files.slice(0, n), later: files.slice(n) };
+	};
+	if (!area.sceneLite) return { ...split(area.scene), lite: false };
 	const asked = params.get("detail");
 	const detail = asked === "full" || asked === "lite" ? asked : savedDetail();
 	const lite = detail === "auto" ? touchFirst() : detail === "lite";
-	return { files: lite ? area.sceneLite : area.scene, lite };
+	return { ...split(lite ? area.sceneLite : area.scene), lite };
 }
 
 /** The page in the other area, arriving next to the portal back. */

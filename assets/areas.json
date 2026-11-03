@@ -6,6 +6,7 @@
 			"dir": "/areas/hajimari",
 			"scene": ["hajimari.glb", "sagrada_exterior.glb"],
 			"sceneLite": ["hajimari.glb", "sagrada_exterior_lite.glb"],
+			"first": 1,
 			"winter": ["hajimari_snow.glb"],
 			"build": true,
 			"fly": true,

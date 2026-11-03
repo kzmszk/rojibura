@@ -543,10 +543,15 @@ export class Trees {
 	/** Per frame counts, for stats. */
 	readonly drawn = { near: 0, mid: 0, imp: 0 };
 
-	constructor(specs: TreeSpec[], heightAt: (x: number, z: number) => number | null, texBase: string) {
+	constructor(
+		specs: TreeSpec[],
+		heightAt: (x: number, z: number) => number | null,
+		texBase: string,
+		atlas?: THREE.DataTexture,
+	) {
 		this.u = makeTreeUniforms();
 		this.group.name = "nature:trees";
-		this.atlas = makeLeafAtlas();
+		this.atlas = atlas ?? makeLeafAtlas();
 		const loader = new THREE.TextureLoader();
 		this.barkTex = loader.load(`${texBase}bark.jpg`);
 		this.barkTex.colorSpace = THREE.SRGBColorSpace;

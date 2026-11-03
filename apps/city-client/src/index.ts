@@ -374,21 +374,25 @@ async function startCity(
 	scene.applyView(area.view);
 	const loading = el("div", "rj-toast show", `${area.name}を読み込んでいます…`);
 	root.append(loading);
-	const base = await loadNavMesh(area.dir, building);
+	// what is needed to enter, fetched together: the walkable area, the 3D near where you arrive, the trees (their
+	// leaves are drawn in a worker meanwhile) and the places with rules of their own (indoors, the onsen)
+	const files = sceneFiles(area, params);
+	const urlOf = (f: string) => new URL(f, new URL(area.assetBase, location.href)).href;
+	const sceneUrls = files.files.map(urlOf);
+	const zones = new Zones();
+	const [base, prepared, cityRoots] = await Promise.all([
+		loadNavMesh(area.dir, building),
+		AreaNature.prepare(area),
+		scene.loadCity(sceneUrls, (n) => {
+			loading.textContent = `${area.name}を読み込んでいます…（${n}/${sceneUrls.length}）`;
+		}),
+		zones.load(area.dir),
+	]);
 	let mesh = NavMesh.fromJSON(base);
 	let nav = navigatorFor(mesh);
 	scene.heightHint = (x, z) => mesh.heightAt([x, z]);
-	const sceneUrls = sceneFiles(area, params).files.map(
-		(f) => new URL(f, new URL(area.assetBase, location.href)).href,
-	);
-	const cityRoots = await scene.loadCity(sceneUrls, (n) => {
-		loading.textContent = `${area.name}を読み込んでいます…（${n}/${sceneUrls.length}）`;
-	});
 	// trees and seasons, where the area has them (docs/prd.md 3.8.6)
-	const nature = await AreaNature.create(scene, area, cityRoots, params);
-	// places with rules of their own: indoors, the onsen
-	const zones = new Zones();
-	await zones.load(area.dir);
+	const nature = await AreaNature.create(scene, area, cityRoots, params, prepared);
 	loading.remove();
 	const portals = new PortalsView(
 		scene.scene,
@@ -407,6 +411,17 @@ async function startCity(
 			]),
 		(p) => warpTo(p),
 	);
+	// the rest of the area's 3D (farther from where you arrive) loads now that you are in, one file after another
+	void (async () => {
+		for (const url of files.later.map(urlOf)) {
+			const roots = await scene.loadCity([url]).catch((e: unknown) => {
+				console.warn("could not load", url, e);
+				return [];
+			});
+			nature?.addCity(roots);
+			cityMap.stale();
+		}
+	})();
 	// what can be done where (docs/life.md 3): the area's activities, and its places
 	let activities: Activity[] = [];
 	const places = new Map<string, Vec2>();
