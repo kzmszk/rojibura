@@ -39,6 +39,7 @@ import {
 	registerAgent,
 	relationsOf,
 	resolveReport,
+	setAgentPreset,
 	setAgentTrust,
 	setFirstVisit,
 	setRelation,
@@ -602,13 +603,24 @@ async function api(request: Request, url: URL): Promise<Response> {
 	}
 
 	// an AI on its owner's PC (docs/prd.md 3.5.1): 🤖 自分のAI shows a one-time code, the PC sends it with its key
-	const pcPath = path.match(/^\/api\/agents\/(a_[A-Za-z0-9_-]+)\/(pair|pc)$/);
+	const pcPath = path.match(/^\/api\/agents\/(a_[A-Za-z0-9_-]+)\/(pair|pc|look)$/);
 	if (pcPath?.[1]) {
 		const account = await currentAccount(request);
 		if (!account) return error(401, "login required");
 		const agent = await getAgent(DB, pcPath[1]);
 		if (!agent || agent.owner_id !== account.id) return error(404, "no such agent");
 		if (pcPath[2] === "pair" && request.method === "POST") return json(await startPairing(DB, agent.id));
+		// the look (a PRESETS id): read, and changed, e.g. to another outfit of the same character
+		if (pcPath[2] === "look" && request.method === "GET")
+			return json({
+				preset: Object.hasOwn(PRESETS, agent.preset_id ?? "") ? agent.preset_id : DEFAULT_PRESET.id,
+			});
+		if (pcPath[2] === "look" && request.method === "PUT") {
+			const preset = ((await request.json().catch(() => null)) as { preset?: unknown } | null)?.preset;
+			if (typeof preset !== "string" || !Object.hasOwn(PRESETS, preset)) return error(400, "bad preset");
+			await setAgentPreset(DB, agent.id, preset);
+			return json({ ok: true, preset });
+		}
 		if (pcPath[2] === "pc" && request.method === "GET") {
 			// inCity: the AI is in some area now (from the PC, or another tab), so the tab does not start it
 			const [pc, here] = await Promise.all([

@@ -225,6 +225,11 @@ export async function unpairPc(db: D1Database, agentId: string): Promise<void> {
 	await db.prepare("DELETE FROM agent_pc WHERE agent_id = ?").bind(agentId).run();
 }
 
+/** Changes the look an AI comes in with (a PRESETS id): from its next entry on. */
+export async function setAgentPreset(db: D1Database, id: string, preset: string): Promise<void> {
+	await db.prepare("UPDATE agents SET preset_id = ? WHERE id = ?").bind(preset, id).run();
+}
+
 export async function setAgentTrust(db: D1Database, id: string, trust: Agent["trust"]): Promise<void> {
 	await db.prepare("UPDATE agents SET trust = ? WHERE id = ?").bind(trust, id).run();
 }
