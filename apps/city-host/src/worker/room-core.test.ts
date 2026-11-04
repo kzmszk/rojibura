@@ -701,6 +701,31 @@ describe("sitting on a seat", () => {
 		expect(ctx.room.members.get(b)?.move).toMatchObject({ seat: 0 });
 	});
 
+	test("an AI walking with its owner sits on the seat next to theirs when they sit", () => {
+		ctx = setup({
+			seats: [
+				{ pos: [-10, -9.4] as Vec2, y: 0.46, face: [0, -1] as Vec2 },
+				{ pos: [-9, -9.4] as Vec2, y: 0.46, face: [0, -1] as Vec2 },
+			],
+		});
+		const a = conn("a");
+		const bot = conn("bot");
+		place(a, human("alice"), [-10, -10]);
+		place(bot, ai("bot", "alice"), [-11, -10]);
+		ctx.room.handle(a, { t: "COMPANION", on: true });
+		ctx.room.handle(a, { t: "ACTION", motion: "sit", seat: 0 });
+		// it walks to the seat first, and sits when it gets there (the sweep's alarm)
+		expect(ctx.room.members.get(bot)?.move.kind).toBe("path");
+		const at = ctx.room.wakeAt as number;
+		expect(at).toBeGreaterThan(0);
+		ctx.room.sweep(() => ctx.clock.now());
+		expect(ctx.room.members.get(bot)?.move.kind).toBe("path");
+		ctx.clock.advance(at - ctx.clock.now() + 10);
+		ctx.room.sweep(() => ctx.clock.now());
+		expect(ctx.room.members.get(bot)?.move).toMatchObject({ posture: "sit", seat: 1 });
+		expect(ctx.room.wakeAt).toBeUndefined();
+	});
+
 	test("an AI sitting down next to a free seat sits on it", () => {
 		const bot = conn("bot");
 		place(bot, ai("bot", "alice"), [-10, -10]);

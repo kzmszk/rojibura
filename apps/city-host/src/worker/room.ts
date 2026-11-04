@@ -368,6 +368,8 @@ export class CityRoomDO extends DurableObject<Env> {
 			return;
 		}
 		this.core.handle(ws, parsed.msg);
+		// an AI walking to a seat sits down when it gets there: wake up for that
+		if (this.core.wakeAt !== undefined) await this.scheduleAlarm();
 		// someone started watching: give them today's totals and the recent actions at once
 		if (parsed.msg.t === "WATCH_USAGE" && this.core.members.get(ws)?.watchUsage)
 			safeSend(ws, { t: "USAGE", ...this.meter.snapshot(), events: [...this.meter.recent] });
@@ -682,6 +684,8 @@ export class CityRoomDO extends DurableObject<Env> {
 		let next = now + SWEEP_INTERVAL_MS;
 		const close = closingTime(now, this.hours);
 		if (close !== null) for (const t of [close - CLOSING_NOTICE_MS, close]) if (t > now && t < next) next = t;
+		const wake = this.core.wakeAt;
+		if (wake !== undefined && wake > now && wake < next) next = wake;
 		const current = await this.ctx.storage.getAlarm();
 		if (current === null || current > next || current < now) await this.ctx.storage.setAlarm(next);
 	}

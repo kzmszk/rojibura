@@ -2083,6 +2083,7 @@ async function startCity(
 	 * strip one may not walk on (a steep bank) is not stepped across.
 	 */
 	function clearAhead(pos: Vec2, dir: Vec2, speed: number, s: number): boolean {
+		if (personAhead(pos, dir)) return false;
 		const d = speed * s;
 		const n = Math.max(1, Math.ceil(d / (flyAlt === null ? 0.2 : 2)));
 		for (let i = 1; i <= n; i++) {
@@ -2090,6 +2091,20 @@ async function startCity(
 			if (!canBe([pos[0] + dir[0] * t, pos[1] + dir[1] * t])) return false;
 		}
 		return true;
+	}
+	/** People are loosely solid (issue #58): walking with the keys, you stop short of another person ahead of you. */
+	const PERSON_GAP = 0.6;
+	function personAhead(pos: Vec2, dir: Vec2): boolean {
+		if (flyAlt !== null) return false;
+		for (const a of avatars.values()) {
+			if (a.state.id === myId || a.state.kind !== "human" || a.state.fly !== undefined) continue;
+			const q = a.root.position;
+			const dx = q.x - pos[0];
+			const dz = q.z - pos[1];
+			// only those ahead: stepping away from someone close is always allowed
+			if (Math.hypot(dx, dz) < PERSON_GAP && dx * dir[0] + dz * dir[1] > 0) return true;
+		}
+		return false;
 	}
 	function showFlying(alt: number | null): void {
 		flyAlt = alt;
