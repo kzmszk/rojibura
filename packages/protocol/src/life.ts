@@ -230,12 +230,17 @@ export function withCompany(life: LifeState, ms: number): LifeState {
 	return n > 0 ? { ...life, mood: round(clamp(life.mood + n * COMPANY_MOOD)) } : life;
 }
 
+/** Whether it is a day to exercise (every other day) it has not exercised yet. */
+export function exerciseDue(life: LifeState): boolean {
+	return !life.duties.exercise && life.days - life.exercisedDay >= 1;
+}
+
 /** What was left undone today, in words. */
 export function missedDuties(life: LifeState): string[] {
 	const missed: string[] = [];
 	if (life.duties.meals < MEALS_PER_DAY) missed.push(`ごはん（${life.duties.meals}/${MEALS_PER_DAY}回）`);
 	if (!life.duties.work) missed.push("仕事か勉強");
-	if (!life.duties.exercise && life.days - life.exercisedDay >= 1) missed.push("運動（2日に1回）");
+	if (exerciseDue(life)) missed.push("運動（2日に1回）");
 	return missed;
 }
 

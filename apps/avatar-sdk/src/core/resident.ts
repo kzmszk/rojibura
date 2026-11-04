@@ -217,8 +217,8 @@ export class Resident {
 	private place = { name: "", since: 0 };
 	/** When it last asked its owner along somewhere (Date.now; docs/prd.md 3.4.10). */
 	private leadAskedAt = 0;
-	/** Walking with its owner: what it asked them along to a shop to buy (`place` as asked), until answered. */
-	private leadBuy: { place: string; shop: string; goods: string } | null = null;
+	/** Walking with its owner: what it does once it has taken them where it asked them along to (`place` as asked), until answered. */
+	private leadThen: { place: string; arrived: () => void } | null = null;
 	/** The last rehearsal in the mirror (docs/prd.md 3.4.11). */
 	private practice: Practice | null = null;
 	/** A body script waiting for the resident to arrive where it does it. */
@@ -343,7 +343,7 @@ export class Resident {
 					const owner = this.nameOf(msg.owner);
 					this.push(
 						msg.on
-							? `オーナーの${owner}（id ${msg.owner}）が、いっしょに歩こうと言った。しばらく${owner}のそばを歩く。どこかへ行きたくなったら walk_to でランドマークを選ぶと、${owner}をそこへ誘える。おなかがすいたら buy で、${owner}をお店に誘える（カウンターのそばなら、そのまま買える）。`
+							? `オーナーの${owner}（id ${msg.owner}）が、いっしょに歩こうと言った。しばらく${owner}のそばを歩く。どこかへ行きたくなったら walk_to でランドマークを選ぶと、${owner}をそこへ誘える。おなかがすいたら buy で、${owner}をお店に誘える（カウンターのそばなら、そのまま買える）。運動する日なら do で、${owner}を運動の場所に誘える（着いたら始める）。`
 							: `${owner}といっしょに歩くのは終わった。また好きに歩ける。`,
 					);
 					return;
@@ -411,14 +411,10 @@ export class Resident {
 			case "LEAD_ANSWERED": {
 				const owner = this.nameOf(msg.by);
 				const place = clean(msg.place, 24);
-				// it asked them along to a shop: there, it buys what it went for
-				const buy = this.leadBuy?.place === msg.place ? this.leadBuy : null;
-				this.leadBuy = null;
-				if (buy && msg.accept)
-					setTimeout(
-						() => this.buyThere(buy.shop, buy.goods),
-						Math.max(0, (msg.at ?? 0) - this.world.hostNow()) + 1000,
-					);
+				// it asked them along to a shop or a place to exercise: there, it does what it went for
+				const then = this.leadThen?.place === msg.place ? this.leadThen.arrived : null;
+				this.leadThen = null;
+				if (then && msg.accept) setTimeout(then, Math.max(0, (msg.at ?? 0) - this.world.hostNow()) + 1000);
 				this.push(
 					msg.accept
 						? `${owner}が「ついていく」と答えた。${owner}を連れて${place}へ歩いている。`
@@ -863,7 +859,7 @@ export class Resident {
 			return `さっき${owner}を誘ったばかり。しばらく${owner}のそばにいる。`;
 		this.leadAskedAt = Date.now();
 		const place = [...shopName].slice(0, LEAD_PLACE_MAX).join("");
-		this.leadBuy = { place, shop: shop.id, goods: goods.id };
+		this.leadThen = { place, arrived: () => this.buyThere(shop.id, goods.id) };
 		const text = [...`${name}を買いに、${shopName}に寄ってもいい？`].slice(0, LEAD_TEXT_MAX).join("");
 		this.o.send({ t: "LEAD", to: shop.counter, place, text });
 		this.o.logger.info(`asking ${owner} along to ${place} for ${goods.name}`);
@@ -1034,7 +1030,7 @@ export class Resident {
 				return `さっき${owner}を誘ったばかり。しばらく${owner}のそばにいる。`;
 			if (dist(here, landmark.pos) < LEAD_MIN_DISTANCE) return `${clean(landmark.name, 24)}はすぐそこ。`;
 			this.leadAskedAt = Date.now();
-			this.leadBuy = null;
+			this.leadThen = null;
 			const place = [...clean(landmark.name, 24)].slice(0, LEAD_PLACE_MAX).join("");
 			this.o.send({ t: "LEAD", to: landmark.pos, place });
 			this.o.logger.info(`asking ${owner} along to ${place}`);
@@ -1196,13 +1192,50 @@ export class Resident {
 			this.o.logger.info(`doing ${a.id}`);
 			return `${a.name}を始めた（街の時間で${a.minutes}分）。終わったら知らせる。`;
 		}
-		if (this.world.company)
-			return `いまは${this.nameOf(this.world.company)}のそばを歩いている。${clean(place.name, 24)}へ行くなら、先に walk_to で誘う。`;
+		if (this.world.company) return this.askToDo(a, place, here);
 		const went = this.walk(place.id, () => {
 			this.o.send({ t: "ACT", activity: a.id });
 			this.o.logger.info(`arrived; doing ${a.id}`);
 		});
 		return `${went.replace(/着いたら知らせる。$/, "")}着いたら${a.name}を始める。`;
+	}
+
+	/** Walking with its owner the host moves it, so it asks them along to where it does `a` (LEAD); if they come, it starts there. */
+	private askToDo(a: Activity, place: Landmark, here: Vec2): string {
+		const owner = this.nameOf(this.world.company ?? "");
+		const placeName = clean(place.name, 24);
+		const name = clean(a.name, 24);
+		if (dist(here, place.pos) < LEAD_MIN_DISTANCE)
+			return `${placeName}はすぐそこ。${owner}がもう少し近くまで行ったら始められる。`;
+		if (Date.now() - this.leadAskedAt < LEAD_AGAIN_MS)
+			return `さっき${owner}を誘ったばかり。しばらく${owner}のそばにいる。`;
+		this.leadAskedAt = Date.now();
+		const where = [...placeName].slice(0, LEAD_PLACE_MAX).join("");
+		this.leadThen = { place: where, arrived: () => this.doThere(a.id) };
+		const text = [...`${name}をしに行かない？`].slice(0, LEAD_TEXT_MAX).join("");
+		this.o.send({ t: "LEAD", to: place.pos, place: where, text });
+		this.o.logger.info(`asking ${owner} along to ${where} for ${a.name}`);
+		return `${owner}に、${name}をしに行かないか聞いた（${placeName}）。いいと言われたら、着いたところで始める。`;
+	}
+
+	/** Taken its owner there: starts the activity, if it is close enough. */
+	private doThere(id: string): void {
+		if (this.stopped) return;
+		const a = this.o.activities?.find((x) => x.id === id);
+		const place = a ? this.o.landmarks.find((l) => l.id === a.place) : undefined;
+		const here = this.world.me ? this.world.positionOf(this.world.me) : null;
+		if (!a || !place || !here) return;
+		if (dist(here, place.pos) > ACTIVITY_REACH - 0.5) {
+			this.push(`${clean(place.name, 24)}まで届かなかった。`);
+			return;
+		}
+		this.o.send({ t: "ACT", activity: a.id });
+		this.o.logger.info(`doing ${a.id}`);
+		const owner = this.nameOf(this.world.company ?? "");
+		this.push(
+			`${clean(place.name, 24)}に着いて、${clean(a.name, 24)}を始めた。${owner}が歩き出すと、いっしょに歩くので止まる。終わるまで待っていてほしいと伝えるとよい。`,
+		);
+		if (!this.turn) this.scheduleTick(1000);
 	}
 
 	private stopActivity(): string {

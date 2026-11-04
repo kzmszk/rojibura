@@ -131,7 +131,7 @@ export function residentTools(body: boolean, life = false): ResidentTool[] {
 			? [
 					tool(
 						"do",
-						"活動を始める（食事、仕事、勉強、運動、遊び）。activity は活動の id。その場所から遠ければ、歩いて行ってから始める。終わるまで続き、終わったら知らせが届く。",
+						"活動を始める（食事、仕事、勉強、運動、遊び）。activity は活動の id。その場所から遠ければ、歩いて行ってから始める（オーナーといっしょに歩いているときは、オーナーをそこへ誘い、着いたら始める）。終わるまで続き、終わったら知らせが届く。",
 						Type.Object({ activity: Type.String() }),
 					),
 					tool("stop", "いましている活動を途中でやめる。", Type.Object({})),

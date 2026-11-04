@@ -490,7 +490,7 @@ async function startCity(
 	const badgeOf = (d?: Doing | null) => {
 		if (!d) return null;
 		const a = activities.find((x) => x.id === d.activity);
-		return { emoji: a?.emoji ?? "⏳", name: a?.name ?? d.activity };
+		return { emoji: a?.emoji ?? "⏳", name: a?.name ?? d.activity, exercise: a?.kind === "exercise" };
 	};
 	/** An AI's life in a few lines, for its owner's panel. */
 	const lifeText = (life: LifeState, doing?: Doing, coins?: number) => {

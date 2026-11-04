@@ -14,6 +14,7 @@ import {
 	clockText,
 	dist,
 	energyWord,
+	exerciseDue,
 	type Food,
 	type HostToClient,
 	HUNGRY,
@@ -25,6 +26,7 @@ import {
 	LEAD_MIN_DISTANCE,
 	LEAD_PLACE_MAX,
 	LEAD_TEXT_MAX,
+	type LifeState,
 	pathLeg,
 	poseAt,
 	SHOP_REACH,
@@ -109,6 +111,13 @@ const SELF = "self";
 const DAYS_SHOWN = 2;
 /** Fewer coins than this, and it works more. */
 const POOR = 30;
+/** At least this much energy to go and exercise. */
+const EXERCISE_ENERGY = 35;
+
+/** A day to exercise it has not yet, with the energy for it. */
+function wantsExercise(life: LifeState): boolean {
+	return exerciseDue(life) && life.energy >= EXERCISE_ENERGY;
+}
 
 /** Where it is walking to (`to`, a leg at a time: `legs` so far), and what for. */
 type Errand = (
@@ -372,7 +381,7 @@ export class Agent {
 			return can[Math.floor(this.random() * can.length)];
 		};
 		let a: Activity | undefined;
-		if (!life.duties.exercise && life.days - life.exercisedDay >= 1 && life.energy >= 35) a = one("exercise");
+		if (wantsExercise(life)) a = one("exercise");
 		if (!a && this.random() < 0.25) a = one("play", "rest");
 		return a ? this.goDo(a, here) : false;
 	}
@@ -494,6 +503,41 @@ export class Agent {
 			zone.poly.reduce((s, p) => s + p[1], 0) / n,
 		];
 		return this.goFor(e, mid, `to ${zone.name} to ${zone.kind}`);
+	}
+
+	/**
+	 * Walking with its owner, a day it should exercise: where it can, it starts (and asks them to wait for it);
+	 * otherwise it asks them along to the nearest place for it (LEAD), and starts when it has taken them there.
+	 */
+	private exerciseAlong(here: Vec2): boolean {
+		const life = this.world.lifeNow();
+		const t = cityTime(this.hostNow());
+		if (!life || t.night || !wantsExercise(life)) return false;
+		const coins = this.world.coins;
+		const can = (this.o.activities ?? [])
+			.filter(
+				(a) =>
+					a.kind === "exercise" &&
+					activityOpen(a, t.minutes) &&
+					!cannotStart(life, a) &&
+					(coins === null || (a.cost ?? 0) <= coins),
+			)
+			.flatMap((a) => {
+				const place = this.placeOf(a);
+				return place ? [{ a, place, d: dist(here, place.pos) }] : [];
+			})
+			.sort((x, y) => x.d - y.d);
+		const at = can.find((c) => c.d <= ACTIVITY_REACH - 0.5);
+		if (at) {
+			if (!this.arrive({ kind: "act", id: at.a.id }, here)) return false;
+			const owner = this.world.company;
+			if (owner)
+				this.o.send({ t: "SAY", text: `${at.a.name}をするね。終わるまで、ここで待っててね。`, to: owner });
+			return true;
+		}
+		const near = can.find((c) => c.d >= LEAD_MIN_DISTANCE);
+		if (!near) return false;
+		return this.lead(near.place, `体を動かしたいな。${near.a.name}をしに行かない？`);
 	}
 
 	// ---- conversation -------------------------------------------------------
@@ -788,7 +832,7 @@ export class Agent {
 		if (!me || poseAt(me.move, this.hostNow()).moving) return;
 		const here = poseAt(me.move, this.hostNow()).pos;
 		// busy with something: it carries on (talking still happens when spoken to)
-		if (me.doing && !this.world.company) return;
+		if (me.doing) return;
 		if (!this.world.company && this.live(here)) return;
 
 		// social: talk to an AI nearby, or go and find one (docs/prd.md 1.4, the core loop)
@@ -813,6 +857,7 @@ export class Agent {
 		// walking with its owner: no strolling off alone, but it eats, and now and then it would like to go somewhere
 		if (this.world.company) {
 			if (this.eatAlong(here)) return;
+			if (this.exerciseAlong(here)) return;
 			const options = this.o.landmarks.filter((l) => dist(l.pos, here) > LEAD_FAR);
 			const pick = options[Math.floor(this.random() * options.length)];
 			if (pick && this.random() < LEAD_CHANCE) this.lead(pick, true);

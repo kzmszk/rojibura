@@ -225,6 +225,23 @@ describe("the diary", () => {
 		expect(results[1]).toMatch(/バゲットを買った/);
 	});
 
+	test("walking with its owner, do asks them along to where it is done, and it starts there", async () => {
+		const act = ["do", { activity: "park_exercise" }] as Call;
+		const { resident, sent, results } = setup([[act]]);
+		resident.handle({ t: "COMPANY", owner: "h_saki", on: true });
+		await resident.turnNow();
+		expect(results[0]).toMatch(/公園で体操をしに行かないか聞いた（小さな公園）/);
+		expect(sent.filter((m) => m.t === "LEAD")).toEqual([
+			{ t: "LEAD", to: [-30, 0], place: "小さな公園", text: "公園で体操をしに行かない？" },
+		]);
+		expect(sent.some((m) => m.t === "ACT")).toBe(false);
+		resident.handle({ t: "LEAD_ANSWERED", by: "h_saki", accept: true, place: "小さな公園", at: SEVEN });
+		resident.handle({ t: "MOVED", id: "a_haru", move: { kind: "idle", pos: [-29, 0], at: SEVEN } });
+		await vi.waitFor(() => expect(sent).toContainEqual({ t: "ACT", activity: "park_exercise" }), {
+			timeout: 3000,
+		});
+	});
+
 	test("asked by the host, a resident sends its owner the page", async () => {
 		const journal = new MemJournal();
 		const { resident, sent } = setup([], { journal });
