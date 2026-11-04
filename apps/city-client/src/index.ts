@@ -63,6 +63,8 @@ import { AvatarView, setSeats, TRAVEL } from "./avatars.ts";
 import { BuildPanel } from "./build-ui.ts";
 import { BuildsView, makeObject, modelsFromHost } from "./builds.ts";
 import { VIEW_LABEL, VIEWS, type View, ViewController } from "./camera.ts";
+import { Following } from "./following.ts";
+import { Going } from "./going.ts";
 import { ItemsView } from "./items.ts";
 import { type MapPlace, MapView } from "./map.ts";
 import { actionBar, Relations, showAdmin } from "./moderation.ts";
@@ -70,7 +72,8 @@ import { SEASONS, type Season } from "./nature/season.ts";
 import { CityConnection, type ConnState } from "./net.ts";
 import { rememberFirstVisit, reportFirstVisit } from "./onboarding.ts";
 import { outfitsOf, type PresetInfo } from "./outfits.ts";
-import { PORTAL_REACH, PortalsView } from "./portals.ts";
+import { PortalsView } from "./portals.ts";
+import { reconcileAvatars } from "./reconcile-avatars.ts";
 import { CityScene } from "./scene.ts";
 import { SettingsPanel } from "./settings.ts";
 import { ShopsUi } from "./shops.ts";
@@ -770,7 +773,7 @@ async function startCity(
 	companionBox.onchange = () => {
 		companion = companionBox.checked;
 		// following your AI somewhere ends too (the host hears it from COMPANION)
-		if (following?.lead) following = null;
+		if (follow.current?.lead) follow.current = null;
 		try {
 			localStorage.setItem("rj.companion", companion ? "1" : "0");
 		} catch {
@@ -1163,36 +1166,9 @@ async function startCity(
 					myId = m.you;
 					// (re)subscribe after every (re)connect
 					if (usage?.isShown) conn.send({ t: "WATCH_USAGE", on: true });
-					// a reconnect: those still here keep their figures (nothing reloads); who left or looks
-					// different now is taken away or built again
-					const here = new Set(m.avatars.map((a) => a.id));
-					for (const [id, v] of avatars)
-						if (!here.has(id)) {
-							v.dispose();
-							avatars.delete(id);
-						}
-					for (const a of m.avatars) {
-						const v = avatars.get(a.id);
-						const same =
-							v &&
-							!relations.blocks.has(a.id) &&
-							v.state.name === a.name &&
-							JSON.stringify(v.state.assets) === JSON.stringify(a.assets);
-						if (v && same) {
-							Object.assign(v.state, a);
-							if (!a.doing) delete v.state.doing;
-							v.setDoing(badgeOf(a.doing));
-							v.setStatus(a.status);
-						} else {
-							v?.dispose();
-							avatars.delete(a.id);
-							add(a);
-						}
-						// afloat or not, as the host has it
-						avatars.get(a.id)?.setFly(a.fly ?? null);
-						if (a.id === m.you) showFlying(a.fly ?? null);
-						agentPanel.present(a.id);
-					}
+					reconcileAvatars(avatars, m.avatars, m.you, relations.blocks, add, badgeOf, showFlying, (id) =>
+						agentPanel.present(id),
+					);
 					listTargets();
 					if (m.builds) builds.set(m.builds);
 					items.reset(m.items ?? []);
@@ -1201,7 +1177,7 @@ async function startCity(
 					// back where we were after a dropped connection (docs/prd.md 3.3): the host kept everything
 					if (m.resumed) break;
 					// the host forgets on a new connection; tell it again (a walk behind your AI is over then)
-					if (following?.lead) following = null;
+					if (follow.current?.lead) follow.current = null;
 					if (companion) conn.send({ t: "COMPANION", on: true });
 					break;
 				}
@@ -1767,25 +1743,24 @@ async function startCity(
 	}
 
 	// ---- following someone (そばへ行く) ----
-	/** Stop this close to them, plan again this often while they move, and give up after this long. */
-	const FOLLOW_STOP_M = 2;
-	const FOLLOW_REPLAN_MS = 1000;
 	const FOLLOW_MAX_MS = 60_000;
-	/** Behind your AI to a place (docs/prd.md 3.4.10): this far behind it, for at most this long. */
-	const LEAD_BEHIND_M = 1.5;
 	const LEAD_FOLLOW_MAX_MS = 5 * 60_000;
-	let following: {
-		id: AvatarId;
-		until: number;
-		plannedAt: number;
-		/** Following your AI to a place it asked you along to. */
-		lead?: { to: Vec2; place: string };
-	} | null = null;
+	const follow = new Following({
+		person: (id) => avatars.get(id),
+		me: () => (myId ? avatars.get(myId) : undefined),
+		hostNow: () => conn.hostNow(),
+		walk: walkTo,
+		toast: showToast,
+		arrived: (name, place) => addLog("", `${name}と${place}に着きました`, "sys"),
+		resumeCompanion: () => {
+			if (companion) conn.send({ t: "COMPANION", on: true });
+		},
+	});
 	function startFollow(id: AvatarId): void {
 		const them = avatars.get(id);
 		if (!them || id === myId) return;
 		stopGoing();
-		following = { id, until: performance.now() + FOLLOW_MAX_MS, plannedAt: 0 };
+		follow.current = { id, until: performance.now() + FOLLOW_MAX_MS, plannedAt: 0 };
 		showToast(`${them.state.name} のそばへ向かいます`);
 	}
 	/**
@@ -1990,7 +1965,7 @@ async function startCity(
 	 */
 	function stopStep(): void {
 		const mine = myId ? avatars.get(myId) : undefined;
-		if (!mine || following || mine.state.move.kind !== "path") return;
+		if (!mine || follow.current || mine.state.move.kind !== "path") return;
 		const now = conn.hostNow();
 		const { pos, moving } = poseAt(mine.state.move, now);
 		if (moving) return;
@@ -2169,100 +2144,37 @@ async function startCity(
 
 	/** Stops following someone or going to a portal (the person moves on their own). */
 	function stopGoing(): void {
-		endFollow();
-		going = null;
+		follow.end();
+		route.current = null;
 		seatAfter = null;
 	}
 	/** After your yes, your AI walks to a place and you follow behind it until it is there. */
 	function trail(id: AvatarId, to: Vec2, place: string): void {
 		const them = avatars.get(id);
 		if (!them) return;
-		going = null;
-		following = { id, until: performance.now() + LEAD_FOLLOW_MAX_MS, plannedAt: 0, lead: { to, place } };
+		route.current = null;
+		follow.current = { id, until: performance.now() + LEAD_FOLLOW_MAX_MS, plannedAt: 0, lead: { to, place } };
 		showToast(`${them.state.name}について${place}へ向かいます`);
-	}
-	/** Stops following; behind your AI to a place, it walks beside you again (the host hears COMPANION). */
-	function endFollow(): void {
-		if (following?.lead && companion) conn.send({ t: "COMPANION", on: true });
-		following = null;
-	}
-	function followStep(t: number): void {
-		if (!following) return;
-		const mine = myId ? avatars.get(myId) : undefined;
-		const them = avatars.get(following.id);
-		if (!mine || !them || t > following.until) {
-			if (!them) showToast("相手を見失いました");
-			endFollow();
-			return;
-		}
-		const now = conn.hostNow();
-		const here = poseAt(mine.state.move, now).pos;
-		const there = poseAt(them.state.move, now).pos;
-		const d = Math.hypot(there[0] - here[0], there[1] - here[1]);
-		const lead = following.lead;
-		if (lead) {
-			// your AI stopped where it was going, with you just behind: there
-			const { moving } = poseAt(them.state.move, now);
-			if (!moving && dist(there, lead.to) < 1.5 && d <= FOLLOW_STOP_M + 0.5) {
-				showToast(`${lead.place}に着きました`);
-				addLog("", `${them.state.name}と${lead.place}に着きました`, "sys");
-				endFollow();
-				return;
-			}
-			if (t - following.plannedAt < FOLLOW_REPLAN_MS) return;
-			// a little short of where it will be in a moment, so you walk on with it rather than stop and go
-			const soon = poseAt(them.state.move, now + FOLLOW_REPLAN_MS).pos;
-			const ds = Math.hypot(soon[0] - here[0], soon[1] - here[1]);
-			if (ds < LEAD_BEHIND_M + 0.3) return;
-			following.plannedAt = t;
-			const k = LEAD_BEHIND_M / ds;
-			const goal: Vec2 = [soon[0] + (here[0] - soon[0]) * k, soon[1] + (here[1] - soon[1]) * k];
-			// a way not found now may be found at the next try
-			const speed = d > 5 ? RUN_SPEED : WALK_SPEED;
-			if (!walkTo(goal, speed)) walkTo(soon, speed);
-			return;
-		}
-		if (d <= FOLLOW_STOP_M) {
-			showToast(`${them.state.name} のそばに着きました`);
-			following = null;
-			return;
-		}
-		if (t - following.plannedAt < FOLLOW_REPLAN_MS) return;
-		following.plannedAt = t;
-		// aim a little short of them, on our side; run while far, so a walking AI can be caught up with
-		const k = Math.min(1, (FOLLOW_STOP_M * 0.75) / d);
-		const goal: Vec2 = [there[0] + (here[0] - there[0]) * k, there[1] + (here[1] - there[1]) * k];
-		if (!walkTo(goal, d > 4 ? RUN_SPEED : WALK_SPEED) && !walkTo(there, d > 4 ? RUN_SPEED : WALK_SPEED)) {
-			showToast("そこへは行けません");
-			following = null;
-		}
 	}
 
 	// ---- going somewhere on foot: a portal (🚪 門へ), or a place on the map (🚶 歩いて行く) ----
-	/** Run to a gate while farther than this, plan the next leg this often, and give up after this long. */
-	const GATE_RUN_M = 10;
-	const GATE_REPLAN_MS = 1000;
 	const GATE_MAX_MS = 5 * 60_000;
-	/** A place on the map is reached this close (a gate at PORTAL_REACH, where its button shows). */
-	const PLACE_REACH_M = 3;
 	const PLACE_MAX_MS = 15 * 60_000;
-	/** `from`: where the last leg started, to notice when it took us nowhere. */
-	let going: {
-		to: Vec2;
-		name: string;
-		gate: boolean;
-		run: boolean;
-		until: number;
-		plannedAt: number;
-		from: Vec2 | null;
-	} | null = null;
+	const route = new Going(
+		() => {
+			const mine = myId ? avatars.get(myId) : undefined;
+			return mine ? poseAt(mine.state.move, conn.hostNow()) : undefined;
+		},
+		walkTo,
+		showToast,
+	);
 	/** Walks to `gate` (the nearest one if not given), in as many legs as the way needs. */
 	function goToGate(gate?: Portal): void {
 		const mine = myId ? avatars.get(myId) : undefined;
 		const to = gate ?? (mine ? portals.nearest(poseAt(mine.state.move, conn.hostNow()).pos) : null);
 		if (!to) return;
 		stopGoing();
-		going = {
+		route.current = {
 			to: to.pos,
 			name: to.name,
 			gate: true,
@@ -2280,7 +2192,7 @@ async function startCity(
 	function walkToPlace(p: MapPlace): void {
 		const gate = p.gate ? portals.byId(p.id) : undefined;
 		stopGoing();
-		going = {
+		route.current = {
 			to: gate?.pos ?? p.pos,
 			name: p.name,
 			gate: !!gate,
@@ -2290,37 +2202,6 @@ async function startCity(
 			from: null,
 		};
 		showToast(`${p.name}へ歩いて向かいます`);
-	}
-	function goStep(t: number): void {
-		if (!going) return;
-		const mine = myId ? avatars.get(myId) : undefined;
-		if (!mine || t > going.until) {
-			going = null;
-			return;
-		}
-		const pose = poseAt(mine.state.move, conn.hostNow());
-		// still walking a leg
-		if (pose.moving) return;
-		const d = dist(pose.pos, going.to);
-		// there (at a gate, the button to go through shows)
-		if (d <= (going.gate ? PORTAL_REACH : PLACE_REACH_M)) {
-			if (!going.gate && !going.run) showToast(`${going.name}に着きました`);
-			going = null;
-			return;
-		}
-		if (t - going.plannedAt < GATE_REPLAN_MS) return;
-		// the last leg took us nowhere (no way there, or the host did not take it)
-		if (going.from && dist(pose.pos, going.from) < 0.5) {
-			showToast("そこへは行けません");
-			going = null;
-			return;
-		}
-		going.plannedAt = t;
-		going.from = pose.pos;
-		if (!walkTo(going.to, going.run && d > GATE_RUN_M ? RUN_SPEED : WALK_SPEED)) {
-			showToast("そこへは行けません");
-			going = null;
-		}
 	}
 
 	// ---- loop ----
@@ -2454,11 +2335,11 @@ async function startCity(
 				dt,
 			);
 		if (keys.size > 0) steer(t);
-		followStep(t);
+		follow.step(t);
 		if (companion && withAi) stopStep();
 		pickStep();
 		seatStep();
-		goStep(t);
+		route.step(t);
 		// stop at the edge of the walkable area instead of walking into walls
 		if (mine?.state.move.kind === "vel") {
 			const move = mine.state.move;
@@ -2507,12 +2388,12 @@ async function startCity(
 			const partner = view.view === "cinema" ? choosePartner(mine) : null;
 			view.update(
 				mine,
-				poseAt(mine.state.move, now).moving || going !== null,
+				poseAt(mine.state.move, now).moving || route.current !== null,
 				dt,
 				{
 					partner,
 					talking: partner !== null && talkingNow(partner, now),
-					leading: !!following?.lead,
+					leading: !!follow.current?.lead,
 				},
 				t,
 			);

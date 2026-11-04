@@ -370,11 +370,7 @@ export class Agent {
 		)
 			return true;
 		const acts = (this.o.activities ?? []).filter(
-			(a) =>
-				activityOpen(a, t.minutes) &&
-				!cannotStart(life, a) &&
-				(coins === null || (a.cost ?? 0) <= coins) &&
-				this.placeOf(a),
+			(a) => this.canDo(a, life, t.minutes, coins) && this.placeOf(a),
 		);
 		const one = (...kinds: Activity["kind"][]) => {
 			const can = acts.filter((a) => kinds.includes(a.kind));
@@ -388,6 +384,10 @@ export class Agent {
 
 	private placeOf(a: Activity): Landmark | undefined {
 		return this.o.landmarks.find((l) => l.id === a.place);
+	}
+
+	private canDo(a: Activity, life: LifeState, minutes: number, coins: number | null): boolean {
+		return activityOpen(a, minutes) && !cannotStart(life, a) && (coins === null || (a.cost ?? 0) <= coins);
 	}
 
 	/** There: does what it went for. False if it is not there after all. */
@@ -515,13 +515,7 @@ export class Agent {
 		if (!life || t.night || !wantsExercise(life)) return false;
 		const coins = this.world.coins;
 		const can = (this.o.activities ?? [])
-			.filter(
-				(a) =>
-					a.kind === "exercise" &&
-					activityOpen(a, t.minutes) &&
-					!cannotStart(life, a) &&
-					(coins === null || (a.cost ?? 0) <= coins),
-			)
+			.filter((a) => a.kind === "exercise" && this.canDo(a, life, t.minutes, coins))
 			.flatMap((a) => {
 				const place = this.placeOf(a);
 				return place ? [{ a, place, d: dist(here, place.pos) }] : [];

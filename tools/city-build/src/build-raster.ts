@@ -8,6 +8,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type LandmarksData, NavMesh } from "@rojibura/nav";
+import { assertReachable, formatLandmarks } from "./landmarks.ts";
 import { buildNavMesh, defaultBuildOptions } from "./navmesh.ts";
 import { readPng } from "./png.ts";
 import { WalkRaster, type WalkTile } from "./walk-raster.ts";
@@ -62,24 +63,10 @@ async function main(args: string[]) {
 		heightAt: (x, z, top) => raster.heightNear(x, z) ?? top,
 	});
 	const mesh = NavMesh.fromJSON(navmesh);
-	const lost = city.landmarks.filter((l) => !mesh.findPath(city.spawn.pos, l.pos));
-	if (lost.length > 0)
-		throw new Error(
-			`landmarks not reachable from SPAWN: ${lost.map((l) => `${l.id} [${l.pos.join(", ")}]`).join("; ")}`,
-		);
+	assertReachable(mesh, city);
 	const navmeshJson = `${JSON.stringify(navmesh)}\n`;
 	writeFileSync(join(areaDir, "navmesh.json"), navmeshJson);
-	writeFileSync(
-		landmarksFile,
-		[
-			"{",
-			'\t"landmarks": [',
-			city.landmarks.map((l) => `\t\t${JSON.stringify(l)}`).join(",\n"),
-			"\t],",
-			`\t"spawn": ${JSON.stringify(city.spawn)}`,
-			"}\n",
-		].join("\n"),
-	);
+	writeFileSync(landmarksFile, formatLandmarks(city));
 	console.log(
 		`navmesh.json: ${navmesh.polygons.length} polygons (${rawPolygonCount} before dropping unreachable islands), ` +
 			`${navmesh.vertices.length / 3} vertices, ${(Buffer.byteLength(navmeshJson) / 1024).toFixed(1)} KB, ` +
