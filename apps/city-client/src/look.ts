@@ -7,6 +7,7 @@ import * as THREE from "three";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
 import { GTAOPass } from "three/examples/jsm/postprocessing/GTAOPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
+import { Pass } from "three/examples/jsm/postprocessing/Pass.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { adapt, exposureBoost, MeterPass } from "./exposure.ts";
 
@@ -37,6 +38,18 @@ void main() {
 	col += uSun * (pow(s, 900.0) * 40.0 + pow(s, 12.0) * 0.35);
 	gl_FragColor = vec4(col, 1.0);
 }`;
+
+/** The shadow map is made once a frame, by the first pass: drawing normals for the occlusion would make it again. */
+class ShadowsMade extends Pass {
+	constructor() {
+		super();
+		this.needsSwap = false;
+	}
+
+	override render(renderer: THREE.WebGLRenderer): void {
+		renderer.shadowMap.autoUpdate = false;
+	}
+}
 
 export class RichLook {
 	readonly composer: EffectComposer;
@@ -75,6 +88,7 @@ export class RichLook {
 		const size = renderer.getSize(new THREE.Vector2());
 		this.composer = new EffectComposer(renderer);
 		this.composer.addPass(new RenderPass(scene, camera));
+		this.composer.addPass(new ShadowsMade());
 		this.ao = ao ? new GTAOPass(scene, camera, size.x, size.y) : null;
 		if (this.ao) {
 			this.ao.updateGtaoMaterial({ radius: 2.5, distanceExponent: 2, thickness: 4, scale: 1.4, samples: 16 });
