@@ -69,6 +69,7 @@ import { actionBar, Relations, showAdmin } from "./moderation.ts";
 import { SEASONS, type Season } from "./nature/season.ts";
 import { CityConnection, type ConnState } from "./net.ts";
 import { rememberFirstVisit, reportFirstVisit } from "./onboarding.ts";
+import { outfitsOf, type PresetInfo } from "./outfits.ts";
 import { PORTAL_REACH, PortalsView } from "./portals.ts";
 import { CityScene } from "./scene.ts";
 import { SettingsPanel } from "./settings.ts";
@@ -348,13 +349,6 @@ function saveAvatar(id: string): void {
 	}
 }
 
-interface PresetInfo {
-	id: string;
-	name: string;
-	base?: string;
-	outfit?: string;
-}
-
 let presetCache: Promise<PresetInfo[]> | null = null;
 /** The host's preset looks (cached: the picker and the "auto" outfit both ask). */
 function presets(): Promise<PresetInfo[]> {
@@ -382,12 +376,6 @@ function saveOutfitMode(mode: string): void {
 	} catch {
 		// private mode: the choice lasts as long as the URL
 	}
-}
-
-/** The outfits of a character (the look `id` and its other outfits), the character's own first. */
-function outfitsOf(all: PresetInfo[], id: string): PresetInfo[] {
-	const base = all.find((p) => p.id === id)?.base ?? id;
-	return all.filter((p) => p.id === base || p.base === base);
 }
 
 /**

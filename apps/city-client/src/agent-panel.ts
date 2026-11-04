@@ -5,6 +5,7 @@
 import type { ClientToHost, HostToClient } from "@rojibura/protocol";
 import type { FromPage, FromWorker } from "./agent.worker.ts";
 import { DiaryView } from "./diary-view.ts";
+import { outfitsOf, type PresetInfo } from "./outfits.ts";
 
 const PRESETS = [
 	"のんびり屋の詩人。夜の街と噴水の音が好き。やわらかい口調。",
@@ -110,6 +111,10 @@ export class AgentPanel {
 	private readonly start = el("button", "");
 	private readonly stop = el("button", "rj-secondary", "街から帰す");
 	private readonly personalityBox = el("details", "");
+	/** Changing the AI's outfit (shown only if its character has more than one). */
+	private readonly outfitBox = el("details", "");
+	private readonly outfit = el("select", "");
+	private readonly outfitNote = el("span", "rj-note", "次に街に入れたときから変わります。");
 	private readonly pcState = el("div", "rj-note");
 	private readonly pcCode = el("div", "rj-excerpt");
 	private readonly unpair = el("button", "rj-secondary", "PCとのつながりを解く");
@@ -151,7 +156,7 @@ export class AgentPanel {
 		this.personality.required = true;
 		this.personality.placeholder = "性格や話し方、好きなこと";
 		// the look, chosen once when the AI is registered (docs/prd.md 3.4.4); VRMs move with the city's motions
-		this.look.title = "見た目（登録したあとは変えられません）";
+		this.look.title = "見た目（登録したあと、服装だけ変えられます）";
 		void fetch("/api/presets")
 			.then((r) =>
 				r.ok
@@ -180,7 +185,7 @@ export class AgentPanel {
 		this.setup.append(
 			el("span", "rj-note", "名前と性格を決めると、AIがあなたと同じ街で暮らします。"),
 			this.name,
-			el("span", "rj-note", "見た目（あとからは変えられません）："),
+			el("span", "rj-note", "見た目（服装はあとから変えられます）："),
 			this.look,
 			el("span", "rj-note", "性格の例："),
 			examples,
@@ -211,6 +216,9 @@ export class AgentPanel {
 			el("summary", "", "性格を変える"),
 			el("span", "rj-note", "次に街に入れたときから変わります。"),
 		);
+		this.outfitBox.hidden = true;
+		this.outfitBox.append(el("summary", "", "服装を変える"), this.outfitNote, this.outfit);
+		this.outfit.onchange = () => void this.setOutfit(this.outfit.value);
 		const forget = el("button", "rj-secondary", "このAIを忘れる");
 		forget.type = "button";
 		forget.onclick = () => {
@@ -236,6 +244,7 @@ export class AgentPanel {
 				"このタブを開いているあいだ、AIは街にいます。次に街を開いたときも一緒に入ります。",
 			),
 			this.personalityBox,
+			this.outfitBox,
 			this.pcSection(),
 			logBox,
 			forget,
@@ -428,6 +437,46 @@ export class AgentPanel {
 		return [el("code", "rj-command", text), copy];
 	}
 
+	/** Fills the outfit choice from the AI's current look (the host keeps it), for characters with several outfits. */
+	private async loadOutfits(): Promise<void> {
+		if (!this.agentId) return;
+		const id = this.agentId;
+		const [look, all] = await Promise.all([
+			fetch(`/api/agents/${id}/look`)
+				.then((r) => (r.ok ? (r.json() as Promise<{ preset: string }>) : null))
+				.catch(() => null),
+			fetch("/api/presets")
+				.then((r) => (r.ok ? (r.json() as Promise<PresetInfo[]>) : []))
+				.catch(() => []),
+		]);
+		if (!look || id !== this.agentId) return;
+		const outfits = outfitsOf(all, look.preset);
+		this.outfit.replaceChildren();
+		for (const p of outfits) {
+			const o = el("option", "", p.outfit ?? p.name);
+			o.value = p.id;
+			this.outfit.append(o);
+		}
+		this.outfit.value = look.preset;
+		this.outfitBox.hidden = outfits.length < 2;
+	}
+
+	/** Changes the AI's outfit on the host: it wears it from its next entry on. */
+	private async setOutfit(preset: string): Promise<void> {
+		if (!this.agentId) return;
+		const r = await fetch(`/api/agents/${this.agentId}/look`, {
+			method: "PUT",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ preset }),
+		}).catch(() => null);
+		this.outfitNote.textContent = r?.ok
+			? this.here || this.running
+				? "変えました。いま街にいる間はそのままで、次に街に入れたときから変わります。"
+				: "変えました。次に街に入れたときから変わります。"
+			: "変えられませんでした。";
+		if (!r?.ok) void this.loadOutfits();
+	}
+
 	/** Asks the host whether the AI is paired with a PC and in the city now (in any area, from anywhere). */
 	private async refresh(): Promise<void> {
 		if (!this.agentId) return;
@@ -435,6 +484,7 @@ export class AgentPanel {
 		const s = r?.ok
 			? ((await r.json()) as { paired: boolean; pairedAt: number | null; inCity?: boolean })
 			: null;
+		void this.loadOutfits();
 		if (!s) return;
 		this.here = s.inCity === true;
 		this.unpair.hidden = !s.paired;
@@ -497,6 +547,7 @@ export class AgentPanel {
 				this.setup.hidden = true;
 				this.mine.hidden = false;
 				this.personalityBox.append(this.personality);
+				void this.loadOutfits();
 				break;
 			case "state":
 				this.run = m.state;
