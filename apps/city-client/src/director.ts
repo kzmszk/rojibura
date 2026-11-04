@@ -79,6 +79,8 @@ export const MIN_HOLD_MS = 4_000;
 /** ...and from this long on, while they walk, loses this much a second. */
 const LONG_MS = 8_000;
 const LONG_PER_S = 4;
+/** Standing still, a shot goes on this long (ms) before it starts to lose. */
+const LONG_STANDING_MS = 10_000;
 /** A shot just left counts this much less, wearing off over this long (ms). */
 const RECENT = 30;
 const RECENT_MS = 100_000;
@@ -216,8 +218,9 @@ export class Director {
 			const seen = looks.seen(shot);
 			this.hiddenSince = seen === 0 ? (this.hiddenSince ?? now) : null;
 			kept = wanted(shot.kind, s) + KEEP - (1 - seen) * HIDDEN;
-			if (s.moving && !s.talking && !shot.fixed)
-				kept -= (Math.max(0, now - this.since - LONG_MS) / 1000) * LONG_PER_S;
+			// (standing about, too, the film cuts to another now and then: later than while they walk)
+			if (!s.talking && !shot.fixed)
+				kept -= (Math.max(0, now - this.since - (s.moving ? LONG_MS : LONG_STANDING_MS)) / 1000) * LONG_PER_S;
 			if (newLine) kept -= OLD_LINE;
 		}
 		// a camera left where it was: they have gone by it, or are too far to see

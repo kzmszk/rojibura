@@ -111,10 +111,16 @@ describe("Director", () => {
 		}
 	});
 
-	it("keeps a shot while they stand", () => {
+	it("keeps a shot a good while when they stand, then cuts to another now and then", () => {
 		const d = new Director();
 		const cuts = run(d, 0, 60_000, () => walking({ moving: false }));
-		expect(cuts).toHaveLength(1);
+		expect(cuts.length).toBeGreaterThan(1);
+		expect(cuts.length).toBeLessThan(6);
+		for (let i = 1; i < cuts.length; i++) {
+			const a = cuts[i - 1];
+			const b = cuts[i];
+			if (a && b) expect(b.at - a.at).toBeGreaterThanOrEqual(10_000);
+		}
 	});
 
 	it("takes the way behind them while following the AI to a place", () => {

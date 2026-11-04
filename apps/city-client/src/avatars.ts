@@ -628,8 +628,10 @@ export class AvatarView {
 			const node = humanoid.getNormalizedBoneNode(bone);
 			if (!node) continue;
 			const yaw = new THREE.Quaternion().setFromAxisAngle(up, sign * this.turned * part);
-			// (the model faces +Z: a turn about +X by a positive angle tips the face down, so up is negative)
-			const tip = new THREE.Quaternion().setFromAxisAngle(side, -sign * this.turnedPitch * part);
+			// (a model facing +Z: a turn about +X by a positive angle tips the face down, so up is negative; a VRM
+			// 0.x's bones keep its own frame, which faces -Z, so there it goes the other way)
+			const v0 = this.vrm?.meta.metaVersion === "0" ? -1 : 1;
+			const tip = new THREE.Quaternion().setFromAxisAngle(side, -sign * v0 * this.turnedPitch * part);
 			if (sign === 1) node.quaternion.multiply(yaw).multiply(tip);
 			else node.quaternion.multiply(tip).multiply(yaw);
 		}

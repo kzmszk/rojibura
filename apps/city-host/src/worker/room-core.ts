@@ -268,6 +268,8 @@ export interface Member extends JoinInfo {
 	leadAskedAt?: number;
 	/** AIs walking with their owner: host time its mood was last raised for it (docs/life.md 2). */
 	companyAt?: number;
+	/** AIs: walking to a seat next to the one their owner sat on, to sit on it at host time `at` (docs/prd.md 3.4.5). */
+	seatPlan?: { seat: number; at: number };
 	/** What it is doing now (docs/life.md 3). */
 	doing?: Doing;
 	/**
@@ -297,6 +299,11 @@ export interface ChatLine {
 }
 
 const CHAT_LOG_MAX = 2000;
+
+/** An AI walking with its owner sits down on a seat within this far of the owner's (m). */
+const SEAT_COMPANY_NEAR = 3;
+/** It stands this far in front of the seat to sit on it (as a person does, apps/city-client). */
+const SEAT_FRONT = 0.5;
 
 /** After something done together, the two may still step back this long (ms): the host leaves them be. */
 const STEP_BACK_GRACE_MS = 3000;
@@ -707,6 +714,7 @@ export class RoomCore<C> {
 		for (const c of [...this.convs.values()]) {
 			if (now - c.lastAt > CONV_TIMEOUT_MS) this.endConv(c, "timeout");
 		}
+		this.settleSeatPlans(now);
 		this.lifeTick(now);
 		for (const [k, until] of this.pairCooldown) if (until <= now) this.pairCooldown.delete(k);
 	}
@@ -892,6 +900,7 @@ export class RoomCore<C> {
 					};
 					this.transport.persist(conn, m);
 					this.broadcastAbout(m, { t: "MOVED", id: m.id, move: m.move });
+					if (seat !== undefined && m.kind === "human" && m.companion) this.seatCompany(m, seat, now);
 				}
 				this.broadcastAbout(
 					m,
@@ -1050,6 +1059,84 @@ export class RoomCore<C> {
 				best = i;
 		});
 		return best;
+	}
+
+	/**
+	 * The owner sat on a seat while walking with company: each of their AIs close by walks to the nearest free seat
+	 * next to it and sits there when it arrives (`settleSeatPlans`); with no free seat it just stays beside them.
+	 */
+	private seatCompany(owner: Member, ownerSeat: number, now: number): void {
+		const seats = this.world.seats ?? [];
+		const at = seats[ownerSeat];
+		if (!at) return;
+		const taken = new Set<number>([ownerSeat]);
+		for (const o of this.members.values()) {
+			if (o.move.kind === "idle" && o.move.seat !== undefined) taken.add(o.move.seat);
+			if (o.seatPlan) taken.add(o.seatPlan.seat);
+		}
+		for (const [conn, ai] of this.members) {
+			if (ai.kind !== "ai" || ai.ownerId !== owner.id || this.togetherNow(ai, now)) continue;
+			const from = this.positionOf(ai, now);
+			let best: { i: number; d: number } | undefined;
+			seats.forEach((s, i) => {
+				const d = dist(s.pos, at.pos);
+				if (taken.has(i) || d > SEAT_COMPANY_NEAR || Math.abs(s.y - at.y) > 0.5) return;
+				if (!best || d < best.d) best = { i, d };
+			});
+			const pick = best as { i: number; d: number } | undefined;
+			const seat = pick ? seats[pick.i] : undefined;
+			if (!pick || !seat) continue;
+			const front: Vec2 = [seat.pos[0] + seat.face[0] * SEAT_FRONT, seat.pos[1] + seat.face[1] * SEAT_FRONT];
+			const path = dist(from, front) < 0.2 ? null : this.leadPath(from, front, this.walkOf(ai));
+			if (!path && dist(from, front) >= 0.2) continue;
+			taken.add(pick.i);
+			this.stopDoing(conn, ai, now);
+			if (path) {
+				ai.move = { kind: "path", path, speed: WALK_SPEED, at: now };
+				this.broadcastAbout(ai, { t: "MOVED", id: ai.id, move: ai.move });
+			}
+			const ms = path ? (polylineLength(path) / WALK_SPEED) * 1000 : 0;
+			ai.seatPlan = { seat: pick.i, at: now + ms + 150 };
+			this.transport.persist(conn, ai);
+		}
+	}
+
+	/** The host time the next AI is due to sit down (for the alarm), if any. */
+	get wakeAt(): number | undefined {
+		let t: number | undefined;
+		for (const m of this.members.values())
+			if (m.seatPlan && (t === undefined || m.seatPlan.at < t)) t = m.seatPlan.at;
+		return t;
+	}
+
+	/** AIs that have walked up to their seat sit down on it. */
+	private settleSeatPlans(now: number): void {
+		for (const [conn, ai] of this.members) {
+			const plan = ai.seatPlan;
+			if (!plan || plan.at > now) continue;
+			delete ai.seatPlan;
+			// it was stopped, or sent elsewhere, on the way
+			if (poseAt(ai.move, now).moving) {
+				this.transport.persist(conn, ai);
+				continue;
+			}
+			const seat = this.seatFor(ai, plan.seat, now);
+			if (seat === undefined) {
+				this.transport.persist(conn, ai);
+				continue;
+			}
+			ai.move = {
+				kind: "idle",
+				pos: this.positionOf(ai, now),
+				at: now,
+				posture: "sit",
+				...(this.world.seats?.[seat]?.face ? { face: this.world.seats[seat]?.face as Vec2 } : {}),
+				seat,
+			};
+			this.transport.persist(conn, ai);
+			this.broadcastAbout(ai, { t: "MOVED", id: ai.id, move: ai.move });
+			this.broadcastAbout(ai, { t: "ACTED", id: ai.id, motion: "sit", target: undefined, at: now });
+		}
 	}
 
 	// ---- doing things together (docs/prd.md 3.4.6) ---------------------------
@@ -1280,6 +1367,7 @@ export class RoomCore<C> {
 		for (const [conn, ai] of this.members) {
 			if (ai.kind !== "ai" || ai.ownerId !== owner.id) continue;
 			const side = slot++ % 2 === 0 ? 1 : -1;
+			delete ai.seatPlan;
 			// taking the owner somewhere: it leads, the owner follows (until it is over, or long past)
 			if (ai.lead && now < ai.lead.until) continue;
 			// hugging its owner (or someone): it stays there until it is over and they have stepped back
