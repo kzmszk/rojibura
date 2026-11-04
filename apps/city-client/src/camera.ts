@@ -22,6 +22,17 @@ const FOV = 55;
 const DRONE_BACK = 2.4;
 const DRONE_UP = 0.7;
 const PITCH_LIMIT = Math.PI * 0.4;
+/**
+ * Looking round with the keys in the cinema view (docs/cinema.md 2): as fast as this (radians a second), and as far as
+ * a person can: up 40° and down 45° (neck and eyes), and walking, 55° to either side of the way they go. Standing,
+ * the body turns, so all the way round.
+ */
+const LOOK_RATE = 1.8;
+const LOOK_UP = 0.7;
+const LOOK_DOWN = -0.8;
+const LOOK_WALKING = 0.96;
+/** What the head is made to look at: this far off (m). */
+const GAZE_M = 10;
 
 export class ViewController {
 	view: View = "orbit";
@@ -77,6 +88,27 @@ export class ViewController {
 		return this.drag !== null || this.orbiting;
 	}
 
+	/** Looks round by the keys (the cinema view only): `x` left (+) or right (-), `y` up (+) or down (-), -1 to 1. */
+	turnBy(x: number, y: number, dt: number): void {
+		if (this.view !== "cinema") return;
+		this.yaw += x * LOOK_RATE * dt;
+		this.pitch += y * LOOK_RATE * dt;
+		this.held = true;
+	}
+
+	private lookVector(): THREE.Vector3 {
+		return new THREE.Vector3(
+			Math.sin(this.yaw) * Math.cos(this.pitch),
+			Math.sin(this.pitch),
+			Math.cos(this.yaw) * Math.cos(this.pitch),
+		);
+	}
+
+	/** What your head looks at in the cinema view (world), so that your face goes where your eyes look; else null. */
+	gazePoint(me: AvatarView): THREE.Vector3 | null {
+		return this.view === "cinema" ? me.eyePosition().addScaledVector(this.lookVector(), GAZE_M) : null;
+	}
+
 	/** The camera that "forward" is taken from, for keys: your eyes in the cinema view (the film cuts about). */
 	get walkCamera(): THREE.PerspectiveCamera {
 		return this.view === "cinema" ? this.cinema.walkCamera : this.scene.camera;
@@ -128,11 +160,15 @@ export class ViewController {
 			const diff = Math.atan2(Math.sin(me.heading - this.yaw), Math.cos(me.heading - this.yaw));
 			this.yaw += diff * Math.min(1, dt * 3);
 		}
-		const look = new THREE.Vector3(
-			Math.sin(this.yaw) * Math.cos(this.pitch),
-			Math.sin(this.pitch),
-			Math.cos(this.yaw) * Math.cos(this.pitch),
-		);
+		if (this.view === "cinema") {
+			// as far as a person can look: walking, not over the shoulder; standing, the body turns
+			this.pitch = Math.max(LOOK_DOWN, Math.min(LOOK_UP, this.pitch));
+			if (moving) {
+				const off = Math.atan2(Math.sin(this.yaw - me.heading), Math.cos(this.yaw - me.heading));
+				this.yaw = me.heading + Math.max(-LOOK_WALKING, Math.min(LOOK_WALKING, off));
+			}
+		}
+		const look = this.lookVector();
 		if (this.view === "cinema") {
 			this.cinema.update(me, look, { ...company, moving }, dt, now);
 			return;

@@ -1375,6 +1375,8 @@ async function startCity(
 	// "Forward" is where the camera looked when the keys held last changed: the view coming round behind the
 	// avatar does not turn the way it walks (with A or D held it would walk round in jerky circles).
 	const keys = new Set<string>();
+	/** In the cinema view Shift with the movement keys looks round instead of walking (docs/cinema.md 2). */
+	const lookKeys = new Set<string>();
 	let softFocus = false;
 	let sentVel: { dir: Vec2; speed: number; at: number } | null = null;
 	let forward: { keys: string; f: THREE.Vector3 } | null = null;
@@ -1439,6 +1441,9 @@ async function startCity(
 		if (e.key.toLowerCase() === "c") lift.delete("down");
 		const k = movementKey(e);
 		if (!k) return;
+		// (letting go of Shift ends the looking)
+		if (k === "shift") lookKeys.clear();
+		else lookKeys.delete(k);
 		keys.delete(k);
 		// letting go of a diagonal's two keys is never quite at once: wait a moment before going the one way left
 		if (["w", "a", "s", "d"].some((x) => keys.has(x))) {
@@ -1451,6 +1456,7 @@ async function startCity(
 	});
 	addEventListener("blur", () => {
 		keys.clear();
+		lookKeys.clear();
 		steer(performance.now());
 	});
 	/** Typing in the chat or in the build menu: keys are text, not moves. */
@@ -1469,6 +1475,12 @@ async function startCity(
 		const k = movementKey(e);
 		if (k && k !== "shift" && softFocus && document.activeElement === input && !input.value && !e.isComposing)
 			input.blur();
+		if (k && k !== "shift" && !typing() && view.view === "cinema" && keys.has("shift")) {
+			// (a key pressed while Shift is held: walking goes on as it was)
+			e.preventDefault();
+			lookKeys.add(k);
+			return;
+		}
 		if (k && !typing()) {
 			e.preventDefault();
 			stopGoing();
@@ -2293,6 +2305,8 @@ async function startCity(
 			v.attend(
 				near ? (talking || mood?.glance || stopped ? owner.eyePosition() : (mood?.sight ?? null)) : null,
 			);
+			// you, filmed: your face goes where your eyes look (docs/cinema.md 2)
+			if (v.state.id === myId) v.attend(view.gazePoint(v));
 			v.standFacing(mood ? mood.facing : null);
 			v.update(now, dt, scene);
 			// at the onsen everyone has taken their clothes off and wears a swimsuit; the swimsuit is made
@@ -2334,6 +2348,12 @@ async function startCity(
 			const b = jobButtons[i] as HTMLButtonElement;
 			b.hidden = !!job || !mine || zones.at(poseAt(mine.state.move, now).pos, kind) === null;
 		}
+		if (lookKeys.size > 0)
+			view.turnBy(
+				(lookKeys.has("a") ? 1 : 0) - (lookKeys.has("d") ? 1 : 0),
+				(lookKeys.has("w") ? 1 : 0) - (lookKeys.has("s") ? 1 : 0),
+				dt,
+			);
 		if (keys.size > 0) steer(t);
 		followStep(t);
 		if (companion && withAi) stopStep();

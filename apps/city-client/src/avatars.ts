@@ -273,6 +273,9 @@ function capsule(color: number): THREE.Object3D {
 const REACH_GEOMETRY = new THREE.CapsuleGeometry(0.35, 1.0, 4, 8);
 const REACH_MATERIAL = new THREE.MeshBasicMaterial();
 
+/** How far a head tips up or down (radians): about 35°. The eyes go on beyond it. */
+const HEAD_TIP = 0.6;
+
 export class AvatarView {
 	readonly root = new THREE.Group();
 	state: AvatarState;
@@ -326,6 +329,9 @@ export class AvatarView {
 	private rest: number | null = null;
 	/** How far the head is turned towards them (radians, eased). */
 	private headTurn = 0;
+	/** How far the head is tipped up (+) or down (-) at what it looks at (radians, eased). */
+	private headPitch = 0;
+	private turnedPitch = 0;
 	/**
 	 * The turn laid on the neck and head this frame, taken off again before the motion's next frame: the
 	 * mixer leaves a bone alone while its value stays the same (standing still), so a turn left on would
@@ -607,18 +613,26 @@ export class AvatarView {
 		this.smileWant = Math.max(this.smileWant, how);
 	}
 
-	/** Lays this frame's head turn on the neck (0.4 of it) and the head (0.6), or takes it off (-1). */
+	/**
+	 * Lays this frame's head turn (and tip up or down) on the neck (0.4 of it) and the head (0.6), or takes it off
+	 * (-1, in the opposite order).
+	 */
 	private twist(sign: 1 | -1): void {
 		const humanoid = this.vrm?.humanoid;
-		if (!humanoid || this.turned === 0) return;
+		if (!humanoid || (this.turned === 0 && this.turnedPitch === 0)) return;
 		const up = new THREE.Vector3(0, 1, 0);
+		const side = new THREE.Vector3(1, 0, 0);
 		for (const [bone, part] of [
 			["neck", 0.4],
 			["head", 0.6],
 		] as const) {
-			humanoid
-				.getNormalizedBoneNode(bone)
-				?.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(up, sign * this.turned * part));
+			const node = humanoid.getNormalizedBoneNode(bone);
+			if (!node) continue;
+			const yaw = new THREE.Quaternion().setFromAxisAngle(up, sign * this.turned * part);
+			// (the model faces +Z: a turn about +X by a positive angle tips the face down, so up is negative)
+			const tip = new THREE.Quaternion().setFromAxisAngle(side, -sign * this.turnedPitch * part);
+			if (sign === 1) node.quaternion.multiply(yaw).multiply(tip);
+			else node.quaternion.multiply(tip).multiply(yaw);
 		}
 	}
 
@@ -637,9 +651,18 @@ export class AvatarView {
 		const turn = attends ? Math.max(-limit, Math.min(limit, off)) : 0;
 		this.headTurn += (turn - this.headTurn) * Math.min(1, dt * 4);
 		this.turned = Math.abs(this.headTurn) > 1e-3 ? this.headTurn : 0;
-		this.twist(1);
 		const focus = this.bodyLook ?? this.attention;
 		this.sees = focus && attends ? focus : null;
+		// tipped up or down at what it looks at, as far as a neck goes
+		let tip = 0;
+		if (focus && attends) {
+			const eyes = this.eyePosition();
+			const flat = Math.hypot(focus.x - eyes.x, focus.z - eyes.z);
+			tip = Math.max(-HEAD_TIP, Math.min(HEAD_TIP, Math.atan2(focus.y - eyes.y, Math.max(flat, 0.3))));
+		}
+		this.headPitch += (tip - this.headPitch) * Math.min(1, dt * 4);
+		this.turnedPitch = Math.abs(this.headPitch) > 1e-3 ? this.headPitch : 0;
+		this.twist(1);
 		const lookAt = vrm.lookAt;
 		if (!lookAt) return;
 		if (focus && attends) {
