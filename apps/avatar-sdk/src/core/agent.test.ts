@@ -952,3 +952,71 @@ test.each([
 		vi.useRealTimers();
 	}
 });
+
+test("chooses the first exercise when two are equally close", async () => {
+	const nine = Date.UTC(2026, 10, 2, 11) + realMs(180);
+	vi.useFakeTimers({ now: nine });
+	try {
+		const sent: ClientToHost[] = [];
+		const activity = {
+			kind: "exercise" as const,
+			minutes: 60,
+			hours: "06-21",
+			effects: { energy: -10, fitness: 5 },
+			emoji: "🤸",
+		};
+		const agent = new Agent({
+			persona: { name: "ミナ", personality: "" },
+			llm: { name: "fake", complete: async () => null },
+			memory: memory(),
+			nav: { findPath: (a, b) => [a, b] },
+			landmarks: [
+				{ id: "east", name: "東", pos: [20, 0] },
+				{ id: "west", name: "西", pos: [-20, 0] },
+			],
+			activities: [
+				{ ...activity, id: "east_exercise", name: "東の体操", place: "east" },
+				{ ...activity, id: "west_exercise", name: "西の体操", place: "west" },
+			],
+			logger: { info: () => {}, warn: () => {} },
+			send: (m) => sent.push(m),
+			wanderMs: [1000, 1000],
+			random: () => 0,
+		});
+		const blank = { thumb: "", lod: "", vrm: "" };
+		const life = newLife(nine);
+		agent.handle({
+			t: "WELCOME",
+			you: "a_mina",
+			serverTime: nine,
+			budget: 0,
+			avatars: [
+				{
+					id: "a_mina",
+					kind: "ai",
+					name: "ミナ",
+					status: "active",
+					assets: blank,
+					move: { kind: "idle", pos: [0, 0], at: 0 },
+				},
+				{
+					id: "h_k",
+					kind: "human",
+					name: "Kazu",
+					status: "active",
+					assets: blank,
+					move: { kind: "idle", pos: [2, 0], at: 0 },
+				},
+			],
+			life: { ...life, days: 2, energy: 80, duties: { ...life.duties, meals: 1 } },
+		});
+		agent.handle({ t: "COMPANY", owner: "h_k", on: true });
+		await vi.advanceTimersByTimeAsync(3100);
+		expect(sent.filter((m) => m.t === "LEAD")).toEqual([
+			{ t: "LEAD", to: [20, 0], place: "東", text: "体を動かしたいな。東の体操をしに行かない？" },
+		]);
+		agent.stop();
+	} finally {
+		vi.useRealTimers();
+	}
+});
