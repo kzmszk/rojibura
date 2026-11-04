@@ -759,23 +759,21 @@ async function startCity(
 	// the way to a portal from anywhere in the area (docs/prd.md 3.8): it may be far off and out of sight
 	const gates = area.portals ?? [];
 	const onlyGate = gates.length === 1 ? gates[0] : undefined;
-	const gateButton = el("button", "rj-logout rj-gate", "🚪 門へ");
-	gateButton.type = "button";
+	// (gate, map and floating are entries of the motion menu, below)
+	const gateButton = el("option", "", "🚪 門へ");
+	gateButton.value = "gate";
 	gateButton.title = `${onlyGate ? onlyGate.name : "いちばん近い門"}まで歩いていきます（遠いときは走ります）`;
 	gateButton.hidden = gates.length === 0;
-	gateButton.onclick = () => goToGate();
-	const mapButton = el("button", "rj-logout rj-gate", "🗺️ 地図");
-	mapButton.type = "button";
-	mapButton.title = "地図を開く（M）。主な場所へ歩いて行くか、瞬間移動できます";
-	mapButton.onclick = () => cityMap.toggle();
+	const mapButton = el("option", "", "🗺️ 地図（M）");
+	mapButton.value = "map";
+	mapButton.title = "地図を開く。主な場所へ歩いて行くか、瞬間移動できます";
 	// floating in the air (docs/prd.md 3.4.13), where the area allows it: up and down while afloat
-	const flyBar = el("div", "rj-fly");
-	const flyButton = el("button", "rj-logout rj-gate", "🕊️ 浮かぶ");
-	flyButton.type = "button";
-	flyButton.title = "空に浮かぶ（U）。浮いている間はスペースで上へ、C で下へ";
-	flyButton.onclick = () => toggleFly();
+	const flyButton = el("option", "", "🕊️ 浮かぶ（U）");
+	flyButton.value = "fly";
+	flyButton.title = "空に浮かぶ。浮いている間はスペースで上へ、C で下へ";
+	flyButton.hidden = !area.fly;
 	const liftButtons = (["up", "down"] as const).map((way) => {
-		const b = el("button", "rj-logout", way === "up" ? "⬆️" : "⬇️");
+		const b = el("button", "", way === "up" ? "⬆️" : "⬇️");
 		b.type = "button";
 		b.title = way === "up" ? "上へ（スペース）" : "下へ（C）";
 		b.hidden = true;
@@ -784,9 +782,6 @@ async function startCity(
 			b.addEventListener(ev, () => lift.delete(way));
 		return b;
 	});
-	flyBar.append(flyButton, ...liftButtons);
-	flyBar.hidden = !area.fly;
-	const left = el("div", "rj-left");
 	// your wallet (docs/prd.md 3.8.6): shown once the host tells it
 	// what you and your AI have now, always on screen (#53)
 	const statusHud = new StatusHud(
@@ -796,8 +791,12 @@ async function startCity(
 		() => myId,
 		(id) => avatars.get(id)?.state.name,
 	);
-	left.append(status, statusHud.el, gateButton, mapButton, flyBar);
-	hud.append(left, right);
+	// top right: the status line with the settings (and what is built or free play) beside it, your wallet and your AI's meters under
+	const statusRow = el("div", "rj-statusrow");
+	statusRow.append(status, right);
+	const statusArea = el("div", "rj-statusarea");
+	statusArea.append(statusRow, statusHud.el);
+	hud.append(statusArea);
 	const chat = el("div", "rj-chat");
 	// what was said fades after a while; it all comes back while talking or pointing at it (docs/prd.md 3.4.12)
 	const log = el("div", "rj-log");
@@ -839,6 +838,10 @@ async function startCity(
 		togetherGroup.append(o);
 	}
 	motionMenu.append(togetherGroup);
+	const goGroup = el("optgroup", "");
+	goGroup.label = "移動";
+	goGroup.append(gateButton, mapButton, flyButton);
+	motionMenu.append(goGroup);
 	motionMenu.value = "";
 	motionMenu.onchange = () => {
 		const v = motionMenu.value;
@@ -846,9 +849,12 @@ async function startCity(
 		// the number keys and Space are moves again, not the menu's
 		motionMenu.blur();
 		if (v === "handshake" || v === "hug") offer(v);
+		else if (v === "gate") goToGate();
+		else if (v === "map") cityMap.toggle();
+		else if (v === "fly") toggleFly();
 		else if (v) act(v as Motion);
 	};
-	motionBar.append(motionMenu);
+	motionBar.append(motionMenu, ...liftButtons);
 	// the thing in hand (3.4.7): a thing close by can be picked up with a button (or E), not only by clicking it
 	const pickButton = el("button", "", "✋");
 	pickButton.type = "button";
@@ -899,7 +905,8 @@ async function startCity(
 	/** Asked to do something together: yes or no, for OFFER_TTL_MS. */
 	const offerBox = el("div", "rj-offer");
 	offerBox.hidden = true;
-	chat.append(log, motionBar, form);
+	// top left now, so what is said grows downwards: the menu and the line to type on stay where they are
+	chat.append(motionBar, form, log);
 	const toast = el("div", "rj-toast");
 	// standing at a portal: the way to the other area (docs/prd.md 3.8)
 	const travel = el("button", "rj-travel");
@@ -1990,8 +1997,7 @@ async function startCity(
 	}
 	function showFlying(alt: number | null): void {
 		flyAlt = alt;
-		flyButton.textContent = alt === null ? "🕊️ 浮かぶ" : "🛬 降りる";
-		flyButton.classList.toggle("on", alt !== null);
+		flyButton.textContent = alt === null ? "🕊️ 浮かぶ（U）" : "🛬 降りる（U）";
 		for (const b of liftButtons) b.hidden = alt === null;
 		if (alt === null) lift.clear();
 	}

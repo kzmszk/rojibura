@@ -54,6 +54,8 @@ const RAY_MS = 150;
 /** The camera follows them this late (seconds); what it looks at, this late. */
 const FOLLOW_S = 0.9;
 const AIM_S = 0.35;
+/** A camera left in place turns after them this late (seconds): slower, so it turns like a hand on a tripod. */
+const PAN_S = 0.6;
 /** Above their feet the camera looks at this height (m): heads a third from the top. */
 const AIM_UP = 1;
 /** Walking, it looks this far ahead of them (m): room in front. */
@@ -66,8 +68,18 @@ const NOT_GROUND = 3;
 /** They moved this far at once (a warp): cut (m). */
 const JUMP_M = 8;
 /** The way from the camera to them is checked this often (m); this part of it may be off the walkable ground. */
-const OPEN_STEP_M = 2.5;
-const OPEN_MISSES = 0.2;
+const OPEN_STEP_M = 1.5;
+const OPEN_MISSES = 0.1;
+/** The camera needs this much walkable room round it (m); going along with them, it is looked at this far on (m). */
+const ROOM_M = 0.8;
+const ROOM: Vec2[] = [
+	[0, 0],
+	[ROOM_M, 0],
+	[-ROOM_M, 0],
+	[0, ROOM_M],
+	[0, -ROOM_M],
+];
+const AHEAD_M = 3;
 /** The eyes' camera: how late it follows the head, up and down, and sideways (seconds; walking's bobbing to a quarter). */
 const EYE_UP_S = 0.3;
 const EYE_SIDE_S = 0.12;
@@ -156,6 +168,8 @@ export class Cinema {
 	private nextRay = 0;
 	private rayTurn = 0;
 	private on = false;
+	/** They walk now (as the film last heard). */
+	private moving = false;
 
 	constructor(scene: CityScene, options: CinemaOptions) {
 		this.scene = scene;
@@ -251,6 +265,7 @@ export class Cinema {
 		const b = company.partner?.root.position ?? a;
 		this.middle.copy(a).add(b).multiplyScalar(0.5);
 		const { moving } = company;
+		this.moving = moving;
 		if (moving) this.dir = [Math.sin(me.heading), Math.cos(me.heading)];
 		// a warp: from somewhere else altogether
 		if (this.shot && this.lastMiddle.distanceTo(this.middle) > JUMP_M) {
@@ -284,7 +299,24 @@ export class Cinema {
 			target.z += this.dir[1] * LEAD_ROOM;
 		}
 		target.y += AIM_UP;
-		if (cut) {
+		const fixed = shot.fixed;
+		if (cut && fixed) {
+			// a camera left in place: where it was put, looking at where they were (or turning after them)
+			this.followed.copy(this.middle);
+			this.aim.set(fixed.aim[0], this.middle.y + AIM_UP, fixed.aim[1]);
+			this.cameraY = this.heightWanted = this.heightOf(shot);
+			this.seesMe = this.seesAi = true;
+			this.nextRay = now + RAY_MS;
+			camera.fov = shot.fov;
+			camera.updateProjectionMatrix();
+		} else if (fixed) {
+			if (now >= this.nextRay) {
+				this.nextRay = now + RAY_MS;
+				this.lookOver(me, company.partner, shot);
+			}
+			if (fixed.track) this.aim.lerp(this.middle.clone().setY(this.middle.y + AIM_UP), ease(dt, PAN_S));
+			this.cameraY += (this.heightWanted - this.cameraY) * ease(dt, HEIGHT_S);
+		} else if (cut) {
 			this.followed.copy(this.middle);
 			this.aim.copy(target);
 			this.cameraY = this.heightWanted = this.heightOf(shot);
@@ -301,7 +333,9 @@ export class Cinema {
 			this.aim.lerp(target, ease(dt, AIM_S));
 			this.cameraY += (this.heightWanted - this.cameraY) * ease(dt, HEIGHT_S);
 		}
-		camera.position.set(this.followed.x + shot.offset[0], this.cameraY, this.followed.z + shot.offset[1]);
+		if (fixed) camera.position.set(fixed.at[0], this.cameraY, fixed.at[1]);
+		else
+			camera.position.set(this.followed.x + shot.offset[0], this.cameraY, this.followed.z + shot.offset[1]);
 		camera.lookAt(this.aim);
 		// the shadow and the water follow what is filmed (scene.track)
 		this.scene.controls.target.copy(this.middle);
@@ -318,36 +352,52 @@ export class Cinema {
 
 	/** How high the camera is for this shot, where it stands now. */
 	private heightOf(shot: Shot): number {
-		const x = this.middle.x + shot.offset[0];
-		const z = this.middle.z + shot.offset[1];
+		const [x, z] = this.spot(shot);
 		const y = this.middle.y + shot.height;
 		const ground = this.scene.heightAt(x, z, this.middle.y);
 		return ground !== null && ground < this.middle.y + NOT_GROUND ? Math.max(y, ground + ABOVE_GROUND) : y;
+	}
+
+	/** Where the camera is for this shot now (x, z): where it was left, or beside them as they walk. */
+	private spot(shot: Shot): Vec2 {
+		return shot.fixed ? shot.fixed.at : [this.middle.x + shot.offset[0], this.middle.z + shot.offset[1]];
 	}
 
 	/** What the director may ask about what can be seen from where. */
 	private looks(me: AvatarView, partner: AvatarView | null): Looks {
 		return {
 			open: (shot) => {
-				const [ox, oz] = shot.offset;
-				const [x, z] = [this.middle.x + ox, this.middle.z + oz];
-				if (!this.walkable([x, z])) return false;
-				const n = Math.max(1, Math.ceil(Math.hypot(ox, oz) / OPEN_STEP_M));
-				let misses = 0;
-				for (let i = 1; i < n; i++) {
-					const t = i / n;
-					if (!this.walkable([x - ox * t, z - oz * t])) misses++;
+				const [x, z] = this.spot(shot);
+				// the camera where it is put, with room round it, and, going along with them, where it will be in a moment
+				const spots: Vec2[] = [[x, z]];
+				const ahead: Vec2 = this.moving ? [this.dir[0] * AHEAD_M, this.dir[1] * AHEAD_M] : [0, 0];
+				if (!shot.fixed && this.moving) spots.push([x + ahead[0], z + ahead[1]]);
+				// (the camera itself, a little behind where it is put while it catches up)
+				if (shot === this.shot) spots.push([this.scene.camera.position.x, this.scene.camera.position.z]);
+				for (const [px, pz] of spots)
+					for (const [dx, dz] of ROOM) if (!this.walkable([px + dx, pz + dz])) return false;
+				// the way from the camera to them (now, and where they will be) has to be ground all along
+				const targets: Vec2[] = [[this.middle.x, this.middle.z]];
+				if (this.moving) targets.push([this.middle.x + ahead[0], this.middle.z + ahead[1]]);
+				for (const [tx, tz] of targets) {
+					const along: Vec2 = shot.fixed ? [x, z] : [x + (tx - this.middle.x), z + (tz - this.middle.z)];
+					const ox = tx - along[0];
+					const oz = tz - along[1];
+					const n = Math.max(2, Math.ceil(Math.hypot(ox, oz) / OPEN_STEP_M));
+					let misses = 0;
+					for (let i = 0; i < n; i++) {
+						const t = i / n;
+						if (!this.walkable([along[0] + ox * t, along[1] + oz * t])) misses++;
+					}
+					if (misses > n * OPEN_MISSES) return false;
 				}
-				return misses <= n * OPEN_MISSES;
+				return true;
 			},
 			seen: (shot) => {
 				if (shot === this.shot)
 					return partner ? (Number(this.seesMe) + Number(this.seesAi)) / 2 : Number(this.seesMe);
-				const from = new THREE.Vector3(
-					this.middle.x + shot.offset[0],
-					this.middle.y + shot.height,
-					this.middle.z + shot.offset[1],
-				);
+				const [x, z] = this.spot(shot);
+				const from = new THREE.Vector3(x, this.middle.y + shot.height, z);
 				const eyes = partner ? [me.eyePosition(), partner.eyePosition()] : [me.eyePosition()];
 				return eyes.filter((e) => this.scene.clearBetween(from, e)).length / eyes.length;
 			},

@@ -98,7 +98,7 @@ describe("Director", () => {
 	});
 
 	it("walking on, it changes shots now and then, not often, and stays on one side", () => {
-		const cuts = run(new Director(), 0, 120_000, () => walking());
+		const cuts = run(new Director(), 0, 120_000, (t) => walking({ center: [0, (t / 1000) * 1.4] }));
 		expect(cuts.length).toBeGreaterThan(4);
 		for (let i = 1; i < cuts.length; i++) {
 			const a = cuts[i - 1];
@@ -169,6 +169,65 @@ describe("Director", () => {
 		const r = new Director().step(0, walking(), nothing);
 		expect(r.cut).toBe(true);
 		expect(r.shot.kind).toBe("near");
+	});
+
+	it("a camera left in place stays where it was put, and looks at where they were or follows them", () => {
+		const walk = walking({ center: [10, 20] });
+		const ahead = placeShot("ahead", 1, walk);
+		expect(ahead.fixed?.track).toBe(false);
+		expect(ahead.fixed?.at[0]).toBeCloseTo(10 + ahead.offset[0]);
+		expect(ahead.fixed?.at[1]).toBeCloseTo(20 + ahead.offset[1]);
+		expect(ahead.fixed?.aim).toEqual([10, 20]);
+		expect(ahead.offset[1]).toBeGreaterThan(10);
+		const away = placeShot("away", 1, walk);
+		expect(away.offset[1]).toBeLessThan(0);
+		expect(placeShot("pan", 1, walk).fixed?.track).toBe(true);
+		expect(placeShot("front", 1, walk).fixed).toBeNull();
+	});
+
+	it("films them past a camera that stays, and cuts before they are on top of it or out of sight", () => {
+		const d = new Director();
+		const at = (t: number): Subjects => walking({ center: [0, (t / 1000) * 1.4] });
+		const cuts = run(d, 0, 400_000, at);
+		const held = cuts.filter((c) => c.shot.fixed);
+		expect(held.length).toBeGreaterThan(2);
+		for (const c of held) {
+			const next = cuts[cuts.indexOf(c) + 1];
+			expect(next).toBeDefined();
+			const there = at(next?.at ?? 0).center;
+			const at0 = c.shot.fixed?.at ?? [0, 0];
+			const away = Math.hypot(there[0] - at0[0], there[1] - at0[1]);
+			expect(away).toBeLessThan(27);
+			if (c.shot.kind === "ahead") expect(away).toBeGreaterThan(2.5);
+		}
+	});
+
+	it("does not take a camera left in place where the camera may not be far from them", () => {
+		const cuts = run(new Director(), 0, 200_000, () => walking({ reach: 6 }));
+		expect(cuts.some((c) => c.shot.fixed)).toBe(false);
+	});
+
+	it("cuts at once, not after the shot's least time, when the camera gets into a wall", () => {
+		const d = new Director();
+		const first = d.step(0, walking(), clear).shot;
+		const walled: Looks = { open: (shot) => shot !== first, seen: () => 1 };
+		const r = d.step(250, walking(), walled);
+		expect(r.cut).toBe(true);
+		expect(r.shot).not.toBe(first);
+	});
+
+	it("never takes a shot whose camera would be in a wall, however good it is", () => {
+		const shut = (kind: string): Looks => ({ open: (shot) => shot.kind !== kind, seen: () => 1 });
+		for (const kind of ["front", "side", "pan", "ahead", "back"]) {
+			const cuts = run(
+				new Director(),
+				0,
+				120_000,
+				(t) => walking({ center: [0, (t / 1000) * 1.4] }),
+				shut(kind),
+			);
+			expect(cuts.some((c) => c.shot.kind === kind)).toBe(false);
+		}
 	});
 
 	it("reset makes the next step cut", () => {

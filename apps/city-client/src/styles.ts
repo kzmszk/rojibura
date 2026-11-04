@@ -13,14 +13,14 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #bfd6e8; }
   background: #fff; color: #222; box-shadow: 0 1px 4px rgba(0,0,0,.25); overflow-wrap: anywhere; }
 .rj-bubble.show { display: block; }
 .rj-bubble.thinking { color: #888; letter-spacing: 2px; }
-.rj-hud { position: absolute; top: 12px; left: 12px; right: 12px; display: flex; justify-content: space-between; align-items: flex-start; pointer-events: none; }
+.rj-hud { position: absolute; top: 12px; left: 12px; right: 12px; display: flex; justify-content: flex-end; align-items: flex-start; pointer-events: none; }
+.rj-statusarea { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+.rj-statusrow { display: flex; gap: 8px; align-items: center; }
 .rj-status, .rj-logout { pointer-events: auto; font-size: 13px; padding: 6px 10px; border-radius: 8px; background: rgba(255,255,255,.8); color: #222; }
 .rj-logout { text-decoration: none; }
 .rj-logout.on { background: #2f6fae; color: #fff; }
 .rj-logout[hidden] { display: none; }
 .rj-right { display: flex; gap: 8px; align-items: center; }
-.rj-left { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
-.rj-gate { white-space: nowrap; }
 .rj-map { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(1100px, calc(100vw - 24px)); max-height: calc(100vh - 24px);
   box-sizing: border-box; display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: 10px; background: rgba(255,255,255,.97);
   color: #222; font-size: 13px; box-shadow: 0 2px 14px rgba(0,0,0,.25); pointer-events: auto; z-index: 9; }
@@ -47,7 +47,6 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #bfd6e8; }
 .rj-map-people i.ai { background: #6aa7d8; }
 .rj-map-me { position: absolute; color: #e0301e; font-size: 18px; line-height: 1; text-shadow: 0 0 3px #fff, 0 0 3px #fff; pointer-events: none; z-index: 3; }
 @media (max-width: 700px) { .rj-map-body { flex-direction: column; } .rj-map-list { width: auto; max-height: 30vh; } }
-.rj-fly { display: flex; gap: 4px; }
 .rj-settings { position: fixed; top: 52px; right: 12px; width: 300px; max-width: calc(100vw - 24px); max-height: calc(100vh - 220px); overflow-y: auto; box-sizing: border-box;
   display: flex; flex-direction: column; gap: 10px; padding: 10px 12px; border-radius: 10px; background: rgba(255,255,255,.96); color: #222; font-size: 13px;
   box-shadow: 0 2px 10px rgba(0,0,0,.15); pointer-events: auto; z-index: 7; }
@@ -65,12 +64,12 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #bfd6e8; }
 .rj-settings-links { display: flex; gap: 14px; padding-top: 6px; border-top: 1px solid #e3e5ea; flex: 1; }
 .rj-settings-links a { color: #2f6fae; text-decoration: none; }
 .rj-google { display: block; text-align: center; font-size: 16px; padding: 10px; border-radius: 8px; border: 1px solid #bbc; color: #222; text-decoration: none; background: #fff; }
-.rj-chat { position: absolute; left: 12px; bottom: 12px; width: min(440px, calc(100% - 24px)); display: flex; flex-direction: column; gap: 6px; }
-.rj-pov { position: absolute; right: 12px; bottom: 12px; display: flex; gap: 8px; pointer-events: none; }
+.rj-chat { position: absolute; left: 12px; top: 12px; width: min(440px, calc(100% - 420px)); display: flex; flex-direction: column; gap: 6px; }
+.rj-pov { position: absolute; inset: 0; pointer-events: none; }
 .rj-pov[hidden], .rj-pov-frame[hidden] { display: none; }
-.rj-pov-frame { position: relative; width: min(18vw, 300px); aspect-ratio: 16 / 9; box-sizing: border-box; border: 2px solid rgba(255,255,255,.9);
+.rj-pov-frame { position: absolute; bottom: 12px; right: 12px; width: min(18vw, 300px); aspect-ratio: 16 / 9; box-sizing: border-box; border: 2px solid rgba(255,255,255,.9);
   box-shadow: 0 2px 10px rgba(0,0,0,.35); pointer-events: auto; }
-.rj-pov-mine { cursor: grab; touch-action: none; }
+.rj-pov-mine { right: auto; left: 12px; width: min(36vw, 600px); cursor: grab; touch-action: none; }
 .rj-pov-mine:active { cursor: grabbing; }
 .rj-pov-name { position: absolute; left: 4px; bottom: 4px; padding: 1px 6px; border-radius: 6px; background: rgba(0,0,0,.55); color: #fff; font-size: 11px; pointer-events: none; }
 @media (max-width: 999px) { .rj-pov-mine { display: none; } }
