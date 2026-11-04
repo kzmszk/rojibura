@@ -67,7 +67,7 @@ export interface Torso {
 const TORSOS = new Set(["shibu"]);
 
 /** Models that bathe in another swimsuit than their sex's (Shibu in a bikini: the user chose it, issue 46). */
-const SUITS: Record<string, Suit> = { shibu: "bikini" };
+const SUITS: Record<string, Suit> = { shibu: "bikini", "shibu-wsu": "bikini" };
 
 /** The swimsuit a model wears: its own if it has one, else trunks for men, a one-piece for others. */
 export function suitFor(url: string, sex: string | undefined): Suit {
@@ -652,9 +652,16 @@ function outline(body: Body, kind: Suit): ((p: THREE.Vector3, bone: number) => n
 			if (out(bone)) return -1;
 			d.subVectors(p, centre);
 			const l = Math.abs(d.dot(left));
-			// the bottom: briefs cut low at the front and high at the sides
-			const cut = crotch + (high - crotch) * smooth(0.15 * legs, 1.9 * legs, l) ** 0.8;
-			const briefs = Math.min(hip + 0.035 * s - p.y, p.y - cut);
+			// the bottom: briefs cut low at the front and high at the sides, all of it raised (waist and legs)
+			// (the legs are raised in front; at the back the edge is a flat U under the cheeks, not a V running
+			// down between the thighs)
+			const back = 1 - smooth(-0.05 * s, 0.03 * s, d.dot(body.front));
+			const t = smooth(0.15 * legs, 1.9 * legs, l) ** 0.8;
+			const cutFront = crotch + RAISE * s + (high - crotch) * t;
+			const fold = hip - 0.06 * s;
+			const cutBack = fold + (high - fold) * smooth(0.3 * legs, 1.9 * legs, l) ** 1.6;
+			const cut = cutFront + (cutBack - cutFront) * back;
+			const briefs = Math.min(hip + (0.035 + RAISE) * s - p.y, p.y - cut);
 			// the top: the cups (only in front: none through the back), the band, the strings
 			const front = d.dot(body.front) > 0;
 			// (and a little piece joining them in the middle)
@@ -692,6 +699,48 @@ function outline(body: Body, kind: Suit): ((p: THREE.Vector3, bone: number) => n
 		return Math.max(body0, band);
 	};
 }
+
+/**
+ * Where the cheeks part at the back, the suit is made to run straight across instead of dipping into the cleft
+ * (its lifted vertices there cross and show a grey gap): the middle's vertices at the back move out to the
+ * plane of the cheeks' rearmost vertices on either side, facing straight back.
+ */
+function bridgeCleft(body: Body, pos: number[], nrm: number[]): void {
+	const { at, front, left, size: s } = body;
+	const ul = at.leftUpperLeg;
+	const ur = at.rightUpperLeg;
+	if (!ul || !ur) return;
+	const centre = ul.clone().add(ur).multiplyScalar(0.5);
+	const d = new THREE.Vector3();
+	const seen = (i: number) => {
+		d.fromArray(pos, i * 3).sub(centre);
+		return { l: Math.abs(d.dot(left)), f: d.dot(front), y: d.y };
+	};
+	// the cheeks' rearmost point, a little to either side of the middle
+	let rear = 0;
+	for (let i = 0; i < pos.length / 3; i++) {
+		const v = seen(i);
+		if (v.l > 0.045 * s && v.l < 0.09 * s && v.y < 0.02 * s && v.y > -0.09 * s) rear = Math.min(rear, v.f);
+	}
+	if (rear >= 0) return;
+	for (let i = 0; i < pos.length / 3; i++) {
+		const v = seen(i);
+		if (v.l >= 0.07 * s || v.f >= 0 || v.f <= rear || v.y > 0.02 * s || v.y < -0.12 * s) continue;
+		const k = (rear - v.f) * (1 - smooth(0.03 * s, 0.07 * s, v.l));
+		pos[i * 3] = (pos[i * 3] as number) + front.x * k;
+		pos[i * 3 + 1] = (pos[i * 3 + 1] as number) + front.y * k;
+		pos[i * 3 + 2] = (pos[i * 3 + 2] as number) + front.z * k;
+		// and it faces straight back, not into the cleft
+		const w = 1 - smooth(0.03 * s, 0.07 * s, v.l);
+		d.fromArray(nrm, i * 3)
+			.lerp(front.clone().negate(), w)
+			.normalize()
+			.toArray(nrm, i * 3);
+	}
+}
+
+/** How much higher a bikini's bottom sits than the plain low-rise cut (times the body's size). */
+const RAISE = 0.03;
 
 /** How far the swimsuit stands off the skin (times the body's size, metres). */
 const LIFT = 0.0035;
@@ -832,6 +881,7 @@ function suitOf(
 			if (tri.some((v) => v.f >= 0)) clip(tri);
 		}
 	}
+	bridgeCleft(body, pos, nrm);
 	const n = pos.length / 3;
 	if (n === 0) return null;
 	return {

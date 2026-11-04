@@ -211,6 +211,10 @@ export interface Preset {
 	id: string;
 	name: string;
 	assets: AvatarAssets;
+	/** Another outfit of a character (`base` is the character's first preset, which is not itself an outfit). */
+	base?: string;
+	/** What it is called among the character's outfits (settings: 服装). */
+	outfit?: string;
 }
 
 /** Preset avatars served as static assets (repo assets/ is Vite's publicDir). */
@@ -226,7 +230,20 @@ export const PRESETS: Record<string, Preset> = {
 	// 千駄ヶ谷 渋 (casual clothes), her older sister 篠 (Welcome School Uniform 2019), their cousin 桜田 史利矢
 	// (school uniform), and AvatarSample_C, who has no name of his own and is 神宮 礼 here
 	// (the onsen's changing rooms go by `sex`; the capsule has none and may use either)
-	shibu: { id: "shibu", name: "シブ", assets: { thumb: "", lod: "", vrm: "/avatars/shibu.vrm", sex: "f" } },
+	shibu: {
+		id: "shibu",
+		name: "シブ",
+		assets: { thumb: "", lod: "", vrm: "/avatars/shibu.vrm", sex: "f" },
+		outfit: "普段着",
+	},
+	// 千駄ヶ谷渋_WSU (Welcome School Uniform): her other outfit; the same face, a body like 篠's
+	"shibu-wsu": {
+		id: "shibu-wsu",
+		name: "シブ",
+		assets: { thumb: "", lod: "", vrm: "/avatars/shibu-wsu.vrm", sex: "f" },
+		base: "shibu",
+		outfit: "制服",
+	},
 	shino: { id: "shino", name: "シノ", assets: { thumb: "", lod: "", vrm: "/avatars/shino.vrm", sex: "f" } },
 	fumiriya: {
 		id: "fumiriya",
