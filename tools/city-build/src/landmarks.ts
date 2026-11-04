@@ -1,4 +1,4 @@
-import type { Landmark, LandmarksData, SpawnPoint } from "@rojibura/nav";
+import type { Landmark, LandmarksData, NavMesh, SpawnPoint } from "@rojibura/nav";
 import { type Glb, sceneNodes, transformPoint } from "./glb.ts";
 
 const round = (v: number) => Math.round(v * 1000) / 1000;
@@ -33,4 +33,23 @@ export function extractLandmarks(glb: Glb): LandmarksData {
 	if (!spawn) throw new Error("the glb has no SPAWN node");
 	landmarks.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 	return { landmarks, spawn };
+}
+
+export function assertReachable(mesh: NavMesh, city: LandmarksData): void {
+	const lost = city.landmarks.filter((l) => !mesh.findPath(city.spawn.pos, l.pos));
+	if (lost.length > 0)
+		throw new Error(
+			`landmarks not reachable from SPAWN: ${lost.map((l) => `${l.id} [${l.pos.join(", ")}]`).join("; ")}`,
+		);
+}
+
+export function formatLandmarks(city: LandmarksData): string {
+	return [
+		"{",
+		'\t"landmarks": [',
+		city.landmarks.map((l) => `\t\t${JSON.stringify(l)}`).join(",\n"),
+		"\t],",
+		`\t"spawn": ${JSON.stringify(city.spawn)}`,
+		"}\n",
+	].join("\n");
 }

@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { type LandmarksData, NavMesh } from "@rojibura/nav";
 import { bake, builtinNavs, EMPTY, type Published } from "./bake.ts";
 import type { TriangleSoup } from "./glb.ts";
+import { assertReachable, formatLandmarks } from "./landmarks.ts";
 import { buildNavMesh, defaultBuildOptions } from "./navmesh.ts";
 
 interface GridMeta {
@@ -133,11 +134,7 @@ async function main(args: string[]) {
 		heightAt: (x, z, top) => grid.heightNear(x, z) ?? top,
 	});
 	const mesh = NavMesh.fromJSON(navmesh);
-	const lost = city.landmarks.filter((l) => !mesh.findPath(city.spawn.pos, l.pos));
-	if (lost.length > 0)
-		throw new Error(
-			`landmarks not reachable from SPAWN: ${lost.map((l) => `${l.id} [${l.pos.join(", ")}]`).join("; ")}`,
-		);
+	assertReachable(mesh, city);
 	const navmeshJson = `${JSON.stringify(navmesh)}\n`;
 	writeFileSync(join(areaDir, "navmesh.base.json"), navmeshJson);
 	const buildsFile = join(areaDir, "builds.json");
@@ -149,17 +146,7 @@ async function main(args: string[]) {
 		join(areaDir, "navmesh.json"),
 		`${JSON.stringify(bake(navmesh, published, builtinNavs(modelsDir)))}\n`,
 	);
-	writeFileSync(
-		join(areaDir, "landmarks.json"),
-		[
-			"{",
-			'\t"landmarks": [',
-			city.landmarks.map((l) => `\t\t${JSON.stringify(l)}`).join(",\n"),
-			"\t],",
-			`\t"spawn": ${JSON.stringify(city.spawn)}`,
-			"}\n",
-		].join("\n"),
-	);
+	writeFileSync(join(areaDir, "landmarks.json"), formatLandmarks(city));
 	console.log(
 		`navmesh.base.json: ${navmesh.polygons.length} polygons (${rawPolygonCount} before dropping unreachable islands), ` +
 			`${navmesh.vertices.length / 3} vertices, ${(Buffer.byteLength(navmeshJson) / 1024).toFixed(1)} KB, ` +

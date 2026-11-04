@@ -9,7 +9,7 @@ import { dirname, join } from "node:path";
 import { type LandmarksData, NavMesh, type NavMeshData } from "@rojibura/nav";
 import { bake, builtinNavs, EMPTY, type Published } from "./bake.ts";
 import { collectTriangles, parseGlb } from "./glb.ts";
-import { extractLandmarks } from "./landmarks.ts";
+import { assertReachable, extractLandmarks, formatLandmarks } from "./landmarks.ts";
 import { buildNavMesh, defaultBuildOptions } from "./navmesh.ts";
 
 export interface CityBuild {
@@ -29,12 +29,7 @@ export async function buildCity(glbBytes: Uint8Array): Promise<CityBuild> {
 	});
 	// Every landmark must be reachable from the spawn point.
 	const mesh = NavMesh.fromJSON(navmesh);
-	const lost = landmarks.landmarks.filter((l) => !mesh.findPath(spawn.pos, l.pos));
-	if (lost.length > 0) {
-		throw new Error(
-			`landmarks not reachable from SPAWN: ${lost.map((l) => `${l.id} [${l.pos.join(", ")}]`).join("; ")}`,
-		);
-	}
+	assertReachable(mesh, landmarks);
 	return { navmesh, landmarks, rawPolygonCount };
 }
 
@@ -48,15 +43,7 @@ async function main(args: string[]) {
 	const { navmesh, landmarks, rawPolygonCount } = await buildCity(readFileSync(input));
 	mkdirSync(outDir, { recursive: true });
 	const navmeshJson = `${JSON.stringify(navmesh)}\n`;
-	// One landmark per line keeps the file readable and its diffs small.
-	const landmarksJson = [
-		"{",
-		'\t"landmarks": [',
-		landmarks.landmarks.map((l) => `\t\t${JSON.stringify(l)}`).join(",\n"),
-		"\t],",
-		`\t"spawn": ${JSON.stringify(landmarks.spawn)}`,
-		"}\n",
-	].join("\n");
+	const landmarksJson = formatLandmarks(landmarks);
 	writeFileSync(join(outDir, "navmesh.base.json"), navmeshJson);
 	writeFileSync(join(outDir, "landmarks.json"), landmarksJson);
 	// keep what was published: navmesh.json is the new base with the builds on it
