@@ -73,6 +73,7 @@ import { PORTAL_REACH, PortalsView } from "./portals.ts";
 import { CityScene } from "./scene.ts";
 import { SettingsPanel } from "./settings.ts";
 import { ShopsUi } from "./shops.ts";
+import { StatusHud } from "./status-hud.ts";
 import { STYLES } from "./styles.ts";
 import { UsagePanel } from "./usage-panel.ts";
 import { Zones } from "./zones.ts";
@@ -719,10 +720,15 @@ async function startCity(
 	flyBar.hidden = !area.fly;
 	const left = el("div", "rj-left");
 	// your wallet (docs/prd.md 3.8.6): shown once the host tells it
-	const purse = el("div", "rj-status rj-purse", "");
-	purse.hidden = true;
-	purse.title = "お店や宿で働くか、学校で勉強すると増える（1分で1銅貨）";
-	left.append(status, purse, gateButton, mapButton, flyBar);
+	// what you and your AI have now, always on screen (#53)
+	const statusHud = new StatusHud(
+		me.name,
+		(id) => items.heldBy(id),
+		() => hostNow(),
+		() => myId,
+		(id) => avatars.get(id)?.state.name,
+	);
+	left.append(status, statusHud.el, gateButton, mapButton, flyBar);
 	hud.append(left, right);
 	const chat = el("div", "rj-chat");
 	// what was said fades after a while; it all comes back while talking or pointing at it (docs/prd.md 3.4.12)
@@ -980,6 +986,7 @@ async function startCity(
 		dropButton.hidden = !held;
 		eatButton.hidden = !held?.goods?.food;
 		if (held?.goods) eatButton.title = `${held.goods.name}を食べる・飲む`;
+		statusHud.render();
 	};
 	showHeld();
 
@@ -1030,6 +1037,7 @@ async function startCity(
 					listTargets();
 					if (m.builds) builds.set(m.builds);
 					items.reset(m.items ?? []);
+					statusHud.only(new Set(m.avatars.map((a) => a.id)));
 					showHeld();
 					// back where we were after a dropped connection (docs/prd.md 3.3): the host kept everything
 					if (m.resumed) break;
@@ -1111,9 +1119,11 @@ async function startCity(
 					listTargets();
 					addLog("", `${m.avatar.name} が来ました`, "sys");
 					agentPanel.present(m.avatar.id);
+					statusHud.render();
 					break;
 				case "LEFT": {
 					agentPanel.gone(m.id);
+					statusHud.gone(m.id);
 					const v = avatars.get(m.id);
 					if (v) addLog("", `${v.state.name} が帰りました`, "sys");
 					v?.dispose();
@@ -1176,16 +1186,9 @@ async function startCity(
 					addLog(`${v?.state.name ?? "?"}${to ? ` → ${to}` : ""}`, m.text, m.id === myId ? "mine" : "");
 					break;
 				}
-				case "WALLET": {
-					purse.hidden = false;
-					purse.textContent = `👛 ${m.coins} 銅貨`;
-					if (m.change && m.change > 0) {
-						purse.classList.remove("earned");
-						void purse.offsetWidth;
-						purse.classList.add("earned");
-					}
+				case "WALLET":
+					statusHud.wallet(m.coins, (m.change ?? 0) > 0);
 					break;
-				}
 				case "JOBBED":
 					avatars.get(m.id)?.setJob(m.job);
 					if (m.id === myId)
@@ -1207,6 +1210,7 @@ async function startCity(
 					if (m.doing) v.state.doing = m.doing;
 					else delete v.state.doing;
 					v.setDoing(badgeOf(m.doing));
+					statusHud.doing(m.id, badgeOf(m.doing));
 					shownActs = "";
 					break;
 				}
@@ -1221,9 +1225,16 @@ async function startCity(
 					);
 					break;
 				}
-				case "LIFE":
-					agentPanel.life(m.id, lifeText(m.life, avatars.get(m.id)?.state.doing, m.coins));
+				case "LIFE": {
+					const doing = avatars.get(m.id)?.state.doing;
+					agentPanel.life(m.id, lifeText(m.life, doing, m.coins));
+					statusHud.ai(m.id, {
+						life: m.life,
+						...(m.coins !== undefined ? { coins: m.coins } : {}),
+						doing: badgeOf(doing),
+					});
 					break;
+				}
 				case "DIARY":
 					agentPanel.diary(m);
 					break;
