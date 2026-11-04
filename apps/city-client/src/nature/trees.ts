@@ -590,7 +590,7 @@ export class Trees {
 	private readonly impTpl = new Map<TreeTemplate, number>();
 	private impDirty = true;
 	private season: Season = "autumn";
-	private readonly frustum = new THREE.Frustum();
+	private readonly frustums: THREE.Frustum[] = [];
 	private readonly pv = new THREE.Matrix4();
 	private readonly sphere = new THREE.Sphere();
 	/** Per frame counts, for stats. */
@@ -812,12 +812,20 @@ export class Trees {
 		leaf.dispose();
 	}
 
-	update(dt: number, camera: THREE.Camera, now: number): void {
+	/**
+	 * Which trees to draw and how finely, once a frame for all views: seen by any of the cameras (`more`: views besides
+	 * the main one, docs/cinema.md 6), as finely as the nearest one wants.
+	 */
+	update(dt: number, camera: THREE.Camera, now: number, more: readonly THREE.Camera[] = []): void {
 		this.u.uTime.value = now;
 		void dt;
-		this.pv.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
-		this.frustum.setFromProjectionMatrix(this.pv);
-		const cp = camera.getWorldPosition(new THREE.Vector3());
+		const eyes = [camera, ...more].map((c, i) => {
+			this.pv.multiplyMatrices(c.projectionMatrix, c.matrixWorldInverse);
+			const frustum = this.frustums[i] ?? new THREE.Frustum();
+			this.frustums[i] = frustum;
+			frustum.setFromProjectionMatrix(this.pv);
+			return { at: c.getWorldPosition(new THREE.Vector3()), frustum };
+		});
 		for (const g of this.groups) g.n = g.nClose = 0;
 		// bare in winter, broadleaf trees draw their twig cards, also close by
 		const closeOk = this.closeLeaves && this.season !== "winter";
@@ -829,13 +837,16 @@ export class Trees {
 		const impC = this.imp.geometry.getAttribute("aCell") as THREE.InstancedBufferAttribute;
 		this.drawn.near = this.drawn.mid = this.drawn.imp = 0;
 		for (const p of this.placed) {
-			const dx = p.spec.x - cp.x;
-			const dz = p.spec.z - cp.z;
-			const dy = (p.cy - cp.y) * 0.5;
-			const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+			let d = Number.POSITIVE_INFINITY;
+			for (const { at } of eyes) {
+				const dx = p.spec.x - at.x;
+				const dz = p.spec.z - at.z;
+				const dy = (p.cy - at.y) * 0.5;
+				d = Math.min(d, Math.sqrt(dx * dx + dy * dy + dz * dz));
+			}
 			this.sphere.center.set(p.spec.x, p.cy, p.spec.z);
 			this.sphere.radius = p.rad;
-			if (!this.frustum.intersectsSphere(this.sphere) && d > SHADOW_KEEP) continue;
+			if (d > SHADOW_KEEP && !eyes.some((e) => e.frustum.intersectsSphere(this.sphere))) continue;
 			const lod = d < NEAR ? 0 : d < MID ? 1 : 2;
 			if (lod === 2) {
 				const g = this.byKey.get(`${p.si}/${p.variant}/0`);

@@ -120,6 +120,16 @@ const TALK_FACE_MS = 20_000;
 const MOOD_MS = 8_000;
 const TOWARD_OWNER = 0.35;
 
+/** An AI stops: it looks at its owner for this long (ms; docs/cinema.md 5). */
+const STOP_LOOK_MS = 2_500;
+/** What an AI looks at, looking elsewhere: this far off (m), this far from where it faces (radians), this high (m). */
+const SIGHT_NEAR = 3;
+const SIGHT_FAR = 60;
+const SIGHT_ANGLE = (60 * Math.PI) / 180;
+const SIGHT_UP = 1.5;
+/** Your AI this close is who the cinema view films with you (m). */
+const PARTNER_M = 12;
+
 /** A number in [0, 1) from a string (FNV-1a): the same on every screen. */
 function hash01(s: string): number {
 	let h = 0x811c9dc5;
@@ -127,23 +137,73 @@ function hash01(s: string): number {
 	return (h >>> 0) / 2 ** 32;
 }
 
+/** The way from one heading to another, the short way round (radians). */
+function turnBetween(from: number, to: number): number {
+	return Math.atan2(Math.sin(to - from), Math.cos(to - from));
+}
+
+/** A place worth a look: the area's landmarks. */
+type Sight = THREE.Vector3;
+
+/**
+ * What an AI looking elsewhere looks at, this stretch of time (docs/cinema.md 5): one of the places around it, ahead
+ * of it, chosen from its ID and the time and kept for the stretch. Null if there is nothing there.
+ */
+function sightOf(
+	ai: AvatarView,
+	slot: number,
+	sights: readonly Sight[],
+	picked: Map<AvatarId, SightPick>,
+): Sight | null {
+	const had = picked.get(ai.state.id);
+	if (had?.slot === slot) return had.at;
+	const p = ai.root.position;
+	const around = sights.filter((s) => {
+		const d = Math.hypot(s.x - p.x, s.z - p.z);
+		if (d < SIGHT_NEAR || d > SIGHT_FAR) return false;
+		return Math.abs(turnBetween(ai.heading, Math.atan2(s.x - p.x, s.z - p.z))) < SIGHT_ANGLE;
+	});
+	const at = around[Math.floor(hash01(`${ai.state.id}:${slot}:sight`) * around.length)] ?? null;
+	picked.set(ai.state.id, { slot, at });
+	return at;
+}
+
+interface SightPick {
+	slot: number;
+	at: Sight | null;
+}
+
 /**
  * An AI standing beside its owner, not talking (docs/prd.md 3.4.9): it faces the way they face, turned a little
- * to them; now and then it looks elsewhere for a while, or glances at them. From the time, so every screen
- * shows the same.
+ * to them; now and then it looks elsewhere for a while, at something if there is something to see, or glances at
+ * them. From the time, so every screen shows the same.
  */
-function besideMood(ai: AvatarView, owner: AvatarView, hostNow: number): { facing: number; glance: boolean } {
+function besideMood(
+	ai: AvatarView,
+	owner: AvatarView,
+	hostNow: number,
+	sights: readonly Sight[],
+	picked: Map<AvatarId, SightPick>,
+): { facing: number; glance: boolean; sight: Sight | null } {
 	const slot = Math.floor(hostNow / MOOD_MS);
 	const r = hash01(`${ai.state.id}:${slot}`);
 	const g = hash01(`${slot}:${ai.state.id}`);
 	const a = ai.root.position;
 	const o = owner.root.position;
 	const toward = Math.atan2(o.x - a.x, o.z - a.z);
-	const off = Math.atan2(Math.sin(toward - owner.heading), Math.cos(toward - owner.heading));
-	const look = r < 0.5 ? (r - 0.25) * 2.4 : 0;
+	const off = turnBetween(owner.heading, toward);
+	const elsewhere = r < 0.5;
+	const sight = elsewhere ? sightOf(ai, slot, sights, picked) : null;
+	const wander = (r - 0.25) * 2.4;
+	const look = !elsewhere
+		? 0
+		: sight
+			? Math.max(-0.6, Math.min(0.6, turnBetween(owner.heading, Math.atan2(sight.x - a.x, sight.z - a.z))))
+			: wander;
 	return {
 		facing: owner.heading + Math.max(-TOWARD_OWNER, Math.min(TOWARD_OWNER, off)) + look,
 		glance: g < 0.45 && hostNow % MOOD_MS < 2_500,
+		sight,
 	};
 }
 /** A line in the chat log stays this long, then shows only while talking or pointing at the log. */
@@ -405,7 +465,7 @@ async function startCity(
 		.then((r) =>
 			r.ok
 				? (r.json() as Promise<{
-						landmarks: { id: string; name: string; pos: Vec2; major?: boolean }[];
+						landmarks: { id: string; name: string; pos: Vec2; y?: number; major?: boolean }[];
 						spawn?: { pos: Vec2 };
 					}>)
 				: null,
@@ -468,6 +528,9 @@ async function startCity(
 	// what can be done where (docs/life.md 3): the area's activities, and its places
 	let activities: Activity[] = [];
 	const places = new Map<string, Vec2>();
+	/** What an AI may look at (docs/cinema.md 5), and what each is looking at this stretch of time. */
+	const sights: Sight[] = [];
+	const sightPicks = new Map<AvatarId, SightPick>();
 	const lifeFiles = Promise.all([
 		fetch(`${area.dir}/activities.json`)
 			.then((r) => (r.ok ? (r.json() as Promise<ActivitiesData>) : null))
@@ -475,7 +538,10 @@ async function startCity(
 		landmarksFile,
 	]).then(([a, l]) => {
 		activities = Array.isArray(a?.activities) ? a.activities : [];
-		for (const x of l?.landmarks ?? []) places.set(x.id, [x.pos[0], x.pos[1]]);
+		for (const x of l?.landmarks ?? []) {
+			places.set(x.id, [x.pos[0], x.pos[1]]);
+			sights.push(new THREE.Vector3(x.pos[0], (x.y ?? 0) + SIGHT_UP, x.pos[1]));
+		}
 		// the map's places: an area that marks no main places has every one as main
 		const marked = l?.landmarks.some((x) => x.major) ?? false;
 		cityMap.setPlaces([
@@ -545,9 +611,11 @@ async function startCity(
 		settings.hide();
 		open();
 	};
-	// where the camera looks from (docs/prd.md 3.4.8): chosen here, or V goes round the three
+	// where the camera looks from (docs/prd.md 3.4.8): chosen here, or V goes round them. The film and its frames
+	// are for a mouse and a large screen (docs/cinema.md 1)
+	const views = touchFirst() ? VIEWS.filter((v) => v !== "cinema") : VIEWS;
 	const viewSelect = el("select", "rj-select");
-	for (const v of VIEWS) {
+	for (const v of views) {
 		const o = el("option", "", VIEW_LABEL[v]);
 		o.value = v;
 		viewSelect.append(o);
@@ -956,7 +1024,7 @@ async function startCity(
 	void lifeFiles.then(() => {
 		for (const v of avatars.values()) v.setDoing(badgeOf(v.state.doing));
 	});
-	const view = new ViewController(scene);
+	const view = new ViewController(scene, { parent: root, walkable: (p) => nav.isWalkable(p) });
 	/** The view chosen outside, while indoors switched it to the eyes. */
 	let viewOutside: View | null = null;
 	const setView = (v: View) => {
@@ -969,14 +1037,14 @@ async function startCity(
 			// private mode: the view lasts as long as the page
 		}
 	};
-	const nextView = () => setView(VIEWS[(VIEWS.indexOf(view.view) + 1) % VIEWS.length] as View);
+	const nextView = () => setView(views[(views.indexOf(view.view) + 1) % views.length] as View);
 	let savedView: string | null = null;
 	try {
 		savedView = localStorage.getItem("rj.view");
 	} catch {
 		// private mode
 	}
-	setView(VIEWS.includes(savedView as View) ? (savedView as View) : "orbit");
+	setView(views.includes(savedView as View) ? (savedView as View) : "orbit");
 	const items = new ItemsView(scene, (id) => avatars.get(id)?.handPosition() ?? null);
 	scene.scene.add(items.group);
 	/** The throw and put-down buttons show while holding something. */
@@ -1275,6 +1343,7 @@ async function startCity(
 				throwHeld: () => throwHeld(),
 				area,
 				nature,
+				view,
 				mesh: () => mesh,
 				me: () => (myId ? avatars.get(myId) : undefined),
 				/** Stops following your avatar and looks at (x, z) from `dist` away. */
@@ -1312,7 +1381,7 @@ async function startCity(
 		const pressed = forward?.keys !== held;
 		if (!forward || pressed || view.dragging) {
 			const look = new THREE.Vector3();
-			scene.camera.getWorldDirection(look);
+			view.walkCamera.getWorldDirection(look);
 			look.y = 0;
 			forward = { keys: held, f: look.normalize() };
 		}
@@ -1347,7 +1416,8 @@ async function startCity(
 			? ({ kind: "vel", pos, dir, speed, at: conn.hostNow() } as const)
 			: ({ kind: "idle", pos, at: conn.hostNow() } as const);
 		mine.setMove(move);
-		conn.send({ t: "MOVE_VEL", pos, dir, speed, seq: ++seq });
+		// (stopped at the edge with a key still held, the host must hear a stop too, or it walks on through the wall)
+		conn.send({ t: "MOVE_VEL", pos, dir: moving ? dir : [0, 0], speed: moving ? speed : 0, seq: ++seq });
 		sentVel = moving ? { dir, speed, at: now } : null;
 	};
 	// arrow keys walk like WASD
@@ -2184,6 +2254,23 @@ async function startCity(
 	/** Avatars in their swimsuit now, and those whose swimsuit is ready (docs/prd.md 3.8.6). */
 	const bathers = new WeakSet<AvatarView>();
 	const readied = new WeakSet<AvatarView>();
+	/** A line between an AI and its owner a moment ago, or it is thinking. */
+	const talkingNow = (ai: AvatarView, now: number) =>
+		ai.state.status === "busy" || now - (talkAt.get(ai.state.id) ?? -TALK_FACE_MS) < TALK_FACE_MS;
+	let partnerId: AvatarId | null = null;
+	/** Whose eyes the cinema view shows (docs/cinema.md 1): the AI you talk to, or the one so far, or the first. */
+	const choosePartner = (mine: AvatarView): AvatarView | null => {
+		const ais = [...avatars.values()].filter(
+			(a) =>
+				a.state.kind === "ai" &&
+				a.state.ownerId === myId &&
+				a.root.position.distanceTo(mine.root.position) < PARTNER_M,
+		);
+		const partner =
+			ais.find((a) => a.state.id === talkTo) ?? ais.find((a) => a.state.id === partnerId) ?? ais[0] ?? null;
+		partnerId = partner?.state.id ?? null;
+		return partner;
+	};
 	const frame = (t: number) => {
 		const dt = Math.min(0.1, (t - last) / 1000);
 		last = t;
@@ -2193,10 +2280,13 @@ async function startCity(
 			// facing their way, glancing at them now and then (docs/prd.md 3.4.9)
 			const owner = v.state.kind === "ai" && v.state.ownerId ? avatars.get(v.state.ownerId) : undefined;
 			const near = owner && owner.root.position.distanceTo(v.root.position) < ATTEND_M;
-			const talking =
-				near && (v.state.status === "busy" || now - (talkAt.get(v.state.id) ?? -TALK_FACE_MS) < TALK_FACE_MS);
-			const mood = near && !talking ? besideMood(v, owner, now) : null;
-			v.attend(near && (talking || mood?.glance) ? owner.eyePosition() : null);
+			const talking = near && talkingNow(v, now);
+			const mood = near && !talking ? besideMood(v, owner, now, sights, sightPicks) : null;
+			// it has just stopped: it looks at them (docs/cinema.md 5)
+			const stopped = v.state.move.kind === "idle" && now - v.state.move.at < STOP_LOOK_MS;
+			v.attend(
+				near ? (talking || mood?.glance || stopped ? owner.eyePosition() : (mood?.sight ?? null)) : null,
+			);
 			v.standFacing(mood ? mood.facing : null);
 			v.update(now, dt, scene);
 			// at the onsen everyone has taken their clothes off and wears a swimsuit; the swimsuit is made
@@ -2238,7 +2328,6 @@ async function startCity(
 			const b = jobButtons[i] as HTMLButtonElement;
 			b.hidden = !!job || !mine || zones.at(poseAt(mine.state.move, now).pos, kind) === null;
 		}
-		nature?.update(dt, now);
 		if (keys.size > 0) steer(t);
 		followStep(t);
 		if (companion && withAi) stopStep();
@@ -2289,8 +2378,22 @@ async function startCity(
 			}
 		}
 		// (walking somewhere in legs counts as walking all the way, also where one leg ends and the next begins)
-		if (mine && followCamera) view.update(mine, poseAt(mine.state.move, now).moving || going !== null, dt);
-		else scene.controls.update();
+		if (mine && followCamera) {
+			const partner = view.view === "cinema" ? choosePartner(mine) : null;
+			view.update(
+				mine,
+				poseAt(mine.state.move, now).moving || going !== null,
+				dt,
+				{
+					partner,
+					talking: partner !== null && talkingNow(partner, now),
+					leading: !!following?.lead,
+				},
+				t,
+			);
+		} else scene.controls.update();
+		// (after the cameras: what is drawn of the trees goes by where they are now, also right after a cut)
+		nature?.update(dt, now);
 		scene.render();
 		requestAnimationFrame(frame);
 	};

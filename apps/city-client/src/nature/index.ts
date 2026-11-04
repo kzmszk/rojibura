@@ -103,8 +103,11 @@ export class Nature {
 		return this.season;
 	}
 
-	/** Wind sway, particles near the camera, levels of detail. `now` in milliseconds (the host clock is fine). */
-	update(dt: number, camera: THREE.Camera, now: number): void {
+	/**
+	 * Wind sway, particles near the camera, levels of detail. `now` in milliseconds (the host clock is fine). `more`:
+	 * cameras of views besides the main one, which must find their trees there too.
+	 */
+	update(dt: number, camera: THREE.Camera, now: number, more: readonly THREE.Camera[] = []): void {
 		// seconds, wrapped so shader time keeps its precision
 		const t = (now / 1000) % 3600;
 		this.findLights();
@@ -127,7 +130,7 @@ export class Nature {
 		this.wind.set(Math.cos(a) * g, 0, Math.sin(a) * g);
 		this.trees.u.uWindDir.value.set(Math.cos(a), 0, Math.sin(a));
 		this.trees.u.uWind.value = g;
-		this.trees.update(dt, camera, t);
+		this.trees.update(dt, camera, t, more);
 		this.cover.update(camera);
 		this.falling.update(dt, camera, t, this.wind);
 		this.snow.update(dt, t, this.wind, this.light);

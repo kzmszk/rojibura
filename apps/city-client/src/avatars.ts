@@ -334,6 +334,8 @@ export class AvatarView {
 	private turned = 0;
 	/** What the eyes look at (three-vrm's lookAt follows an object). */
 	private readonly gaze = new THREE.Object3D();
+	/** What it looks at now, if anything (this frame's, as far as the neck lets it). */
+	private sees: THREE.Vector3 | null = null;
 	/** A body script playing (docs/prd.md 3.4.11), the one it is for, and the rig that lays it on the bones. */
 	private script: BodyScript | null = null;
 	private partner: BodyParts | null = null;
@@ -349,6 +351,8 @@ export class AvatarView {
 	/** Seen from its own eyes (the first-person view): the head is not drawn, nor the name over it. */
 	private inside = false;
 	private firstPersonReady = false;
+	/** A model that is not a VRM, put on the layer others see it on (docs/cinema.md 4.3). */
+	private layeredModel: THREE.Object3D | null = null;
 	private bubbleUntil = 0;
 	/** Smoothed height so stairs do not jitter. */
 	private y = 0;
@@ -634,9 +638,10 @@ export class AvatarView {
 		this.headTurn += (turn - this.headTurn) * Math.min(1, dt * 4);
 		this.turned = Math.abs(this.headTurn) > 1e-3 ? this.headTurn : 0;
 		this.twist(1);
+		const focus = this.bodyLook ?? this.attention;
+		this.sees = focus && attends ? focus : null;
 		const lookAt = vrm.lookAt;
 		if (!lookAt) return;
-		const focus = this.bodyLook ?? this.attention;
 		if (focus && attends) {
 			this.gaze.position.copy(focus);
 			lookAt.target = this.gaze;
@@ -994,16 +999,42 @@ export class AvatarView {
 		this.inside = on;
 		this.tag.visible = !on;
 		if (this.vrm) {
-			if (on && !this.firstPersonReady) {
-				this.vrm.firstPerson?.setup();
-				this.firstPersonReady = true;
-				// (the first-person copies of the meshes are made dressed)
-				if (this.bathing) this.bath?.set(true);
-			}
+			if (on) this.readyInside();
 			this.model.visible = true;
 		} else {
 			this.model.visible = !on;
 		}
+	}
+
+	/**
+	 * Gets it ready for a camera at its own eyes that leaves out its head, with other cameras drawing it whole (the
+	 * cinema view, docs/cinema.md 4.3): the head goes on `layers.third`, the headless copies on `layers.first`
+	 * (three-vrm's own layers by default). three-vrm takes the layers only the first time. A model that is not a VRM
+	 * goes on `layers.third` altogether. Cheap to call again; the model may load later.
+	 */
+	readyInside(layers?: { first: number; third: number }): void {
+		if (this.vrm) {
+			if (this.firstPersonReady) return;
+			this.vrm.firstPerson?.setup(
+				layers ? { firstPersonOnlyLayer: layers.first, thirdPersonOnlyLayer: layers.third } : {},
+			);
+			this.firstPersonReady = true;
+			// (the first-person copies of the meshes are made dressed)
+			if (this.bathing) this.bath?.set(true);
+		} else if (layers && this.layeredModel !== this.model) {
+			this.layeredModel = this.model;
+			this.model.traverse((o) => {
+				o.layers.set(layers.third);
+			});
+		}
+	}
+
+	/** The way it looks now (world, a unit vector): to what it attends to, else where its head is turned, a little down. */
+	sightDirection(): THREE.Vector3 {
+		if (this.sees) return this.sees.clone().sub(this.eyePosition()).normalize();
+		const a = this.facing + this.headTurn;
+		const down = -0.12;
+		return new THREE.Vector3(Math.sin(a) * Math.cos(down), Math.sin(down), Math.cos(a) * Math.cos(down));
 	}
 
 	/** Where the eyes are (world), for the first-person view. */

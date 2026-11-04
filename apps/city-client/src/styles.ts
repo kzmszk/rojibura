@@ -66,6 +66,14 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #bfd6e8; }
 .rj-settings-links a { color: #2f6fae; text-decoration: none; }
 .rj-google { display: block; text-align: center; font-size: 16px; padding: 10px; border-radius: 8px; border: 1px solid #bbc; color: #222; text-decoration: none; background: #fff; }
 .rj-chat { position: absolute; left: 12px; bottom: 12px; width: min(440px, calc(100% - 24px)); display: flex; flex-direction: column; gap: 6px; }
+.rj-pov { position: absolute; right: 12px; bottom: 12px; display: flex; gap: 8px; pointer-events: none; }
+.rj-pov[hidden], .rj-pov-frame[hidden] { display: none; }
+.rj-pov-frame { position: relative; width: min(18vw, 300px); aspect-ratio: 16 / 9; box-sizing: border-box; border: 2px solid rgba(255,255,255,.9);
+  box-shadow: 0 2px 10px rgba(0,0,0,.35); pointer-events: auto; }
+.rj-pov-mine { cursor: grab; touch-action: none; }
+.rj-pov-mine:active { cursor: grabbing; }
+.rj-pov-name { position: absolute; left: 4px; bottom: 4px; padding: 1px 6px; border-radius: 6px; background: rgba(0,0,0,.55); color: #fff; font-size: 11px; pointer-events: none; }
+@media (max-width: 999px) { .rj-pov-mine { display: none; } }
 .rj-log { max-height: 30vh; overflow-y: auto; font-size: 13px; line-height: 1.5; padding: 6px 10px; border-radius: 8px; background: rgba(255,255,255,.75); }
 .rj-log:empty { display: none; }
 .rj-log:focus { outline: none; }

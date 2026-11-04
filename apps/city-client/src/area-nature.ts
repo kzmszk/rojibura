@@ -128,8 +128,12 @@ export class AreaNature {
 		this.scene.applySeason(this.nature.view());
 	}
 
+	/** After the cameras have moved for this frame: what is drawn depends on where they are now. */
 	update(dt: number, now: number): void {
-		this.nature.update(dt, this.scene.camera, now);
+		const more = this.scene.shownInsets();
+		this.scene.camera.updateMatrixWorld();
+		for (const c of more) c.updateMatrixWorld();
+		this.nature.update(dt, this.scene.camera, now, more);
 	}
 
 	/** The winter's glb files (the snow), loaded once, the first time it is winter. */

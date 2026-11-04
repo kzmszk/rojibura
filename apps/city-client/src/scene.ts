@@ -20,6 +20,15 @@ const RICH_HEMI = 0.35;
 const RICH_SUN = 1.3;
 /** The orbiting camera goes no lower than this above the ground under it. */
 const CAMERA_ABOVE_GROUND = 0.25;
+/** heightAt keeps what it found for squares this wide (m), this long (ms). */
+const HEIGHT_CELL = 0.1;
+const HEIGHT_KEEP_MS = 1500;
+
+/** A view drawn over the main one, in the rectangle of an element on the page (docs/cinema.md 1). */
+export interface Inset {
+	camera: THREE.PerspectiveCamera;
+	el: HTMLElement;
+}
 
 export class CityScene {
 	readonly renderer: THREE.WebGLRenderer;
@@ -48,6 +57,14 @@ export class CityScene {
 	/** The fuller look (AreaView.rich): tone mapping, the sky's light, ambient occlusion. */
 	rich: RichLook | null = null;
 	private sunOffset = SUN_OFFSET;
+	/** Views drawn over the main one. */
+	insets: Inset[] = [];
+	/** How far the camera may be from your avatar here (AreaView.camera), or null. */
+	reach: number | null = null;
+	private readonly line = new THREE.Raycaster();
+	/** Heights found under a spot (heightAt), by square and where the ray started from, and when they were cleared. */
+	private readonly heights = new Map<string, number | null>();
+	private heightsAt = 0;
 
 	constructor(root: HTMLElement) {
 		this.root = root;
@@ -126,7 +143,10 @@ export class CityScene {
 		if (view.shadow) this.setShadow(view.shadow);
 		// an invisible light is left out, and with it the shadow pass
 		if (view.sun === false) this.sun.visible = false;
-		if (view.camera) this.controls.maxDistance = view.camera;
+		if (view.camera) {
+			this.controls.maxDistance = view.camera;
+			this.reach = view.camera;
+		}
 		if (this.rich) this.skyFrom(new THREE.Color(view.sky ?? "#c4d9ea"), this.sun.color, this.sun.intensity);
 	}
 
@@ -291,23 +311,53 @@ export class CityScene {
 	/** Things people can walk on that were built (decks, bridges) count as ground too. */
 	addGround(o: THREE.Object3D): void {
 		if (!this.ground.includes(o)) this.ground.push(o);
+		this.heights.clear();
 	}
 
 	removeGround(o: THREE.Object3D): void {
 		this.ground = this.ground.filter((g) => g !== o);
+		this.heights.clear();
 	}
 
 	/**
 	 * Height of the walkable surface under (x, z), or null. Looked for from a little above the walkable area's
 	 * height there; off it, from a little above `near` (where one was a moment ago: on a mountain, high above a
 	 * fixed height), else from 30 m.
+	 *
+	 * A ray goes through the whole city (some milliseconds), and nearly every frame asks about the same few spots
+	 * (everyone standing, the camera's foot), so the answer is kept for the square of HEIGHT_CELL metres round the
+	 * point, asked at its middle, for HEIGHT_KEEP_MS (builds may be moved or hidden meanwhile).
 	 */
 	heightAt(x: number, z: number, near?: number): number | null {
+		const now = performance.now();
+		if (now - this.heightsAt > HEIGHT_KEEP_MS) {
+			this.heights.clear();
+			this.heightsAt = now;
+		}
+		const ix = Math.round(x / HEIGHT_CELL);
+		const iz = Math.round(z / HEIGHT_CELL);
 		const hint = this.heightHint?.(x, z) ?? near ?? null;
-		this.down.set(new THREE.Vector3(x, hint === null ? 30 : hint + 2, z), new THREE.Vector3(0, -1, 0));
+		const key = `${ix}/${iz}/${hint === null ? "-" : Math.round(hint * 2)}`;
+		const had = this.heights.get(key);
+		if (had !== undefined) return had;
+		this.down.set(
+			new THREE.Vector3(ix * HEIGHT_CELL, hint === null ? 30 : hint + 2, iz * HEIGHT_CELL),
+			new THREE.Vector3(0, -1, 0),
+		);
 		// colliders of built models are hidden but still in the scene
 		const hit = this.down.intersectObjects(this.ground, true).find((h) => h.object.visible);
-		return hit ? hit.point.y : null;
+		const y = hit ? hit.point.y : null;
+		this.heights.set(key, y);
+		return y;
+	}
+
+	/** Nothing of the city between two points (walls, roofs; not treetops or water). A ray through it all: not every frame. */
+	clearBetween(from: THREE.Vector3, to: THREE.Vector3): boolean {
+		const way = to.clone().sub(from);
+		const far = way.length();
+		this.line.set(from, way.normalize());
+		this.line.far = far;
+		return !this.line.intersectObjects(this.ground, true).some((h) => h.object.visible);
 	}
 
 	/** Ground point under the pointer, or null. Objects in `also` (builds) stop the ray too. */
@@ -353,11 +403,51 @@ export class CityScene {
 		this.water?.position.set(t.x, this.water.position.y, t.z);
 	}
 
+	/** The cameras of the views on screen: the main one, then those of the insets shown. */
+	shownInsets(): THREE.PerspectiveCamera[] {
+		return this.insets.filter((i) => i.el.offsetWidth > 0).map((i) => i.camera);
+	}
+
 	render(): void {
 		this.track();
+		const shadows = this.renderer.shadowMap;
+		shadows.autoUpdate = true;
 		if (this.rich) this.rich.render();
 		else this.renderer.render(this.scene, this.camera);
+		// (the shadow map is the one the main view just made)
+		shadows.autoUpdate = false;
+		this.drawInsets();
+		shadows.autoUpdate = true;
 		this.labels.render(this.scene, this.camera);
+	}
+
+	/**
+	 * Each inset straight onto the page over the main view, in its element's rectangle: no ambient occlusion. Tone
+	 * mapping happens in the materials there, with the main view's exposure.
+	 */
+	private drawInsets(): void {
+		if (this.insets.length === 0) return;
+		const r = this.renderer;
+		const page = r.domElement.getBoundingClientRect();
+		r.setScissorTest(true);
+		for (const { camera, el } of this.insets) {
+			const box = el.getBoundingClientRect();
+			if (box.width === 0 || box.height === 0) continue;
+			const aspect = box.width / box.height;
+			if (Math.abs(camera.aspect - aspect) > 1e-3) {
+				camera.aspect = aspect;
+				camera.updateProjectionMatrix();
+			}
+			// GL's y goes up from the bottom
+			const x = box.left - page.left;
+			const y = page.bottom - box.bottom;
+			r.setViewport(x, y, box.width, box.height);
+			r.setScissor(x, y, box.width, box.height);
+			r.render(this.scene, camera);
+		}
+		r.setScissorTest(false);
+		r.setViewport(0, 0, page.width, page.height);
+		r.setScissor(0, 0, page.width, page.height);
 	}
 
 	private resize(): void {
