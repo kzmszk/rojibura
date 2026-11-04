@@ -154,11 +154,13 @@ export class AgentPanel {
 		this.look.title = "見た目（登録したあとは変えられません）";
 		void fetch("/api/presets")
 			.then((r) =>
-				r.ok ? (r.json() as Promise<{ id: string; name: string; assets: { vrm: string } }[]>) : [],
+				r.ok
+					? (r.json() as Promise<{ id: string; name: string; outfit?: string; assets: { vrm: string } }[]>)
+					: [],
 			)
 			.then((presets) => {
 				for (const p of presets) {
-					const o = el("option", "", p.name);
+					const o = el("option", "", p.outfit ? `${p.name}（${p.outfit}）` : p.name);
 					o.value = p.id;
 					this.look.append(o);
 				}

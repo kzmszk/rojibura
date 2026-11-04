@@ -31,7 +31,7 @@ import {
 } from "./moves.ts";
 import { retarget } from "./retarget.ts";
 import type { CityScene } from "./scene.ts";
-import { Bath, rigifyBones, type Suit, suitFor, type Torso, torsoUrl } from "./swimsuit.ts";
+import { Bath, bathBodyUrl, rigifyBones, type Suit, suitFor } from "./swimsuit.ts";
 
 /** The city's motions on one skeleton, and how fast walk and run cover the ground at normal speed. */
 interface Motions {
@@ -160,8 +160,6 @@ interface VrmFile {
 	textures: Map<number, Promise<unknown>>;
 	/** The motions on this file's bones, made from the first VRM parsed (at rest). */
 	moves: Motions | null;
-	/** The trunk made for its bath from another body (swimsuit.ts), if it has one. */
-	torso: Torso | null;
 }
 
 /**
@@ -171,24 +169,21 @@ interface VrmFile {
 class VrmCache {
 	private readonly files = new Map<string, Promise<VrmFile | null>>();
 
-	async get(url: string): Promise<{ vrm: VRM; moves: Motions; torso: Torso | null } | null> {
+	/** Downloads a file (once), without parsing it: for what an avatar will need soon. */
+	warm(url: string): Promise<VrmFile | null> {
 		let p = this.files.get(url);
 		if (!p) {
-			const extra = torsoUrl(url);
-			const torso = extra
-				? fetch(extra)
-						.then((r) => (r.ok ? (r.json() as Promise<Torso>) : null))
-						.catch(() => null)
-				: Promise.resolve(null);
-			p = Promise.all([
-				fetch(url).then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(`${r.status}`)))),
-				torso,
-			])
-				.then(([data, t]) => ({ data, textures: new Map(), moves: null, torso: t }))
+			p = fetch(url)
+				.then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(`${r.status}`))))
+				.then((data) => ({ data, textures: new Map(), moves: null }))
 				.catch(() => null);
 			this.files.set(url, p);
 		}
-		const file = await p;
+		return p;
+	}
+
+	async get(url: string): Promise<{ vrm: VRM; moves: Motions } | null> {
+		const file = await this.warm(url);
 		if (!file) return null;
 		const loader = new GLTFLoader();
 		loader.register((parser) => new VRMLoaderPlugin(parser));
@@ -209,7 +204,7 @@ class VrmCache {
 			}
 			file.moves = motionsFor(bones);
 		}
-		return { vrm, moves: file.moves, torso: file.torso };
+		return { vrm, moves: file.moves };
 	}
 }
 
@@ -306,10 +301,8 @@ export class AvatarView {
 	private actions: Record<string, THREE.AnimationAction> = {};
 	/** The legs' length to the reference rig's (VRMs; 1 for others). */
 	private legs = 1;
-	/** The trunk made for its bath from another body, if the model has one (swimsuit.ts). */
-	private torso: Torso | null = null;
 	/** How it bathes, if not as its model and sex say (dev pages comparing looks). */
-	private bathStyle: { suit?: Suit; torso?: boolean } = {};
+	private bathStyle: { suit?: Suit } = {};
 	private pace: Motions["pace"] = {};
 	private current = "";
 	/** A gesture playing once, until this host time. */
@@ -369,7 +362,10 @@ export class AvatarView {
 	/** In the bath: clothes off and a swimsuit on (made the first time). */
 	private bathing = false;
 	private bath: Bath | null = null;
-	private readonly modelUrl: string;
+	/** The model drawn now: its own, or in the bath the one of the same character who bathes in its place. */
+	private modelUrl: string;
+	/** Its own model. */
+	private readonly homeUrl: string;
 
 	constructor(state: AvatarState, isMe: boolean) {
 		this.state = state;
@@ -397,6 +393,7 @@ export class AvatarView {
 
 		const url = state.assets.lod || state.assets.vrm;
 		this.modelUrl = url;
+		this.homeUrl = url;
 		this.ready = url
 			? /\.vrm$/i.test(new URL(url, location.href).pathname)
 				? this.loadVrm(url)
@@ -407,9 +404,9 @@ export class AvatarView {
 	private async loadVrm(url: string): Promise<void> {
 		const loaded = await vrms.get(url);
 		if (!loaded) return;
-		const { vrm, moves, torso } = loaded;
-		this.torso = torso;
-		if (this.disposed) {
+		const { vrm, moves } = loaded;
+		// gone, or another model wanted since (bathing came and went while this loaded)
+		if (this.disposed || url !== this.modelUrl) {
 			disposeVrm(vrm);
 			return;
 		}
@@ -422,9 +419,11 @@ export class AvatarView {
 		relaxFingers(vrm);
 		this.measure(vrm);
 		this.root.remove(this.model);
+		if (this.vrm) disposeVrm(this.vrm);
 		this.model = vrm.scene;
 		this.root.add(vrm.scene);
 		this.vrm = vrm;
+		this.bath = null;
 		this.turned = 0;
 		// only your own avatar, and only once seen from inside: the first-person layers hide a head from the
 		// eyes view, which on anyone else would leave them faceless
@@ -959,6 +958,7 @@ export class AvatarView {
 	 */
 	setBathing(on: boolean): void {
 		this.bathing = on;
+		if (this.vrm && this.swapBody(on)) return;
 		if (on && !this.bath) this.bath = this.bathFor();
 		this.bath?.set(on);
 	}
@@ -968,8 +968,27 @@ export class AvatarView {
 	 * e.g. when the avatar comes near the bath, or in idle time. Does nothing until the model has loaded.
 	 */
 	prepareBath(): void {
+		const body = bathBodyUrl(this.homeUrl);
+		if (body) {
+			// the swimsuit is made on the other model, once it is drawn: for now only its file
+			void vrms.warm(body);
+			return;
+		}
 		if (!this.bath) this.bath = this.bathFor();
 		this.bath?.prepare();
+	}
+
+	/**
+	 * A model whose skin was deleted under its clothes bathes as the same character's other model, whose skin is
+	 * whole (swimsuit.ts, bathBodyUrl): it is drawn in its place for as long as it bathes. Returns whether it is
+	 * being changed (the model in place stays, swimsuit and all, until the other has loaded).
+	 */
+	private swapBody(on: boolean): boolean {
+		const want = (on ? bathBodyUrl(this.homeUrl) : null) ?? this.homeUrl;
+		if (want === this.modelUrl) return false;
+		this.modelUrl = want;
+		void this.loadVrm(want);
+		return true;
 	}
 
 	/** The bath for the model drawn (null until it has loaded). */
@@ -981,7 +1000,6 @@ export class AvatarView {
 				const node = vrm.humanoid.getRawBoneNode(name as VRMHumanBoneName);
 				if (node) bones[name] = node;
 			}
-			const torso = this.bathStyle.torso === false ? null : this.torso;
 			return new Bath({
 				root: vrm.scene,
 				bones,
@@ -989,7 +1007,6 @@ export class AvatarView {
 				materials: vrm.materials,
 				vroid: true,
 				suit: this.suit,
-				...(torso ? { torso } : {}),
 			});
 		}
 		if (!this.mixer) return null;
@@ -1005,7 +1022,7 @@ export class AvatarView {
 	/**
 	 * Bathes another way than its model and sex say (before it first bathes): a dev page comparing looks.
 	 */
-	setBathStyle(style: { suit?: Suit; torso?: boolean }): void {
+	setBathStyle(style: { suit?: Suit }): void {
 		this.bathStyle = style;
 	}
 
