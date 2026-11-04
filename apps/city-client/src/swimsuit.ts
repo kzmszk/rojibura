@@ -48,37 +48,31 @@ export interface BathModel {
 	vroid: boolean;
 	/** Which swimsuit: a woman's one-piece or bikini, or a man's trunks. */
 	suit: Suit;
-	/** The trunk made for it from another body, where VRoid deleted its skin (tools donor-body.ts). */
-	torso?: Torso;
 }
 
 export type Suit = "one-piece" | "bikini" | "trunks";
 
-/**
- * A trunk for a model whose skin VRoid deleted under its clothes, made from another VRoid model's whole body
- * moved onto its skeleton (tools/city-build/src/donor-body.ts): bind-space positions and triangles.
- */
-export interface Torso {
-	pos: number[];
-	index: number[];
-}
-
-/** Models that have such a trunk (assets/avatars/<name>.torso.json). */
-const TORSOS = new Set(["shibu"]);
-
 /** Models that bathe in another swimsuit than their sex's (Shibu in a bikini: the user chose it, issue 46). */
 const SUITS: Record<string, Suit> = { shibu: "bikini", "shibu-wsu": "bikini" };
+
+/**
+ * Models whose skin VRoid deleted under their clothes (a trunk with no breasts or waist to put a swimsuit on),
+ * and the model of the same character, with her skin whole, who bathes in their place (Shibu in her casual
+ * clothes goes into the bath as Shibu in her school uniform's body: clothes off, so it shows only in the body).
+ */
+const BATH_BODIES: Record<string, string> = { shibu: "shibu-wsu" };
+
+/** The model to draw in the bath in place of this one, or null if it bathes as it is. */
+export function bathBodyUrl(url: string): string | null {
+	const name = url.slice(url.lastIndexOf("/") + 1).replace(/\.vrm$/, "");
+	const other = BATH_BODIES[name];
+	return other ? `${url.slice(0, url.lastIndexOf("/") + 1)}${other}.vrm` : null;
+}
 
 /** The swimsuit a model wears: its own if it has one, else trunks for men, a one-piece for others. */
 export function suitFor(url: string, sex: string | undefined): Suit {
 	const name = url.slice(url.lastIndexOf("/") + 1).replace(/\.(vrm|glb)$/, "");
 	return SUITS[name] ?? (sex === "m" ? "trunks" : "one-piece");
-}
-
-/** Where a model's trunk from another body is, or null if it has none. */
-export function torsoUrl(url: string): string | null {
-	const name = url.slice(url.lastIndexOf("/") + 1).replace(/\.vrm$/, "");
-	return TORSOS.has(name) ? url.replace(/\.vrm$/, ".torso.json") : null;
 }
 
 /** Bone names of a glTF avatar rigged like Blender's Rigify (Saki), by humanoid name. */
@@ -242,11 +236,11 @@ export class Bath {
 			if (body === undefined) body = measureBody(parts, this.model.bones);
 			return body;
 		};
-		const key = `${this.model.key} ${this.model.suit}${this.model.torso ? " torso" : ""}`;
+		const key = `${this.model.key} ${this.model.suit}`;
 		let plan = plans.get(key);
 		if (plan === undefined) {
 			const b = measured();
-			plan = b ? planFor(b, parts, this.model.suit, this.model.torso ?? null) : null;
+			plan = b ? planFor(b, parts, this.model.suit) : null;
 			plans.set(key, plan);
 		}
 		if (!plan) return;
@@ -394,32 +388,24 @@ function geometryOf(d: MeshData): THREE.BufferGeometry {
 
 // ---- the plan: new skin and the swimsuit, at rest ----
 
-function planFor(body: Body, parts: Part[], kind: Suit, torso: Torso | null): Plan | null {
+function planFor(body: Body, parts: Part[], kind: Suit): Plan | null {
 	const inside = outline(body, kind);
 	if (!inside) return null;
-	const fill = parts.some((p) => p.kind === "cloth") ? skinFill(body, kind !== "trunks", torso) : null;
+	const fill = parts.some((p) => p.kind === "cloth") ? skinFill(body, kind !== "trunks") : null;
 	const main = mainOf(parts.filter((p) => p.kind === "skin").map((p) => p.mesh));
 	const suit = suitOf(body, main, fill, inside);
 	return suit ? { suit, fill, inside, fillUV: false } : null;
 }
 
 /**
- * Skin made again where VRoid deleted it under clothes, or null if nothing is missing: the model's trunk made
- * from another body where it has one (its breasts, collarbones and waist as a body has them), and a smooth body
- * modelled from its bones and skin (bath-body.ts) for whatever is still missing (the upper arms).
+ * Skin made again where VRoid deleted it under clothes, or null if nothing is missing: a smooth body modelled
+ * from its bones and skin (bath-body.ts) for whatever is missing (the shoulders, the upper arms).
  */
-function skinFill(body: Body, bust: boolean, torso: Torso | null): MeshData | null {
+function skinFill(body: Body, bust: boolean): MeshData | null {
 	const s = body.size;
 	const parts: Bare[] = [];
-	let covered = body.skinTris;
-	if (torso) {
-		const part = bareOf(surfaceFrom(torso), new TriangleGrid(covered, 0.03 * s), s);
-		if (part) {
-			parts.push(part);
-			covered = withTriangles(covered, part);
-		}
-	}
-	const shape = bodyShape(body, bust && !torso);
+	const covered = body.skinTris;
+	const shape = bodyShape(body, bust);
 	if (shape) {
 		// only where clothes were: the skin elsewhere is whole
 		const box = new THREE.Box3();
@@ -465,16 +451,6 @@ interface Bare {
 	pos: number[];
 	nrm: number[];
 	index: number[];
-}
-
-/** `tris` (9 floats each) and the piece's triangles too. */
-function withTriangles(tris: Float32Array, part: Bare): Float32Array {
-	const out = new Float32Array(tris.length + part.index.length * 3);
-	out.set(tris);
-	part.index.forEach((v, k) => {
-		for (let d = 0; d < 3; d++) out[tris.length + k * 3 + d] = part.pos[v * 3 + d] as number;
-	});
-	return out;
 }
 
 /**
@@ -542,30 +518,6 @@ function bareOf(
 		}
 		return remap[v] as number;
 	});
-	return { pos, nrm, index };
-}
-
-/** A trunk from another body as a surface, with its normals (area-weighted, from its triangles). */
-function surfaceFrom(torso: Torso): { pos: Float32Array; nrm: Float32Array; index: Uint32Array } {
-	const pos = new Float32Array(torso.pos);
-	const index = new Uint32Array(torso.index);
-	const nrm = new Float32Array(pos.length);
-	const a = new THREE.Vector3();
-	const b = new THREE.Vector3();
-	const c = new THREE.Vector3();
-	for (let t = 0; t + 2 < index.length; t += 3) {
-		const [i, j, k] = [index[t], index[t + 1], index[t + 2]] as [number, number, number];
-		a.fromArray(pos, i * 3);
-		b.fromArray(pos, j * 3).sub(a);
-		c.fromArray(pos, k * 3).sub(a);
-		b.cross(c);
-		for (const v of [i, j, k])
-			for (let d = 0; d < 3; d++) nrm[v * 3 + d] = (nrm[v * 3 + d] as number) + b.getComponent(d);
-	}
-	for (let v = 0; v < pos.length / 3; v++)
-		a.fromArray(nrm, v * 3)
-			.normalize()
-			.toArray(nrm, v * 3);
 	return { pos, nrm, index };
 }
 
