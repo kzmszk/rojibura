@@ -99,8 +99,18 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #bfd6e8; }
 .rj-acts button.on { background: #c4781e; color: #fff; }
 .rj-travel { position: absolute; left: 50%; bottom: 96px; transform: translateX(-50%); font-size: 16px; padding: 10px 18px;
   border-radius: 12px; border: 0; background: #1f7fbf; color: #fff; box-shadow: 0 2px 8px rgba(0,0,0,.3); cursor: pointer; }
-.rj-purse { pointer-events: auto; }
-.rj-purse.earned { animation: rj-earned 0.9s ease-out; }
+.rj-life-hud { pointer-events: auto; display: flex; flex-direction: column; gap: 3px; font-size: 12px; max-width: min(340px, calc(100vw - 32px)); }
+.rj-life-hud.earned { animation: rj-earned 0.9s ease-out; }
+.rj-life-row { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; }
+.rj-life-row + .rj-life-row .rj-life-name { margin-top: 2px; }
+.rj-life-name { font-weight: 600; }
+.rj-life-duties { color: #555; }
+.rj-meter { display: inline-flex; align-items: center; gap: 4px; }
+.rj-meter-label { color: #555; }
+.rj-meter-bar { display: inline-block; width: 42px; height: 6px; border-radius: 3px; background: rgba(0,0,0,.12); overflow: hidden; }
+.rj-meter-fill { display: block; height: 100%; background: #3a9a5b; }
+.rj-meter-fill.low { background: #d0573a; }
+.rj-meter-value { min-width: 2ch; text-align: right; font-variant-numeric: tabular-nums; }
 @keyframes rj-earned { 0% { background: rgba(255, 214, 92, .95); transform: scale(1.08); } 100% { background: rgba(255,255,255,.8); transform: scale(1); } }
 .rj-shop-panel { position: absolute; left: 50%; bottom: 148px; transform: translateX(-50%); width: min(300px, calc(100% - 32px));
   display: flex; flex-direction: column; gap: 4px; padding: 10px; border-radius: 12px; background: rgba(255,252,244,.96);
