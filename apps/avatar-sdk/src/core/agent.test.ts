@@ -553,6 +553,85 @@ describe("living by what it needs (docs/life.md 5.3)", () => {
 		}
 	});
 
+	test("walking with its owner on a day to exercise, it asks them along and exercises there", async () => {
+		// city 09:00
+		const nine = Date.UTC(2026, 10, 2, 11) + realMs(180);
+		vi.useFakeTimers({ now: nine });
+		try {
+			const sent: ClientToHost[] = [];
+			const agent = new Agent({
+				persona: { name: "ミナ", personality: "" },
+				llm: { name: "fake", complete: async () => null },
+				memory: memory(),
+				nav: { findPath: (a, b) => [a, b] },
+				landmarks: [{ id: "lawn", name: "原っぱ", pos: [20, 0] }],
+				activities: [
+					{
+						id: "lawn_exercise",
+						kind: "exercise",
+						name: "原っぱで体操",
+						place: "lawn",
+						minutes: 60,
+						hours: "06-21",
+						effects: { energy: -10, fitness: 5 },
+						emoji: "🤸",
+					},
+				],
+				logger: { info: () => {}, warn: () => {} },
+				send: (m) => sent.push(m),
+				wanderMs: [1000, 1000],
+				random: () => 0,
+			});
+			const blank = { thumb: "", lod: "", vrm: "" };
+			const life = newLife(nine);
+			agent.handle({
+				t: "WELCOME",
+				you: "a_mina",
+				serverTime: nine,
+				budget: 0,
+				avatars: [
+					{
+						id: "a_mina",
+						kind: "ai",
+						name: "ミナ",
+						status: "active",
+						assets: blank,
+						move: { kind: "idle", pos: [0, 0], at: 0 },
+					},
+					{
+						id: "h_k",
+						kind: "human",
+						name: "Kazu",
+						status: "active",
+						assets: blank,
+						move: { kind: "idle", pos: [2, 0], at: 0 },
+					},
+				],
+				// its second day, not yet exercised, fed
+				life: { ...life, days: 2, energy: 80, duties: { ...life.duties, meals: 1 } },
+			});
+			agent.handle({ t: "COMPANY", owner: "h_k", on: true });
+			await vi.advanceTimersByTimeAsync(3100);
+			expect(sent.filter((m) => m.t === "LEAD")).toEqual([
+				{ t: "LEAD", to: [20, 0], place: "原っぱ", text: "体を動かしたいな。原っぱで体操をしに行かない？" },
+			]);
+			expect(sent.some((m) => m.t === "ACT")).toBe(false);
+			// they come: there, it starts, and asks them to wait for it
+			agent.handle({ t: "LEAD_ANSWERED", by: "h_k", accept: true, place: "原っぱ", at: Date.now() + 5000 });
+			agent.handle({ t: "MOVED", id: "a_mina", move: { kind: "idle", pos: [19, 0], at: Date.now() } });
+			await vi.advanceTimersByTimeAsync(26_000);
+			expect(sent).toContainEqual({ t: "ACT", activity: "lawn_exercise" });
+			expect(sent).toContainEqual({
+				t: "SAY",
+				text: "原っぱで体操をするね。終わるまで、ここで待っててね。",
+				to: "h_k",
+			});
+			agent.stop();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	test("hungry, it buys a meal and eats it; then it works until the day's work is done", async () => {
 		// city 09:00
 		const nine = Date.UTC(2026, 10, 2, 11) + realMs(180);

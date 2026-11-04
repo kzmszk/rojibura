@@ -13,6 +13,7 @@ import {
 	poseAt,
 	type Seat,
 	type Status,
+	type Vec2,
 } from "@rojibura/protocol";
 import * as THREE from "three";
 import { GLTFLoader, type GLTFParser } from "three/examples/jsm/loaders/GLTFLoader.js";
@@ -67,6 +68,20 @@ const FIDGETS: [MoveName, number][] = [
 	["stretch", 0.5],
 ];
 const FIDGET_NAMES = new Set<string>(FIDGETS.map(([name]) => name));
+/**
+ * Exercising (an activity of that kind, docs/life.md 6): tumbling about, one after another, in place of the
+ * fidgets, and how often each comes up.
+ */
+const TUMBLES: [MoveName, number][] = [
+	["roll", 3],
+	["backroll", 3],
+	["backflip", 2],
+	["handstand", 2],
+];
+/** Rolls take it this far (m) from where it is before the next one must bring it back. */
+const DRIFT_MAX = 0.3;
+/** What is left over (a roll is not quite as long as the one back) goes back this fast, m/s. */
+const DRIFT_BACK = 0.25;
 /** Motions that come with a smile. */
 const SMILING = new Set<string>(["tilt", "wave", "jump", "handshake", "hug"]);
 const FADE = 0.3;
@@ -269,6 +284,15 @@ export class AvatarView {
 	private talkUntil = 0;
 	/** The next fidget while standing about (host time; 0 until the first update). */
 	private nextFidget = 0;
+	/** Doing exercise: it tumbles about instead of fidgeting. */
+	private exercising = false;
+	/**
+	 * Where its tumbles have taken it from where it is (x, z), shown here only: the host knows nothing of it, so
+	 * what it is doing goes on; the next roll brings it back.
+	 */
+	private drift: Vec2 = [0, 0];
+	/** A roll of its own while exercising: from `drift` by `by` (x, z), from `at` until `until` (host times). */
+	private tumbling: { from: Vec2; by: Vec2; at: number; until: number } | null = null;
 	/** A smile (the "relaxed" expression): how much now, how much wanted until when, and the next one. */
 	private smile = 0;
 	private smileWant = 0;
@@ -652,6 +676,10 @@ export class AvatarView {
 	 */
 	private fidget(hostNow: number, busy: boolean): void {
 		if (this.nextFidget === 0) this.nextFidget = hostNow + 2000 + Math.random() * 6000;
+		if (this.exercising) {
+			if (!busy && hostNow >= this.nextFidget) this.tumble(hostNow);
+			return;
+		}
 		const fidgeting = this.gesture !== null && FIDGET_NAMES.has(this.gesture.name);
 		if (busy) {
 			if (!fidgeting) this.nextFidget = Math.max(this.nextFidget, hostNow + 3000 + Math.random() * 5000);
@@ -669,11 +697,68 @@ export class AvatarView {
 		this.nextFidget = hostNow + (this.durationOf(pick ?? "") ?? 0) * 1000 + 3000 + Math.random() * 8000;
 	}
 
+	/**
+	 * Exercising: a roll, a back roll, a backflip or a handstand, one after another. A roll goes the way it
+	 * faces (a back roll and a backflip backwards); once one has taken it away, the next one brings it back.
+	 */
+	private tumble(hostNow: number): void {
+		const heading: Vec2 = [Math.sin(this.facing), Math.cos(this.facing)];
+		const ahead = this.drift[0] * heading[0] + this.drift[1] * heading[1];
+		const far = Math.hypot(this.drift[0], this.drift[1]) > DRIFT_MAX;
+		const can = TUMBLES.filter(([t]) => {
+			if (!this.actions[t]) return false;
+			const travel = TRAVEL.get(t) ?? 0;
+			// away from where it is: only back towards it
+			return !far || (travel !== 0 && Math.sign(travel) === -Math.sign(ahead));
+		});
+		let r = Math.random() * can.reduce((sum, [, w]) => sum + w, 0);
+		const pick = can.find(([, w]) => {
+			r -= w;
+			return r < 0;
+		})?.[0];
+		if (!pick || !this.perform(pick, hostNow)) {
+			this.nextFidget = hostNow + 2000;
+			return;
+		}
+		const travel = TRAVEL.get(pick);
+		const until = this.gesture?.until ?? hostNow;
+		if (travel)
+			this.tumbling = {
+				from: [this.drift[0], this.drift[1]],
+				by: [heading[0] * travel, heading[1] * travel],
+				at: hostNow,
+				until,
+			};
+		this.nextFidget = until + 600 + Math.random() * 1600;
+	}
+
+	/** Where its tumbles have taken it now (see `drift`): along a roll as it goes, otherwise slowly back. */
+	private drifted(hostNow: number, dt: number): Vec2 {
+		const t = this.tumbling;
+		if (t && hostNow < t.until) {
+			const k = Math.max(0, (hostNow - t.at) / Math.max(1, t.until - t.at));
+			this.drift = [t.from[0] + t.by[0] * k, t.from[1] + t.by[1] * k];
+			return this.drift;
+		}
+		if (t) {
+			this.drift = [t.from[0] + t.by[0], t.from[1] + t.by[1]];
+			this.tumbling = null;
+		}
+		const d = Math.hypot(this.drift[0], this.drift[1]);
+		// (not while it is about to roll back anyway)
+		if (d > 0 && (!this.exercising || d <= DRIFT_MAX)) {
+			const k = Math.max(0, d - DRIFT_BACK * dt) / d;
+			this.drift = [this.drift[0] * k, this.drift[1] * k];
+		}
+		return this.drift;
+	}
+
 	/** What they are doing, as an emoji after the name (docs/life.md 8), with its name on hover. */
 	private badge: { emoji: string; name: string } | null = null;
 
-	setDoing(badge: { emoji: string; name: string } | null): void {
+	setDoing(badge: { emoji: string; name: string; exercise?: boolean } | null): void {
 		this.badge = badge;
+		this.exercising = badge?.exercise === true;
 		this.updateLabel();
 	}
 
@@ -701,21 +786,28 @@ export class AvatarView {
 	update(hostNow: number, dt: number, scene: Pick<CityScene, "heightAt">): void {
 		const move = this.state.move;
 		const pose = poseAt(move, hostNow);
+		// tumbling about while exercising, a little off where it is (only while it stands there)
+		if (pose.moving) {
+			this.tumbling = null;
+			this.drift = [0, 0];
+		}
+		const drift = pose.moving ? this.drift : this.drifted(hostNow, dt);
+		const at: Vec2 = [pose.pos[0] + drift[0], pose.pos[1] + drift[1]];
 		const fly = this.state.fly;
 		if (fly !== undefined) {
 			// afloat (docs/prd.md 3.4.13): at its height, but never under the ground; bobbing a little
-			const under = scene.heightAt(pose.pos[0], pose.pos[1]);
+			const under = scene.heightAt(at[0], at[1]);
 			const want = Math.max(fly, (under ?? -Infinity) + 0.3) + Math.sin(hostNow / 700) * 0.08;
 			this.y += (want - this.y) * Math.min(1, dt * 5);
 		} else {
-			const ground = scene.heightAt(pose.pos[0], pose.pos[1], this.y);
+			const ground = scene.heightAt(at[0], at[1], this.y);
 			if (ground !== null && this.landing) {
 				this.y += (ground - this.y) * Math.min(1, dt * 3);
 				if (Math.abs(ground - this.y) < 0.05) this.landing = false;
 			} else if (ground !== null)
 				this.y = Math.abs(ground - this.y) > 2 ? ground : this.y + (ground - this.y) * Math.min(1, dt * 12);
 		}
-		this.root.position.set(pose.pos[0], this.y, pose.pos[1]);
+		this.root.position.set(at[0], this.y, at[1]);
 		// on a seat: it goes from where it stood onto the seat as it sits down, the buttocks on the seat's top
 		const seat =
 			move.kind === "idle" && move.posture === "sit" && move.seat !== undefined
