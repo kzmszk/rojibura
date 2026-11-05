@@ -2,6 +2,9 @@ import { claimed, type ModelNav, occupied, overlaps, type PlacedModel } from "@r
 import { dist, facing, type Vec2 } from "@rojibura/protocol";
 import type { BuildWorld, Walkable, World } from "./room-core.ts";
 
+type PlacementWorld = Pick<World, "walk" | "spawn" | "landmarks">;
+type PlacementBuildWorld = Pick<BuildWorld, "groundHeight" | "walkWith">;
+
 type Person = { name: string; pos: Vec2 };
 type Anchor = { point: Vec2; exact: boolean; face?: Vec2 };
 
@@ -29,8 +32,8 @@ export function findBuildPlacement({
 	scale: number;
 	rotation: number | undefined;
 	existing: PlacedModel[];
-	world: World;
-	buildWorld: BuildWorld;
+	world: PlacementWorld;
+	buildWorld: PlacementBuildWorld;
 	people: Person[];
 }): { kind: "placed"; placed: PlacedModel; walk: Walkable } | { kind: "rejected"; error: string } {
 	let firstError: string | null = null;
@@ -69,7 +72,7 @@ function* spotsAround(center: Vec2, nav: ModelNav, scale: number): Generator<Vec
 function placementError(
 	p: PlacedModel,
 	existing: PlacedModel[],
-	world: World,
+	world: PlacementWorld,
 	people: Person[],
 ): string | null {
 	const city = world.walk;
@@ -90,7 +93,7 @@ function placementError(
 }
 
 /** With `walk`, everyone can still get to the spawn point, and from there to every landmark. */
-function reachError(walk: Walkable, world: World, people: Person[]): string | null {
+function reachError(walk: Walkable, world: PlacementWorld, people: Person[]): string | null {
 	const find = walk.findPath?.bind(walk);
 	if (!find) return null;
 	const spawn = walk.closestPoint(world.spawn);
