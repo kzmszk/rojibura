@@ -200,6 +200,96 @@ describe("Resident", () => {
 		expect(s.sent).toContainEqual({ t: "BUY", shop: "bakery", goods: "anpan" });
 	});
 
+	test("invitation answers schedule only a matching acceptance and consume the pending action", async () => {
+		vi.useFakeTimers();
+		try {
+			vi.setSystemTime(1_000_000);
+			for (const answer of ["accept", "reject", "mismatch", "stop"] as const) {
+				const s = setup([{ calls: [["buy", { shop: "bakery", goods: "bread" }]] }], {
+					town: {
+						shops: [
+							{
+								id: "bakery",
+								name: "パン屋",
+								currency: "銅貨",
+								counter: [10, 0],
+								goods: [{ id: "bread", name: "パン", price: 1, color: "#ffffff", food: true }],
+							},
+						],
+					},
+				});
+				current = s.resident;
+				s.resident.handle({ t: "COMPANY", owner: "h_saki", on: true });
+				await s.resident.turnNow();
+				s.resident.handle({ t: "MOVED", id: "a_haru", move: { kind: "idle", pos: [10, 0], at: 0 } });
+				const at = Date.now() + 2000;
+				s.resident.handle({
+					t: "LEAD_ANSWERED",
+					by: "h_saki",
+					place: answer === "mismatch" ? "別の場所" : "パン屋",
+					accept: answer !== "reject",
+					at,
+				});
+				if (answer === "reject" || answer === "mismatch")
+					s.resident.handle({ t: "LEAD_ANSWERED", by: "h_saki", place: "パン屋", accept: true, at });
+				if (answer === "stop") s.resident.stop();
+				await vi.advanceTimersByTimeAsync(2999);
+				expect(s.sent.filter((m) => m.t === "BUY")).toEqual([]);
+				await vi.advanceTimersByTimeAsync(1);
+				expect(s.sent.filter((m) => m.t === "BUY")).toEqual(
+					answer === "accept" ? [{ t: "BUY", shop: "bakery", goods: "bread" }] : [],
+				);
+				s.resident.stop();
+			}
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	test("a later walk invitation replaces a shop invitation and shares its cooldown", async () => {
+		vi.useFakeTimers();
+		try {
+			vi.setSystemTime(1_000_000);
+			const s = setup(
+				[
+					{
+						calls: [
+							["buy", { shop: "bakery", goods: "bread" }],
+							["walk_to", { target: "cafe" }],
+						],
+					},
+					{ calls: [["walk_to", { target: "cafe" }]] },
+				],
+				{
+					town: {
+						shops: [
+							{
+								id: "bakery",
+								name: "パン屋",
+								currency: "銅貨",
+								counter: [10, 0],
+								goods: [{ id: "bread", name: "パン", price: 1, color: "#ffffff", food: true }],
+							},
+						],
+					},
+				},
+			);
+			current = s.resident;
+			s.resident.handle({ t: "COMPANY", owner: "h_saki", on: true });
+			await s.resident.turnNow();
+			expect(s.results[1]).toContain("さっきサキを誘ったばかり");
+			await vi.advanceTimersByTimeAsync(180_000);
+			await s.resident.turnNow();
+			s.resident.handle({ t: "MOVED", id: "a_haru", move: { kind: "idle", pos: [10, 0], at: 0 } });
+			s.resident.handle({ t: "LEAD_ANSWERED", by: "h_saki", place: "パン屋", accept: true });
+			await vi.advanceTimersByTimeAsync(1000);
+			expect(s.sent.filter((m) => m.t === "LEAD")).toHaveLength(2);
+			expect(s.sent.filter((m) => m.t === "BUY")).toEqual([]);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	test("answers the one who spoke, in their conversation, and is busy meanwhile", async () => {
 		const s = setup([{ calls: [["say", { text: "こんばんは。", to: "h_saki" }]] }]);
 		current = s.resident;

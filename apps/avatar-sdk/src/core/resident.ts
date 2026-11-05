@@ -44,6 +44,7 @@ import {
 import { bodyGuide, type Mirror, type Move, type MoveBook, movesLine } from "./body.ts";
 import { BodyTools } from "./body-tools.ts";
 import { type Conversation, Conversations, type Pending } from "./conversations.ts";
+import { Invitation } from "./invitation.ts";
 import {
 	dayOf,
 	diaryMessages,
@@ -137,8 +138,6 @@ const REST_CHECK_MS = 10 * 60_000;
 const SELF = "self";
 /** Notes on a person shown when they start talking. */
 const NOTES_SHOWN = 5;
-/** Walking with its owner: ask them along somewhere at most this often (docs/prd.md 3.4.10). */
-const LEAD_AGAIN_MS = 3 * 60_000;
 /** What it is told of its diary when it starts (characters): the long-term memory and the latest days. */
 const WAKE_DIARY = 900;
 /** A day read back with read_day, at most (characters, its end). */
@@ -171,10 +170,7 @@ export class Resident {
 	private recent: { to: string; text: string }[] = [];
 	/** Where the resident has been staying and since when, so it knows when it has been idle for long. */
 	private place = { name: "", since: 0 };
-	/** When it last asked its owner along somewhere (Date.now; docs/prd.md 3.4.10). */
-	private leadAskedAt = 0;
-	/** Walking with its owner: what it does once it has taken them where it asked them along to (`place` as asked), until answered. */
-	private leadThen: { place: string; arrived: () => void } | null = null;
+	private invitation = new Invitation();
 	/** The city day (block) it last looked back on (reflect), or was asked to. */
 	private reflectedBlock: number | null = null;
 	/** Asked to look back on a day: that day's diary goes with the next turn. */
@@ -370,10 +366,7 @@ export class Resident {
 			case "LEAD_ANSWERED": {
 				const owner = this.nameOf(msg.by);
 				const place = clean(msg.place, 24);
-				// it asked them along to a shop or a place to exercise: there, it does what it went for
-				const then = this.leadThen?.place === msg.place ? this.leadThen.arrived : null;
-				this.leadThen = null;
-				if (then && msg.accept) setTimeout(then, Math.max(0, (msg.at ?? 0) - this.world.hostNow()) + 1000);
+				this.invitation.answer(msg.place, msg.accept, msg.at ?? 0, this.world.hostNow());
 				this.push(
 					msg.accept
 						? `${owner}が「ついていく」と答えた。${owner}を連れて${place}へ歩いている。`
@@ -811,11 +804,9 @@ export class Resident {
 		const name = clean(goods.name, 24);
 		if (dist(here, shop.counter) < LEAD_MIN_DISTANCE)
 			return `${shopName}はすぐそこ。${owner}がカウンターのそばまで行ったら買える。`;
-		if (Date.now() - this.leadAskedAt < LEAD_AGAIN_MS)
-			return `さっき${owner}を誘ったばかり。しばらく${owner}のそばにいる。`;
-		this.leadAskedAt = Date.now();
+		if (!this.invitation.canInvite()) return `さっき${owner}を誘ったばかり。しばらく${owner}のそばにいる。`;
 		const place = [...shopName].slice(0, LEAD_PLACE_MAX).join("");
-		this.leadThen = { place, arrived: () => this.buyThere(shop.id, goods.id) };
+		this.invitation.offer(place, () => this.buyThere(shop.id, goods.id));
 		const text = [...`${name}を買いに、${shopName}に寄ってもいい？`].slice(0, LEAD_TEXT_MAX).join("");
 		this.o.send({ t: "LEAD", to: shop.counter, place, text });
 		this.o.logger.info(`asking ${owner} along to ${place} for ${goods.name}`);
@@ -982,12 +973,10 @@ export class Resident {
 		if (company) {
 			const owner = this.nameOf(company);
 			if (!landmark) return `いまは${owner}のそばを歩いている。ほかの人のところへは行けない。`;
-			if (Date.now() - this.leadAskedAt < LEAD_AGAIN_MS)
-				return `さっき${owner}を誘ったばかり。しばらく${owner}のそばにいる。`;
+			if (!this.invitation.canInvite()) return `さっき${owner}を誘ったばかり。しばらく${owner}のそばにいる。`;
 			if (dist(here, landmark.pos) < LEAD_MIN_DISTANCE) return `${clean(landmark.name, 24)}はすぐそこ。`;
-			this.leadAskedAt = Date.now();
-			this.leadThen = null;
 			const place = [...clean(landmark.name, 24)].slice(0, LEAD_PLACE_MAX).join("");
+			this.invitation.offer(place);
 			this.o.send({ t: "LEAD", to: landmark.pos, place });
 			this.o.logger.info(`asking ${owner} along to ${place}`);
 			return `${owner}に、${place}へいっしょに行くか聞いた。返事を待つ。`;
@@ -1163,11 +1152,9 @@ export class Resident {
 		const name = clean(a.name, 24);
 		if (dist(here, place.pos) < LEAD_MIN_DISTANCE)
 			return `${placeName}はすぐそこ。${owner}がもう少し近くまで行ったら始められる。`;
-		if (Date.now() - this.leadAskedAt < LEAD_AGAIN_MS)
-			return `さっき${owner}を誘ったばかり。しばらく${owner}のそばにいる。`;
-		this.leadAskedAt = Date.now();
+		if (!this.invitation.canInvite()) return `さっき${owner}を誘ったばかり。しばらく${owner}のそばにいる。`;
 		const where = [...placeName].slice(0, LEAD_PLACE_MAX).join("");
-		this.leadThen = { place: where, arrived: () => this.doThere(a.id) };
+		this.invitation.offer(where, () => this.doThere(a.id));
 		const text = [...`${name}をしに行かない？`].slice(0, LEAD_TEXT_MAX).join("");
 		this.o.send({ t: "LEAD", to: place.pos, place: where, text });
 		this.o.logger.info(`asking ${owner} along to ${where} for ${a.name}`);
