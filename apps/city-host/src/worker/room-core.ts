@@ -25,6 +25,7 @@ import {
 import { RoomConversations } from "./room-conversations.ts";
 import { RoomInteractions } from "./room-interactions.ts";
 import { RoomLife } from "./room-life.ts";
+import { RoomMovement } from "./room-movement.ts";
 import { type Bucket, takeToken, within } from "./room-rate.ts";
 import { RoomSpace, remainingPath } from "./room-space.ts";
 import type {
@@ -111,6 +112,7 @@ export class RoomCore<C> {
 	private readonly space: RoomSpace;
 	private readonly interactions: RoomInteractions<C>;
 	private readonly life: RoomLife<C>;
+	private readonly movement: RoomMovement<C>;
 
 	constructor(
 		transport: Transport<C>,
@@ -139,6 +141,7 @@ export class RoomCore<C> {
 			persist: (c, member) =>
 				this.participantFor(c)?.connection.kind !== "away" && transport.persist(c, member),
 		};
+		this.movement = new RoomMovement(this.transport, (m, msg, except) => this.broadcastAbout(m, msg, except));
 		this.conversations = new RoomConversations({
 			rules: options.rules ?? PRODUCTION_RULES,
 			stats: this.stats,
@@ -166,6 +169,7 @@ export class RoomCore<C> {
 		});
 		this.life = new RoomLife(world, this.transport, transport, options, {
 			space: this.space,
+			movement: this.movement,
 			clock,
 			newId,
 			memberValues: () => this.memberValues(),
@@ -179,6 +183,7 @@ export class RoomCore<C> {
 			notice: (conn, kind, message) => this.notice(conn, kind, message),
 		});
 		this.interactions = new RoomInteractions(world, this.transport, this.space, this.life, {
+			movement: this.movement,
 			clock,
 			memberById: (id) => this.memberById(id),
 			memberValues: () => this.memberValues(),
@@ -709,9 +714,12 @@ export class RoomCore<C> {
 			return;
 		}
 		this.life.stopDoing(conn, m, now);
-		m.move = { kind: "path", path, speed: this.life.speedFor(m, msg.speed, now), at: now };
-		this.transport.persist(conn, m);
-		this.broadcastAbout(m, { t: "MOVED", id: m.id, move: m.move });
+		this.movement.commit(conn, m, {
+			kind: "path",
+			path,
+			speed: this.life.speedFor(m, msg.speed, now),
+			at: now,
+		});
 	}
 
 	private moveVel(conn: C, m: Member, msg: Extract<ClientToHost, { t: "MOVE_VEL" }>, now: number): void {
@@ -729,7 +737,9 @@ export class RoomCore<C> {
 		const still = msg.dir[0] === 0 && msg.dir[1] === 0;
 		if (msg.speed > 0 && !still) this.life.stopDoing(conn, m, now);
 		// speed 0 with a direction: standing, turned that way (docs/prd.md 3.4.11)
-		m.move =
+		this.movement.commit(
+			conn,
+			m,
 			msg.speed === 0 && !still
 				? { kind: "idle", pos: msg.pos, at: now, face: msg.dir }
 				: msg.speed === 0 || still
@@ -740,9 +750,8 @@ export class RoomCore<C> {
 							dir: msg.dir,
 							speed: this.life.speedFor(m, msg.speed, now),
 							at: now,
-						};
-		this.transport.persist(conn, m);
-		this.broadcastAbout(m, { t: "MOVED", id: m.id, move: m.move });
+						},
+		);
 	}
 
 	/**
@@ -766,8 +775,9 @@ export class RoomCore<C> {
 			// a posture ends: one floats up standing
 			const here = this.positionOf(m, now);
 			if (m.move.kind === "idle" && m.move.posture) {
-				m.move = { kind: "idle", pos: here, at: now };
-				this.broadcastAbout(m, { t: "MOVED", id: m.id, move: m.move });
+				this.movement.liftPosture(conn, m, { kind: "idle", pos: here, at: now });
+				this.broadcastAbout(m, { t: "FLEW", id: m.id, alt });
+				return null;
 			}
 		}
 		this.transport.persist(conn, m);
@@ -778,9 +788,7 @@ export class RoomCore<C> {
 	/** Stands `m` still on the walkable ground nearest `p` (where one lands, or warps to). */
 	private land(conn: C, m: Member, p: Vec2, now: number): void {
 		const at = this.space.landingPoint(m, p);
-		m.move = { kind: "idle", pos: at, at: now };
-		this.transport.persist(conn, m);
-		this.broadcastAbout(m, { t: "MOVED", id: m.id, move: m.move });
+		this.movement.commit(conn, m, { kind: "idle", pos: at, at: now });
 	}
 
 	/** Humans: at one of the area's landmarks or portals at once, on the ground (docs/prd.md 3.4.14). */
@@ -802,10 +810,7 @@ export class RoomCore<C> {
 
 	private reject(conn: C, m: Member, here: Vec2, now: number): void {
 		this.stats.rejectedMoves++;
-		m.move = { kind: "idle", pos: here, at: now };
-		this.transport.persist(conn, m);
-		this.transport.send(conn, { t: "CORRECT", move: m.move });
-		this.broadcastAbout(m, { t: "MOVED", id: m.id, move: m.move }, conn);
+		this.movement.correct(conn, m, { kind: "idle", pos: here, at: now });
 	}
 
 	private violation(conn: C, v: Volatile, now: number): void {
@@ -845,9 +850,7 @@ export class RoomCore<C> {
 			if (m.move.kind !== "path") continue;
 			const rest = remainingPath(m.move, now);
 			if (rest.length < 2 || this.space.terrain.validatePath(rest)) continue;
-			m.move = { kind: "idle", pos: this.positionOf(m, now), at: now };
-			this.transport.persist(conn, m);
-			this.broadcastAbout(m, { t: "MOVED", id: m.id, move: m.move });
+			this.movement.commit(conn, m, { kind: "idle", pos: this.positionOf(m, now), at: now });
 		}
 	}
 
