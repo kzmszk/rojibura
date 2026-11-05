@@ -31,13 +31,17 @@ function setup(
 	saved?: (items: Item[]) => void,
 	wallets?: WalletStore,
 	persisted?: (conn: Conn) => void,
+	sent?: (conn: Conn, message: HostToClient) => void,
 ) {
 	let now = 1_000_000;
 	let n = 0;
 	const clock = { now: () => now, advance: (ms: number) => (now += ms) };
 	const room = new RoomCore<Conn>(
 		{
-			send: (c, m) => c.inbox.push(m),
+			send: (c, m) => {
+				c.inbox.push(m);
+				sent?.(c, m);
+			},
 			close: (c, code) => {
 				c.closed = code;
 			},
@@ -106,6 +110,26 @@ describe("membership", () => {
 		expect(ctx.room.join(conn("5"), ai("p2", "other", { trust: "provisional" }))).toBe(false);
 	});
 
+	test("a resumed member moves to the end of the welcome roster", () => {
+		const a = conn("a");
+		ctx.room.join(a, human("alice"));
+		ctx.room.join(conn("b"), human("bob"));
+		ctx.room.dropped(a);
+		const back = conn("back");
+		ctx.room.join(back, human("alice"));
+		const welcome = back.inbox[0];
+		expect(welcome?.t === "WELCOME" && welcome.avatars.map((x) => x.id)).toEqual(["h_bob", "h_alice"]);
+	});
+
+	test("away members still occupy admission slots", () => {
+		const first = conn("first");
+		ctx.room.join(first, ai("one", "owner", { trust: "provisional" }));
+		ctx.room.dropped(first);
+		const second = conn("second");
+		expect(ctx.room.join(second, ai("two", "owner", { trust: "provisional" }))).toBe(false);
+		expect(second.closed).toBe(4001);
+	});
+
 	test("a second connection with the same ID replaces the first", () => {
 		const first = conn("first");
 		const second = conn("second");
@@ -116,6 +140,21 @@ describe("membership", () => {
 		expect(ctx.room.has("h_alice")).toBe(true);
 		ctx.room.leave(second);
 		expect(ctx.room.has("h_alice")).toBe(false);
+	});
+
+	test("an old restored connection cannot remove its replacement", () => {
+		const old = conn("old");
+		const replacement = conn("replacement");
+		ctx.room.join(old, human("alice"));
+		const saved = structuredClone(ctx.room.members.get(old));
+		if (!saved) throw new Error("not joined");
+		const woke = setup().room;
+		woke.restore(old, saved);
+		woke.restore(replacement, saved);
+		woke.leave(old);
+		expect(woke.has("h_alice")).toBe(true);
+		woke.leave(replacement);
+		expect(woke.has("h_alice")).toBe(false);
 	});
 
 	test("someone whose socket closed while the room slept leaves when it wakes, unless they came back in", () => {
@@ -425,6 +464,24 @@ describe("a dropped connection", () => {
 		expect(back.inbox[0]).toMatchObject({ t: "WELCOME", resumed: true });
 		ctx.room.expireAway();
 		expect(ctx.room.has("h_alice")).toBe(true);
+	});
+
+	test("simultaneous expirations leave in drop order", () => {
+		const observer = conn("observer");
+		const a = conn("a");
+		const b = conn("b");
+		ctx.room.join(observer, human("observer"));
+		ctx.room.join(a, human("a"));
+		ctx.room.join(b, human("b"));
+		observer.inbox.length = 0;
+		ctx.room.dropped(b);
+		ctx.room.dropped(a);
+		ctx.clock.advance(AWAY_GRACE_MS);
+		ctx.room.expireAway();
+		expect(observer.inbox.filter((message) => message.t === "LEFT")).toEqual([
+			{ t: "LEFT", id: "h_b", reason: "timeout" },
+			{ t: "LEFT", id: "h_a", reason: "timeout" },
+		]);
 	});
 
 	test("not back in time, it leaves then; until then it waits, heartbeat or not", () => {
@@ -982,6 +1039,40 @@ describe("wallets, work and study", () => {
 		ctx.room.loadItems(undefined);
 	});
 	const wallet = (c: Conn) => c.inbox.filter((m) => m.t === "WALLET").at(-1);
+
+	test("expiry pays and persists before announcing departure, only once", () => {
+		const events: string[] = [];
+		ctx = setup(
+			{ jobZones },
+			undefined,
+			{ add: (id, delta) => events.push(`wallet:${id}:${delta}`) },
+			(c) => events.push(`persist:${c.name}`),
+			(c, m) => events.push(`send:${c.name}:${m.t}`),
+		);
+		const a = conn("a");
+		const b = conn("b");
+		place(a, human("alice", { coins: 100 }), [11, 11]);
+		place(b, human("bob"), [-10, -10]);
+		ctx.room.handle(a, { t: "JOB", kind: "work" });
+		ctx.room.dropped(a);
+		ctx.clock.advance(60_000);
+		events.length = 0;
+		ctx.room.expireAway();
+		ctx.room.leave(a);
+		ctx.room.expireAway();
+		expect(events).toEqual(["wallet:h_alice:1", "persist:a", "send:a:WALLET", "send:b:LEFT"]);
+	});
+
+	test("away members remain eligible for job payments during a sweep", () => {
+		const a = conn("a");
+		place(a, human("alice", { coins: 100 }), [11, 11]);
+		ctx.room.handle(a, { t: "JOB", kind: "work" });
+		ctx.clock.advance(60_000);
+		ctx.room.dropped(a);
+		ctx.room.sweep(() => ctx.clock.now());
+		expect(ctx.room.has("h_alice")).toBe(true);
+		expect(saved).toEqual([["h_alice", 1]]);
+	});
 
 	test("the wallet is told on joining; buying takes the price, and too little buys nothing", () => {
 		const a = conn("a");

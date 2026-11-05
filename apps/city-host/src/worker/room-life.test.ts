@@ -227,6 +227,22 @@ describe("an AI's life in the room", () => {
 		expect(of(h, "NOTICE").at(-1)?.message).toMatch(/銅貨が3枚足りません/);
 	});
 
+	test("an away AI stays in its activity until a life tick after reconnecting", () => {
+		const { room, advance, now } = setup();
+		const first = conn("first");
+		room.join(first, ai(), "lawn");
+		room.handle(first, { t: "ACT", activity: "lawn_exercise" });
+		advance(realMs(60) + 1);
+		room.dropped(first);
+		room.sweep(() => now());
+		const back = conn("back");
+		room.join(back, ai());
+		const welcome = of(back, "WELCOME")[0];
+		expect(welcome?.avatars.find((a) => a.id === "a_mina")?.doing?.activity).toBe("lawn_exercise");
+		room.sweep(() => now());
+		expect(of(back, "ACT_DONE")).toHaveLength(1);
+	});
+
 	test("walking away stops it part way: half the time, half the good", () => {
 		const { room, advance } = setup();
 		const c = conn("mina");
