@@ -1,6 +1,6 @@
 import type { ClientToHost, HostToClient, Item, Vec2 } from "@rojibura/protocol";
 import { AI_CONV_MAX_TURNS, PRESENCE_TIMEOUT_MS } from "@rojibura/protocol";
-import { beforeEach, describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import { AWAY_GRACE_MS, RoomCore } from "./room-core.ts";
 import type { JoinInfo, Member, Walkable, WalletStore, World } from "./room-types.ts";
 
@@ -1500,7 +1500,12 @@ describe("floating and warping (docs/prd.md 3.4.13, 3.4.14)", () => {
 		const b = conn("b");
 		ctx.room.join(a, human("alice"));
 		ctx.room.join(b, human("bob"));
-		ctx.room.handle(a, { t: "WARP", to: "cafe" });
+		const random = vi.spyOn(Math, "random").mockReturnValueOnce(0.095).mockReturnValueOnce(0.999);
+		try {
+			ctx.room.handle(a, { t: "WARP", to: "cafe" });
+		} finally {
+			random.mockRestore();
+		}
 		const moved = last(b);
 		expect(moved?.t).toBe("MOVED");
 		if (moved?.t !== "MOVED" || moved.move.kind !== "idle") throw new Error("no move");
