@@ -1,8 +1,9 @@
 import type { AvatarState, ClientToHost, HostToClient } from "@rojibura/protocol";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { Mirror, Move, MoveBook, RehearseRequest } from "./body.ts";
+import { parseKeysText } from "./body-tools.ts";
 import { FALLBACK_REPLIES } from "./prompt.ts";
-import { type Mind, parseKeysText, Resident, type ResidentOptions, touchedParts } from "./resident.ts";
+import { type Mind, Resident, type ResidentOptions, touchedParts } from "./resident.ts";
 import type { Memory } from "./types.ts";
 
 type Call = [tool: string, args: Record<string, unknown>];

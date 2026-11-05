@@ -1541,8 +1541,6 @@ export class Resident {
 	}
 }
 
-export { parseKeysText } from "./body-tools.ts";
-
 /** How the parts of a body are called. */
 const PART_NAMES: Partial<Record<BodyPart, string>> = {
 	head: "頭",
