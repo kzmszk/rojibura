@@ -2,7 +2,7 @@ import type { ClientToHost, HostToClient, Item, Vec2 } from "@rojibura/protocol"
 import { AI_CONV_MAX_TURNS, PRESENCE_TIMEOUT_MS } from "@rojibura/protocol";
 import { beforeEach, describe, expect, test } from "vitest";
 import { AWAY_GRACE_MS, RoomCore } from "./room-core.ts";
-import type { JoinInfo, Walkable, WalletStore, World } from "./room-types.ts";
+import type { JoinInfo, Member, Walkable, WalletStore, World } from "./room-types.ts";
 
 // 40 x 40 m square with a 10 x 10 m building in the middle (x, z in [-5, 5]).
 const inBuilding = (p: Vec2) => Math.abs(p[0]) < 5 && Math.abs(p[1]) < 5;
@@ -24,7 +24,7 @@ function setup(
 	extra: Partial<World> = {},
 	saved?: (items: Item[]) => void,
 	wallets?: WalletStore,
-	persisted?: (conn: Conn) => void,
+	persisted?: (conn: Conn, member: Member) => void,
 	sent?: (conn: Conn, message: HostToClient) => void,
 ) {
 	let now = 1_000_000;
@@ -39,7 +39,7 @@ function setup(
 			close: (c, code) => {
 				c.closed = code;
 			},
-			persist: (c) => persisted?.(c),
+			persist: (c, m) => persisted?.(c, m),
 		},
 		{
 			walk,
@@ -1560,5 +1560,117 @@ describe("a move never cuts through a wall", () => {
 		expect(last(a)?.t).toBe("CORRECT");
 		ctx.room.handle(a, { t: "MOVE_VEL", pos: [-5.4, 4.3], dir: [0, 1], speed: 1.4, seq: 2 });
 		expect(last(a)).toMatchObject({ t: "MOVED", move: { kind: "vel" } });
+	});
+});
+
+describe("movement publication order", () => {
+	test("normal movement persists before broadcast and correction targets the sender", () => {
+		const events: unknown[] = [];
+		const { room } = setup(
+			{},
+			undefined,
+			undefined,
+			(c, m) => events.push({ persist: c.name, move: structuredClone(m.move) }),
+			(c, m) => events.push({ send: c.name, message: structuredClone(m) }),
+		);
+		const a = conn("a");
+		const b = conn("b");
+		room.join(a, human("alice"));
+		room.join(b, human("bob"));
+		events.length = 0;
+		room.handle(a, {
+			t: "MOVE_PATH",
+			path: [
+				[-10, -10],
+				[-10, 10],
+			],
+			speed: 1.4,
+			seq: 1,
+		});
+		expect(events).toMatchObject([
+			{ persist: "a", move: { kind: "path" } },
+			{ send: "a", message: { t: "MOVED", id: "h_alice" } },
+			{ send: "b", message: { t: "MOVED", id: "h_alice" } },
+		]);
+		events.length = 0;
+		room.handle(a, {
+			t: "MOVE_PATH",
+			path: [
+				[15, 15],
+				[16, 16],
+			],
+			speed: 1.4,
+			seq: 2,
+		});
+		expect(events).toMatchObject([
+			{ persist: "a", move: { kind: "idle" } },
+			{ send: "a", message: { t: "CORRECT", move: { kind: "idle" } } },
+			{ send: "b", message: { t: "MOVED", id: "h_alice", move: { kind: "idle" } } },
+		]);
+	});
+
+	test("lifting from a posture broadcasts before persisting altitude", () => {
+		const events: unknown[] = [];
+		const { room } = setup(
+			{ fly: true },
+			undefined,
+			undefined,
+			(c, m) => events.push({ persist: c.name, member: structuredClone(m) }),
+			(c, m) => events.push({ send: c.name, message: structuredClone(m) }),
+		);
+		const a = conn("a");
+		room.join(a, human("alice"));
+		room.handle(a, { t: "ACTION", motion: "lie" });
+		events.length = 0;
+		room.handle(a, { t: "FLY", alt: 12 });
+		expect(events).toMatchObject([
+			{ send: "a", message: { t: "MOVED", move: { kind: "idle" } } },
+			{ persist: "a", member: { fly: 12, move: { kind: "idle" } } },
+			{ send: "a", message: { t: "FLEW", alt: 12 } },
+		]);
+		expect(events[0]).not.toHaveProperty("message.move.posture");
+	});
+
+	test.each<{ name: string; pos: Vec2; walking: boolean }>([
+		{ name: "walking to the seat", pos: [-11, -10], walking: true },
+		{ name: "already at the seat", pos: [-9, -9.9], walking: false },
+	])("seat approach while $name", ({ pos, walking }) => {
+		const events: unknown[] = [];
+		const bot = conn("bot");
+		ctx = setup(
+			{
+				seats: [
+					{ pos: [-10, -9.4], y: 0.46, face: [0, -1] },
+					{ pos: [-9, -9.4], y: 0.46, face: [0, -1] },
+				],
+			},
+			undefined,
+			undefined,
+			(c, m) => {
+				if (c === bot) events.push({ persist: structuredClone(m) });
+			},
+			(c, m) => {
+				if (c !== bot && m.t === "MOVED" && m.id === "a_bot")
+					events.push({ message: structuredClone(m), member: structuredClone(ctx.room.memberFor(bot)) });
+			},
+		);
+		const a = conn("a");
+		place(a, human("alice"), [-10, -10]);
+		place(bot, ai("bot", "alice"), pos);
+		ctx.room.handle(a, { t: "COMPANION", on: true });
+		const member = ctx.room.memberFor(bot);
+		if (!member) throw new Error("not joined");
+		member.move = { kind: "idle", pos, at: ctx.clock.now() };
+		events.length = 0;
+		ctx.room.handle(a, { t: "ACTION", motion: "sit", seat: 0 });
+		if (walking) {
+			expect(events).toMatchObject([
+				{ message: { t: "MOVED", move: { kind: "path" } }, member: { move: { kind: "path" } } },
+				{ persist: { move: { kind: "path" }, seatPlan: { seat: 1 } } },
+			]);
+			expect(events[0]).not.toHaveProperty("member.seatPlan");
+		} else {
+			expect(events).toMatchObject([{ persist: { move: { kind: "idle" }, seatPlan: { seat: 1 } } }]);
+		}
 	});
 });
