@@ -249,7 +249,7 @@ describe("an AI's life in the room", () => {
 		room.join(c, ai(), "lawn");
 		room.handle(c, { t: "ACT", activity: "lawn_exercise" });
 		advance(realMs(30));
-		const here = room.positionOf(room.members.get(c) as never);
+		const here = room.positionOf(room.memberFor(c) as never);
 		room.handle(c, { t: "MOVE_PATH", path: [here, [0, 0]], speed: WALK_SPEED, seq: 1 });
 		const done = of(c, "ACT_DONE")[0];
 		expect(done?.share).toBeCloseTo(0.5, 2);
@@ -314,10 +314,10 @@ describe("an AI's life in the room", () => {
 		room.handle(c, { t: "JOB", kind: "study" });
 		expect(of(c, "ACT_DONE").at(-1)).toMatchObject({ activity: "lawn_exercise", share: 0 });
 		expect(of(c, "ACTING").at(-1)?.doing).toBeNull();
-		expect(room.members.get(c)?.job?.kind).toBe("study");
+		expect(room.memberFor(c)?.job?.kind).toBe("study");
 		room.handle(c, { t: "ACT", activity: "lawn_exercise" });
 		expect(of(c, "JOBBED").at(-1)?.job).toBeNull();
-		expect(room.members.get(c)?.doing?.activity).toBe("lawn_exercise");
+		expect(room.memberFor(c)?.doing?.activity).toBe("lawn_exercise");
 	});
 
 	test("food bought and eaten feeds an AI; a proper one is a meal, a coffee is drunk", () => {
@@ -344,9 +344,9 @@ describe("an AI's life in the room", () => {
 		const { room } = setup();
 		const c = conn("mina");
 		room.join(c, ai({ life: { ...newLife(SEVEN), energy: 5 } }));
-		const here = room.positionOf(room.members.get(c) as never);
+		const here = room.positionOf(room.memberFor(c) as never);
 		room.handle(c, { t: "MOVE_PATH", path: [here, [0, 0]] as Vec2[], speed: 4, seq: 1 });
-		const m = room.members.get(c);
+		const m = room.memberFor(c);
 		expect(m?.move.kind === "path" && m.move.speed).toBe(WALK_SPEED);
 	});
 
@@ -383,7 +383,7 @@ describe("an AI's life in the room", () => {
 		expect(of(c, "ACTING").at(-1)?.doing?.activity).toBe("onsen_bath");
 		expect(of(c, "WALLET").at(-1)?.coins).toBe(42);
 		expect(of(c, "LIFE")).toHaveLength(0);
-		expect(room.toState(room.members.get(c) as never).doing?.activity).toBe("onsen_bath");
+		expect(room.toState(room.memberFor(c) as never).doing?.activity).toBe("onsen_bath");
 	});
 
 	test("leaving part way saves what it did; others see what it is doing", () => {
@@ -393,7 +393,7 @@ describe("an AI's life in the room", () => {
 		room.join(c, ai(), "lawn");
 		room.join(ken, ai({ id: "a_ken", name: "ケン" }), "lawn");
 		room.handle(c, { t: "ACT", activity: "lawn_exercise" });
-		const nearby = room.contextFor(room.members.get(ken) as never).nearbyAvatars;
+		const nearby = room.contextFor(room.memberFor(ken) as never).nearbyAvatars;
 		expect(nearby.find((a) => a.id === "a_mina")?.doing).toBe("原っぱで体操");
 		advance(realMs(30));
 		room.leave(c);

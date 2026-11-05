@@ -146,7 +146,7 @@ describe("membership", () => {
 		const old = conn("old");
 		const replacement = conn("replacement");
 		ctx.room.join(old, human("alice"));
-		const saved = structuredClone(ctx.room.members.get(old));
+		const saved = structuredClone(ctx.room.memberFor(old));
 		if (!saved) throw new Error("not joined");
 		const woke = setup().room;
 		woke.restore(old, saved);
@@ -162,8 +162,8 @@ describe("membership", () => {
 		const b = conn("b");
 		ctx.room.join(a, human("alice"));
 		ctx.room.join(b, human("bob"));
-		const alice = structuredClone(ctx.room.members.get(a));
-		const bob = structuredClone(ctx.room.members.get(b));
+		const alice = structuredClone(ctx.room.memberFor(a));
+		const bob = structuredClone(ctx.room.memberFor(b));
 		if (!alice || !bob) throw new Error("not joined");
 		// woken for alice's close: only bob's socket is still there to restore
 		const woke = setup().room;
@@ -424,7 +424,7 @@ describe("a dropped connection", () => {
 
 	test("a late drop from the old connection cannot remove the one that resumed", () => {
 		const { bot, other } = talking();
-		const saved = structuredClone(ctx.room.members.get(bot));
+		const saved = structuredClone(ctx.room.memberFor(bot));
 		if (!saved) throw new Error("not joined");
 		ctx.room.dropped(bot);
 		const back = conn("back");
@@ -503,8 +503,8 @@ describe("a dropped connection", () => {
 
 	test("dropped while the room slept: it waits from what it last saved; a second word changes nothing", () => {
 		const { bot, other } = talking();
-		const saved = structuredClone(ctx.room.members.get(bot));
-		const bob = structuredClone(ctx.room.members.get(other));
+		const saved = structuredClone(ctx.room.memberFor(bot));
+		const bob = structuredClone(ctx.room.memberFor(other));
 		if (!saved || !bob) throw new Error("not joined");
 		const woke = setup().room;
 		woke.restore(other, bob);
@@ -694,7 +694,7 @@ test("conversations survive hibernation through the persisted member state", () 
 /** Joins `info` and puts them at `pos` (a key move from wherever they spawned would be refused if far). */
 function place(c: Conn, info: JoinInfo, pos: Vec2) {
 	ctx.room.join(c, info);
-	const me = ctx.room.members.get(c);
+	const me = ctx.room.memberFor(c);
 	if (!me) throw new Error("not joined");
 	me.move = { kind: "idle", pos, at: ctx.clock.now() };
 	c.inbox.length = 0;
@@ -744,7 +744,7 @@ describe("doing things together", () => {
 		place(bot, ai("bot", "alice"), [-11, -10]);
 		ctx.room.handle(a, { t: "COMPANION", on: true });
 		ctx.clock.advance(2000);
-		const ai0 = ctx.room.members.get(bot);
+		const ai0 = ctx.room.memberFor(bot);
 		if (ai0) ai0.move = { kind: "idle", pos: [-11, -10], at: ctx.clock.now() };
 		ctx.room.handle(a, { t: "OFFER", kind: "hug", to: "a_bot" });
 		ctx.room.handle(bot, { t: "ANSWER", to: "h_alice", accept: true });
@@ -753,7 +753,7 @@ describe("doing things together", () => {
 		// her page says she has arrived: the AI is not taken to her side, and does not walk off by itself
 		ctx.clock.advance(together.at - ctx.clock.now());
 		a.inbox.length = 0;
-		const spot = (m: Conn) => ctx.room.members.get(m)?.move;
+		const spot = (m: Conn) => ctx.room.memberFor(m)?.move;
 		const hers = spot(a);
 		const here = hers?.kind === "path" ? (hers.path.at(-1) as Vec2) : [-10, -10];
 		ctx.room.handle(a, { t: "MOVE_VEL", pos: here as Vec2, dir: [0, 0], speed: 0, seq: 1 });
@@ -819,7 +819,7 @@ describe("sitting on a seat", () => {
 		place(a, human("alice"), [-10, -10]);
 		place(b, human("bob"), [-10.3, -10]);
 		ctx.room.handle(a, { t: "ACTION", motion: "sit", seat: 0 });
-		expect(ctx.room.members.get(a)?.move).toMatchObject({
+		expect(ctx.room.memberFor(a)?.move).toMatchObject({
 			kind: "idle",
 			posture: "sit",
 			seat: 0,
@@ -831,7 +831,7 @@ describe("sitting on a seat", () => {
 		expect(last(b)).toMatchObject({ t: "NOTICE", kind: "rejected" });
 		// without asking for one a person sits on the ground
 		ctx.room.handle(b, { t: "ACTION", motion: "sit" });
-		const move = ctx.room.members.get(b)?.move;
+		const move = ctx.room.memberFor(b)?.move;
 		expect(move?.kind === "idle" && move.seat).toBeUndefined();
 		// she walks on: the seat is free again
 		ctx.room.handle(a, {
@@ -844,7 +844,7 @@ describe("sitting on a seat", () => {
 			seq: 1,
 		});
 		ctx.room.handle(b, { t: "ACTION", motion: "sit", seat: 0 });
-		expect(ctx.room.members.get(b)?.move).toMatchObject({ seat: 0 });
+		expect(ctx.room.memberFor(b)?.move).toMatchObject({ seat: 0 });
 	});
 
 	test("an AI walking with its owner sits on the seat next to theirs when they sit", () => {
@@ -861,14 +861,14 @@ describe("sitting on a seat", () => {
 		ctx.room.handle(a, { t: "COMPANION", on: true });
 		ctx.room.handle(a, { t: "ACTION", motion: "sit", seat: 0 });
 		// it walks to the seat first, and sits when it gets there (the sweep's alarm)
-		expect(ctx.room.members.get(bot)?.move.kind).toBe("path");
+		expect(ctx.room.memberFor(bot)?.move.kind).toBe("path");
 		const at = ctx.room.wakeAt as number;
 		expect(at).toBeGreaterThan(0);
 		ctx.room.sweep(() => ctx.clock.now());
-		expect(ctx.room.members.get(bot)?.move.kind).toBe("path");
+		expect(ctx.room.memberFor(bot)?.move.kind).toBe("path");
 		ctx.clock.advance(at - ctx.clock.now() + 10);
 		ctx.room.sweep(() => ctx.clock.now());
-		expect(ctx.room.members.get(bot)?.move).toMatchObject({ posture: "sit", seat: 1 });
+		expect(ctx.room.memberFor(bot)?.move).toMatchObject({ posture: "sit", seat: 1 });
 		expect(ctx.room.wakeAt).toBeUndefined();
 	});
 
@@ -876,7 +876,7 @@ describe("sitting on a seat", () => {
 		const bot = conn("bot");
 		place(bot, ai("bot", "alice"), [-10, -10]);
 		ctx.room.handle(bot, { t: "ACTION", motion: "sit" });
-		expect(ctx.room.members.get(bot)?.move).toMatchObject({ posture: "sit", seat: 0 });
+		expect(ctx.room.memberFor(bot)?.move).toMatchObject({ posture: "sit", seat: 0 });
 	});
 });
 
@@ -922,7 +922,7 @@ describe("small things", () => {
 		ctx.room.handle(a, { t: "THROW", dir: [1, 0] });
 		expect(theBall().pos).toEqual([-3.5, -10]);
 		ctx.clock.advance(2000);
-		const me = ctx.room.members.get(a);
+		const me = ctx.room.memberFor(a);
 		if (me) me.move = { kind: "idle", pos: [-4, -10], at: ctx.clock.now() };
 		ctx.room.handle(a, { t: "PICK", item: theBall().id });
 		ctx.room.handle(a, { t: "DROP" });
@@ -1078,7 +1078,7 @@ describe("wallets, work and study", () => {
 		const a = conn("a");
 		ctx.room.join(a, human("alice", { coins: 5 }));
 		expect(wallet(a)).toEqual({ t: "WALLET", coins: 5 });
-		const me = ctx.room.members.get(a);
+		const me = ctx.room.memberFor(a);
 		if (me) me.move = { kind: "idle", pos: [10, 11], at: ctx.clock.now() };
 		ctx.room.handle(a, { t: "BUY", shop: "bakery", goods: "baguette" });
 		expect(wallet(a)).toEqual({ t: "WALLET", coins: 2, change: -3, why: "buy" });
@@ -1135,7 +1135,7 @@ describe("wallets, work and study", () => {
 		const a = conn("a");
 		place(a, ai("hal", "kazu", { coins: 100 }), [-11, 11]);
 		ctx.room.handle(a, { t: "JOB", kind: "study" });
-		const m = ctx.room.members.get(a);
+		const m = ctx.room.memberFor(a);
 		expect(m && ctx.room.contextFor(m)).toMatchObject({ coins: 100, job: "study", canJob: ["study"] });
 		ctx.clock.advance(61_000);
 		ctx.room.leave(a);
@@ -1198,7 +1198,7 @@ describe("walking with your AIs", () => {
 		// company off: it walks on its own again
 		ctx.room.handle(a, { t: "COMPANION", on: false });
 		ctx.clock.advance(20_000);
-		const at = ctx.room.positionOf(ctx.room.members.get(bot) as never);
+		const at = ctx.room.positionOf(ctx.room.memberFor(bot) as never);
 		ctx.room.handle(bot, { t: "MOVE_PATH", path: [at, [-15, 15]], speed: 1.4, seq: 2 });
 		expect(last(a)).toMatchObject({ t: "MOVED", id: "a_bot", move: { kind: "path" } });
 	});
@@ -1250,7 +1250,7 @@ describe("an AI taking its owner somewhere", () => {
 		// alice follows behind: it keeps going its own way, not to her side
 		ctx.clock.advance(2000);
 		a.inbox.length = 0;
-		const here = ctx.room.positionOf(ctx.room.members.get(a) as never);
+		const here = ctx.room.positionOf(ctx.room.memberFor(a) as never);
 		ctx.room.handle(a, { t: "MOVE_PATH", path: [here, [-10, -6]], speed: 1.4, seq: 1 });
 		expect(a.inbox.filter((m) => m.t === "MOVED" && m.id === "a_bot")).toEqual([]);
 		// there: her page says so, and it comes to her side again
@@ -1307,7 +1307,7 @@ describe("an AI moving its own body", () => {
 		// it steps 2 m off: too far to touch
 		ctx.room.handle(bot, {
 			t: "MOVE_PATH",
-			path: [ctx.room.positionOf(ctx.room.members.get(bot) as never), [-12, -10]],
+			path: [ctx.room.positionOf(ctx.room.memberFor(bot) as never), [-12, -10]],
 			speed: 1.4,
 			seq: 1,
 		});
@@ -1315,7 +1315,7 @@ describe("an AI moving its own body", () => {
 		ctx.room.handle(bot, pat);
 		expect(last(bot)).toMatchObject({ t: "NOTICE", kind: "rejected" });
 		// it steps up to 40 cm in front of her by itself
-		const here = ctx.room.positionOf(ctx.room.members.get(bot) as never);
+		const here = ctx.room.positionOf(ctx.room.memberFor(bot) as never);
 		bot.inbox.length = 0;
 		ctx.room.handle(bot, { t: "MOVE_PATH", path: [here, [-10, -9.6]], speed: 1.4, seq: 2 });
 		expect(bot.inbox.map((m) => m.t)).toEqual(["MOVED"]);
@@ -1413,7 +1413,7 @@ describe("an AI moving its own body", () => {
 		});
 		ctx.clock.advance(5000);
 		// it wandered off four metres and more: too far to call
-		const botMember = ctx.room.members.get(bot);
+		const botMember = ctx.room.memberFor(bot);
 		if (botMember) botMember.move = { kind: "idle", pos: [-16, -10], at: ctx.clock.now() };
 		ctx.room.handle(a, pat);
 		expect(last(a)).toMatchObject({ t: "NOTICE", message: "自分のAIのそばへ行ってください" });
@@ -1426,12 +1426,12 @@ describe("an AI moving its own body", () => {
 		place(bot, ai("bot", "alice"), [-12, -10]);
 		ctx.room.handle(a, { t: "COMPANION", on: true });
 		ctx.clock.advance(3000);
-		const here = ctx.room.positionOf(ctx.room.members.get(bot) as never);
+		const here = ctx.room.positionOf(ctx.room.memberFor(bot) as never);
 		a.inbox.length = 0;
 		ctx.room.handle(bot, { t: "MOVE_VEL", pos: here, dir: [0, -1], speed: 0, seq: 1 });
 		expect(last(a)).toMatchObject({ t: "MOVED", id: "a_bot", move: { kind: "idle", face: [0, -1] } });
 		ctx.room.handle(bot, { t: "ACTION", motion: "sit" });
-		expect(ctx.room.members.get(bot)?.move).toMatchObject({ kind: "idle", posture: "sit", face: [0, -1] });
+		expect(ctx.room.memberFor(bot)?.move).toMatchObject({ kind: "idle", posture: "sit", face: [0, -1] });
 		// a turn is not a walk: one from somewhere else is not taken
 		bot.inbox.length = 0;
 		ctx.room.handle(bot, { t: "MOVE_VEL", pos: [here[0] + 1, here[1]], dir: [1, 0], speed: 0, seq: 2 });
@@ -1450,10 +1450,10 @@ describe("going through a portal", () => {
 		place(c, human("carol"), [-8, -10]);
 		place(bot, ai("bot", "alice"), [-12, -10]);
 		place(other, ai("other", "carol"), [-9, -10]);
-		ctx.room.travel(ctx.room.members.get(a) as never, "venezia", "gate_main");
+		ctx.room.travel(ctx.room.memberFor(a) as never, "venezia", "gate_main");
 		expect(bot.inbox.filter((m) => m.t === "FOLLOW")).toEqual([]);
 		ctx.room.handle(a, { t: "COMPANION", on: true });
-		ctx.room.travel(ctx.room.members.get(a) as never, "venezia", "gate_main");
+		ctx.room.travel(ctx.room.memberFor(a) as never, "venezia", "gate_main");
 		expect(bot.inbox.filter((m) => m.t === "FOLLOW")).toEqual([
 			{ t: "FOLLOW", owner: "h_alice", to: "venezia", at: "gate_main" },
 		]);
@@ -1524,8 +1524,8 @@ describe("floating and warping (docs/prd.md 3.4.13, 3.4.14)", () => {
 		ctx.room.handle(a, { t: "COMPANION", on: true });
 		ctx.clock.advance(10_000);
 		ctx.room.handle(a, { t: "WARP", to: "cafe" });
-		const there = ctx.room.positionOf(ctx.room.members.get(a) as never);
-		const it = ctx.room.positionOf(ctx.room.members.get(bot) as never);
+		const there = ctx.room.positionOf(ctx.room.memberFor(a) as never);
+		const it = ctx.room.positionOf(ctx.room.memberFor(bot) as never);
 		expect(Math.hypot(it[0] - there[0], it[1] - there[1])).toBeLessThan(1.2);
 	});
 
@@ -1536,7 +1536,7 @@ describe("floating and warping (docs/prd.md 3.4.13, 3.4.14)", () => {
 		ctx.room.handle(a, { t: "MOVE_VEL", pos: [-10, -10], dir: [0, 1], speed: 15, seq: 1 });
 		expect(last(a)).toMatchObject({ t: "MOVED", move: { kind: "vel", speed: 6 } });
 		ctx.room.handle(a, { t: "FLY", alt: 10 });
-		const here = ctx.room.positionOf(ctx.room.members.get(a) as never);
+		const here = ctx.room.positionOf(ctx.room.memberFor(a) as never);
 		ctx.room.handle(a, { t: "MOVE_VEL", pos: here, dir: [0, 1], speed: 15, seq: 2 });
 		expect(last(a)).toMatchObject({ t: "MOVED", move: { kind: "vel", speed: 15 } });
 	});

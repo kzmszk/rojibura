@@ -141,7 +141,7 @@ export class Guide<C> {
 	}
 
 	private get me(): Member | undefined {
-		return this.d.core.members.get(this.d.conn);
+		return this.d.core.memberFor(this.d.conn);
 	}
 
 	/**
@@ -197,7 +197,7 @@ export class Guide<C> {
 			return;
 		}
 		// a lone visitor who is standing still: walk over so they are not alone (without talking to them)
-		const others = [...this.d.core.members.values()].filter((m) => m.id !== GUIDE_ID);
+		const others = [...this.d.core.memberValues()].filter((m) => m.id !== GUIDE_ID);
 		const lone = others.length === 1 && others[0]?.kind === "human" ? others[0] : undefined;
 		if (
 			lone &&
@@ -230,7 +230,7 @@ export class Guide<C> {
 
 	/** The one thing the guide says unasked: a welcome when someone arrives, once a day. */
 	private async greet(id: AvatarId): Promise<void> {
-		const person = this.memberById(id);
+		const person = this.d.core.memberById(id);
 		if (!person || this.greetedToday(id)) return;
 		this.saved.greeted.push(id);
 		this.d.save(this.saved);
@@ -259,13 +259,13 @@ export class Guide<C> {
 						);
 			text = decision?.reply ?? `${person.name}さん、おかえりなさい！また会えてうれしいな。`;
 		}
-		if (!this.memberById(id)) return;
+		if (!this.d.core.memberById(id)) return;
 		this.send({ t: "SAY", to: id, text });
 		this.d.memory.remember(person, "guide", text, this.clock());
 	}
 
 	private async reply(msg: Extract<HostToClient, { t: "ADDRESSED" }>): Promise<void> {
-		const from = this.memberById(msg.from);
+		const from = this.d.core.memberById(msg.from);
 		if (!from) return;
 		if (from.kind === "ai") {
 			// AIs get one friendly line; the guide's LLM budget is for people
@@ -360,11 +360,6 @@ export class Guide<C> {
 		}
 		path[0] = here;
 		this.send({ t: "MOVE_PATH", path: path.slice(0, MAX_PATH_POINTS), speed: WALK_SPEED, seq: ++this.seq });
-	}
-
-	private memberById(id: AvatarId): Member | undefined {
-		for (const m of this.d.core.members.values()) if (m.id === id) return m;
-		return undefined;
 	}
 
 	private distanceTo(m: Member): number | null {
