@@ -251,6 +251,29 @@ describe("moderation route contract", () => {
 			expect(sqlite.prepare("SELECT action FROM mod_actions").all()).toHaveLength(1);
 		},
 	);
+	test.each([{ body: null }, { body: [] }, { body: "text" }, { body: 1 }])(
+		"invalid JSON envelope $body returns field errors without effects",
+		async ({ body }) => {
+			expect(await result("/api/relations", "POST", body)).toEqual({
+				status: 400,
+				body: { error: "bad target" },
+			});
+			expect(await result("/api/reports", "POST", body)).toEqual({
+				status: 400,
+				body: { error: "bad target" },
+			});
+			current = moderator;
+			expect(await result("/api/mod/action", "POST", body)).toEqual({
+				status: 400,
+				body: { error: "bad subject" },
+			});
+			expect(room).not.toHaveBeenCalled();
+			expect(broadcast).not.toHaveBeenCalled();
+			expect(sqlite.prepare("SELECT * FROM relations").all()).toHaveLength(0);
+			expect(sqlite.prepare("SELECT * FROM reports").all()).toHaveLength(0);
+			expect(sqlite.prepare("SELECT * FROM mod_actions").all()).toHaveLength(0);
+		},
+	);
 	test("relation writes before notification and defaults on unless false", async () => {
 		broadcast.mockImplementationOnce(async () => {
 			expect(sqlite.prepare("SELECT target_id, kind FROM relations").get()).toMatchObject({
