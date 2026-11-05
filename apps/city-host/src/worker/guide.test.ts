@@ -292,11 +292,11 @@ describe("guide", () => {
 		// a new instance on the same storage: alice is restored from her socket, the guide from storage
 		const woke = setup(llm, t.kv);
 		const a2: Conn = { name: "a", inbox: [] };
-		const aliceMember = [...t.core.members.values()].find((m) => m.id === "h_alice");
+		const aliceMember = [...t.core.memberValues()].find((m) => m.id === "h_alice");
 		if (!aliceMember) throw new Error();
 		woke.core.restore(a2, aliceMember);
 		woke.guide.ensurePresent();
-		expect([...woke.core.members.values()].some((m) => m.id === GUIDE_ID)).toBe(true);
+		expect([...woke.core.memberValues()].some((m) => m.id === GUIDE_ID)).toBe(true);
 		expect(a2.inbox.some((m) => m.t === "JOINED")).toBe(false);
 	});
 });

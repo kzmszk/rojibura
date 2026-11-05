@@ -371,7 +371,7 @@ export class CityRoomDO extends DurableObject<Env> {
 		// an AI walking to a seat sits down when it gets there: wake up for that
 		if (this.core.wakeAt !== undefined) await this.scheduleAlarm();
 		// someone started watching: give them today's totals and the recent actions at once
-		if (parsed.msg.t === "WATCH_USAGE" && this.core.members.get(ws)?.watchUsage)
+		if (parsed.msg.t === "WATCH_USAGE" && this.core.memberFor(ws)?.watchUsage)
 			safeSend(ws, { t: "USAGE", ...this.meter.snapshot(), events: [...this.meter.recent] });
 	}
 
@@ -379,9 +379,9 @@ export class CityRoomDO extends DurableObject<Env> {
 		const member = attachmentOf(ws)?.member;
 		// through a portal: the AIs walking with them come along (docs/prd.md 3.8.2)
 		const travel = parseTravelReason(reason);
-		const who = this.core.members.get(ws) ?? member;
+		const who = this.core.memberFor(ws) ?? member;
 		if (travel && who) this.core.travel(who, travel.to, travel.at);
-		const name = this.core.members.get(ws)?.name ?? member?.name ?? "?";
+		const name = this.core.memberFor(ws)?.name ?? member?.name ?? "?";
 		const dropped = DROPPED.has(code);
 		this.meter.track(`${name}：${dropped ? "接続切れ" : "退出"}`, () => this.depart(ws, member, dropped), {
 			doRequests: WS_MESSAGE,
@@ -434,7 +434,7 @@ export class CityRoomDO extends DurableObject<Env> {
 			} else if (close !== null && now >= close - CLOSING_NOTICE_MS && this.noticeSentFor !== close) {
 				this.noticeSentFor = close;
 				const minutes = Math.max(1, Math.round((close - now) / 60_000));
-				for (const c of this.core.members.keys())
+				for (const c of this.core.connections())
 					if (!isGuide(c))
 						safeSend(c, {
 							t: "NOTICE",
@@ -466,7 +466,7 @@ export class CityRoomDO extends DurableObject<Env> {
 	/** Pushes new usage events to watchers, at most once a second (only while someone watches). */
 	private schedulePush(): void {
 		if (this.pushTimer) return;
-		if (![...this.core.members.values()].some((m) => m.watchUsage)) {
+		if (![...this.core.memberValues()].some((m) => m.watchUsage)) {
 			this.meter.pending = [];
 			return;
 		}
@@ -475,7 +475,7 @@ export class CityRoomDO extends DurableObject<Env> {
 			const events = this.meter.pending;
 			this.meter.pending = [];
 			const msg: HostToClient = { t: "USAGE", ...this.meter.snapshot(), events };
-			for (const [c, m] of this.core.members) if (m.watchUsage && !isGuide(c)) safeSend(c, msg);
+			for (const [c, m] of this.core.memberEntries()) if (m.watchUsage && !isGuide(c)) safeSend(c, msg);
 		}, USAGE_PUSH_MS);
 	}
 

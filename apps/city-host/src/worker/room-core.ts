@@ -335,6 +335,16 @@ interface Volatile {
 	lastBodyAt: number;
 }
 
+type ConnectionState<C> =
+	| { kind: "active"; conn: C }
+	| { kind: "away"; conn: C; until: number; order: number; missed: HostToClient[] };
+
+interface Participant<C> {
+	member: Member;
+	runtime: Volatile;
+	connection: ConnectionState<C>;
+}
+
 export interface Conv {
 	id: string;
 	a: AvatarId;
@@ -378,9 +388,9 @@ function within(times: number[], windowMs: number, now: number): number[] {
 }
 
 export class RoomCore<C> {
-	readonly members = new Map<C, Member>();
-	private readonly volatile = new Map<C, Volatile>();
-	private readonly byId = new Map<AvatarId, C>();
+	private readonly participants = new Map<AvatarId, Participant<C>>();
+	private readonly connectionToId = new Map<C, AvatarId>();
+	private nextDropOrder = 0;
 	private readonly convs = new Map<string, Conv>();
 	private readonly pairCooldown = new Map<string, number>();
 	private readonly humanToAi = new Map<string, number[]>();
@@ -419,8 +429,7 @@ export class RoomCore<C> {
 	private readonly itemStore: ItemStore | undefined;
 	private readonly lifeStore: LifeStore | undefined;
 	private readonly wallets: WalletStore | undefined;
-	/** Members whose connection dropped, by that dead connection: until when they wait, and what they missed. */
-	private readonly away = new Map<C, { until: number; missed: HostToClient[] }>();
+	private readonly directTransport: Transport<C>;
 
 	constructor(
 		transport: Transport<C>,
@@ -437,15 +446,18 @@ export class RoomCore<C> {
 	) {
 		// nothing reaches a dropped connection: what matters is kept for when they are back, and their state
 		// is saved on the new connection
+		this.directTransport = transport;
 		this.transport = {
 			send: (c, msg) => {
-				const away = this.away.get(c);
+				const state = this.participantFor(c)?.connection;
+				const away = state?.kind === "away" ? state : undefined;
 				if (!away) transport.send(c, msg);
 				else if (KEPT_WHILE_AWAY.has(msg.t) && away.missed.length < KEPT_WHILE_AWAY_MAX)
 					away.missed.push(msg);
 			},
 			close: (c, code, reason) => transport.close(c, code, reason),
-			persist: (c, member) => !this.away.has(c) && transport.persist(c, member),
+			persist: (c, member) =>
+				this.participantFor(c)?.connection.kind !== "away" && transport.persist(c, member),
 		};
 		this.world = world;
 		this.clock = clock;
@@ -470,7 +482,7 @@ export class RoomCore<C> {
 				.filter((i) => this.walk.isWalkable(i.pos))
 				.map((i) => ({ id: `i_${this.newId()}`, kind: i.kind, pos: i.pos }));
 		for (const item of items) {
-			if (item.holder && !this.byId.has(item.holder)) delete item.holder;
+			if (item.holder && !this.participants.has(item.holder)) delete item.holder;
 			this.items.set(item.id, item);
 		}
 	}
@@ -494,9 +506,14 @@ export class RoomCore<C> {
 
 	/** Re-adds a member after the Durable Object woke from hibernation. */
 	restore(conn: C, member: Member): void {
-		this.members.set(conn, member);
-		this.byId.set(member.id, conn);
-		this.volatile.set(conn, this.freshVolatile());
+		const previous = this.participants.get(member.id);
+		if (previous) this.connectionToId.delete(previous.connection.conn);
+		this.participants.set(member.id, {
+			member,
+			runtime: this.freshVolatile(),
+			connection: { kind: "active", conn },
+		});
+		this.connectionToId.set(conn, member.id);
 		for (const c of member.convs ?? []) if (!this.convs.has(c.id)) this.convs.set(c.id, { ...c });
 		for (const [other, until] of Object.entries(member.cooldowns ?? {}))
 			this.pairCooldown.set(
@@ -509,8 +526,8 @@ export class RoomCore<C> {
 	private syncConvs(...ids: AvatarId[]): void {
 		const now = this.clock();
 		for (const id of ids) {
-			const conn = this.byId.get(id);
-			const m = conn === undefined ? undefined : this.members.get(conn);
+			const conn = this.connectionFor(id);
+			const m = conn === undefined ? undefined : this.memberFor(conn);
 			if (conn === undefined || !m) continue;
 			m.convs = [...this.convs.values()].filter((c) => c.a === id || c.b === id).map((c) => ({ ...c }));
 			const cooldowns: Record<AvatarId, number> = {};
@@ -530,7 +547,7 @@ export class RoomCore<C> {
 		if (info.system) return null;
 		const r = this.rules;
 		const full = (n: number, limit: number | null) => limit !== null && n >= limit;
-		const others = [...this.members.values()].filter((m) => m.id !== info.id);
+		const others = [...this.memberValues()].filter((m) => m.id !== info.id);
 		if (full(others.length, r.capacityTotal)) return "街が満員です";
 		if (info.kind === "ai") {
 			const ais = others.filter((m) => m.kind === "ai");
@@ -551,7 +568,7 @@ export class RoomCore<C> {
 	/** `arrive`: through a portal, the landmark or portal to appear at instead of the spawn point (docs/prd.md 3.8). */
 	join(conn: C, info: JoinInfo, arrive?: string): boolean {
 		const now = this.clock();
-		const old = this.byId.get(info.id);
+		const old = this.connectionFor(info.id);
 		// still here: their connection dropped, or it has not been noticed yet (the old one is let go)
 		if (old !== undefined && old !== conn) return this.resume(old, conn, info, now);
 		const err = this.admissionError(info);
@@ -569,9 +586,12 @@ export class RoomCore<C> {
 		const entered = member.kind === "ai" ? this.lifeOnEntry(info.life, now) : null;
 		if (entered) member.life = entered.life;
 		else delete member.life;
-		this.members.set(conn, member);
-		this.byId.set(member.id, conn);
-		this.volatile.set(conn, this.freshVolatile());
+		this.participants.set(member.id, {
+			member,
+			runtime: this.freshVolatile(),
+			connection: { kind: "active", conn },
+		});
+		this.connectionToId.set(conn, member.id);
 		this.stats.connects++;
 		this.transport.persist(conn, member);
 		this.welcome(conn, member, now);
@@ -581,7 +601,7 @@ export class RoomCore<C> {
 		}
 		// the owner's page shows how their AI is doing (docs/life.md 8), whichever of them came first
 		if (member.kind === "ai") this.sendLife(member, false);
-		else for (const ai of this.members.values()) if (ai.ownerId === member.id) this.sendLife(ai, false);
+		else for (const ai of this.memberValues()) if (ai.ownerId === member.id) this.sendLife(ai, false);
 		if (member.coins !== undefined) this.transport.send(conn, { t: "WALLET", coins: member.coins });
 		this.broadcastAbout(member, { t: "JOINED", avatar: this.toState(member) }, conn);
 		// an AI whose owner is walking with company joins them at once
@@ -607,14 +627,13 @@ export class RoomCore<C> {
 	 * They get the area afresh (WELCOME, `resumed`), then what they missed while away.
 	 */
 	private resume(old: C, conn: C, info: JoinInfo, now: number): boolean {
-		const was = this.members.get(old) as Member;
-		const away = this.away.get(old);
-		this.away.delete(old);
+		const participant = this.participantFor(old);
+		if (!participant) return false;
+		const was = participant.member;
+		const away = participant.connection.kind === "away" ? participant.connection : undefined;
 		if (!away) this.transport.close(old, CLOSE_REPLACED, "replaced by a new connection");
-		const v = this.volatile.get(old) ?? this.freshVolatile();
-		v.lastSeen = now;
-		this.members.delete(old);
-		this.volatile.delete(old);
+		participant.runtime.lastSeen = now;
+		this.connectionToId.delete(old);
 		// the life and wallet kept here are newer than what was read from D1 for the new connection
 		const member: Member = {
 			...was,
@@ -622,9 +641,11 @@ export class RoomCore<C> {
 			...(was.life ? { life: was.life } : {}),
 			...(was.coins !== undefined ? { coins: was.coins } : {}),
 		};
-		this.members.set(conn, member);
-		this.byId.set(member.id, conn);
-		this.volatile.set(conn, v);
+		participant.member = member;
+		participant.connection = { kind: "active", conn };
+		this.participants.delete(member.id);
+		this.participants.set(member.id, participant);
+		this.connectionToId.set(conn, member.id);
 		this.transport.persist(conn, member);
 		this.welcome(conn, member, now, true);
 		if (member.coins !== undefined) this.transport.send(conn, { t: "WALLET", coins: member.coins });
@@ -645,7 +666,7 @@ export class RoomCore<C> {
 			you: member.id,
 			serverTime: now,
 			budget: 0,
-			avatars: [...this.members.values()].map((m) => this.toState(m)),
+			avatars: [...this.memberValues()].map((m) => this.toState(m)),
 		};
 		if (resumed) welcome.resumed = true;
 		if (this.canBuild) welcome.builds = [...this.builds.values()];
@@ -661,20 +682,27 @@ export class RoomCore<C> {
 	 * is no one to wait for (they are back already, or were let go).
 	 */
 	dropped(conn: C, member?: Member): number | null {
-		if (this.away.has(conn)) return null;
-		if (!this.members.has(conn)) {
-			if (!member || this.byId.has(member.id)) return null;
+		if (this.participantFor(conn)?.connection.kind === "away") return null;
+		if (!this.connectionToId.has(conn)) {
+			if (!member || this.participants.has(member.id)) return null;
 			this.restore(conn, member);
 		}
 		const until = this.clock() + AWAY_GRACE_MS;
-		this.away.set(conn, { until, missed: [] });
+		const participant = this.participantFor(conn);
+		if (!participant) return null;
+		participant.connection = { kind: "away", conn, until, order: this.nextDropOrder++, missed: [] };
 		return until;
 	}
 
 	/** Those whose connection dropped and who did not come back in time leave now. */
 	expireAway(): void {
 		const now = this.clock();
-		for (const [conn, a] of [...this.away]) if (a.until <= now) this.removeMember(conn, "timeout");
+		const expired = [...this.participants.values()]
+			.map(({ connection }) => connection)
+			.filter((connection) => connection.kind === "away")
+			.filter((connection) => connection.until <= now)
+			.sort((a, b) => a.order - b.order);
+		for (const connection of expired) this.removeMember(connection.conn, "timeout");
 	}
 
 	/** Called when the socket closed or errored. */
@@ -689,7 +717,7 @@ export class RoomCore<C> {
 	 * awake, so the others hear LEFT and what they held is put down.
 	 */
 	departed(conn: C, member: Member, reason: LeaveReason = "quit"): void {
-		if (!this.members.has(conn) && !this.byId.has(member.id)) this.restore(conn, member);
+		if (!this.connectionToId.has(conn) && !this.participants.has(member.id)) this.restore(conn, member);
 		this.removeMember(conn, reason);
 	}
 
@@ -698,16 +726,13 @@ export class RoomCore<C> {
 		const now = this.clock();
 		this.expireAway();
 		this.payJobs(now);
-		for (const [conn, m] of [...this.members]) {
-			if (this.away.has(conn)) continue;
-			const v = this.volatile.get(conn);
+		for (const [conn, m] of [...this.memberEntries()]) {
+			if (this.participantFor(conn)?.connection.kind === "away") continue;
+			const v = this.participantFor(conn)?.runtime;
 			const last = Math.max(v?.lastSeen ?? 0, lastPing(conn) ?? 0);
 			if (now - last > PRESENCE_TIMEOUT_MS) {
 				this.removeMember(conn, "timeout");
 				this.transport.close(conn, CLOSE_TIMEOUT, "no heartbeat");
-			} else if (!v) {
-				// restored after hibernation without volatile state
-				this.volatile.set(conn, this.freshVolatile());
 			}
 			void m;
 		}
@@ -721,19 +746,19 @@ export class RoomCore<C> {
 
 	/** Closes every connection (closing time). */
 	closeAll(reason: LeaveReason, code: number, message: string): void {
-		for (const conn of [...this.members.keys()]) {
+		for (const conn of [...this.connections()]) {
 			this.removeMember(conn, reason);
 			this.transport.close(conn, code, message);
 		}
 	}
 
 	get size(): number {
-		return this.members.size;
+		return this.participants.size;
 	}
 
 	/** Whether `id` is here now. */
 	has(id: AvatarId): boolean {
-		return this.byId.has(id);
+		return this.participants.has(id);
 	}
 
 	// ---- moderation -----------------------------------------------------------
@@ -770,7 +795,7 @@ export class RoomCore<C> {
 	}
 
 	kick(id: AvatarId, reason = "kicked"): boolean {
-		const conn = this.byId.get(id);
+		const conn = this.connectionFor(id);
 		if (conn === undefined) return false;
 		this.transport.send(conn, { t: "NOTICE", kind: "rejected", message: "モデレーターにより退出しました" });
 		this.removeMember(conn, "kicked");
@@ -779,8 +804,8 @@ export class RoomCore<C> {
 	}
 
 	muteFor(id: AvatarId, until: number): boolean {
-		const conn = this.byId.get(id);
-		const m = conn === undefined ? undefined : this.members.get(conn);
+		const conn = this.connectionFor(id);
+		const m = conn === undefined ? undefined : this.memberFor(conn);
 		if (conn === undefined || !m) return false;
 		m.mutedUntil = until;
 		this.transport.persist(conn, m);
@@ -801,10 +826,9 @@ export class RoomCore<C> {
 	// ---- messages -----------------------------------------------------------
 
 	handle(conn: C, msg: ClientToHost): void {
-		const m = this.members.get(conn);
-		const v = this.volatile.get(conn) ?? this.freshVolatile();
-		this.volatile.set(conn, v);
-		if (!m) return;
+		const participant = this.participantFor(conn);
+		if (!participant) return;
+		const { member: m, runtime: v } = participant;
 		const now = this.clock();
 		v.lastSeen = now;
 		this.stats.inbound++;
@@ -874,7 +898,7 @@ export class RoomCore<C> {
 					this.violation(conn, v, now);
 					return;
 				}
-				if (msg.target && !this.byId.has(msg.target)) return;
+				if (msg.target && !this.participants.has(msg.target)) return;
 				// sitting and lying last until the avatar moves (docs/prd.md 3.4.5): it stops where it is
 				if (isPosture(msg.motion)) {
 					// on a seat close by, if one is asked for (an AI sitting next to a free one takes it)
@@ -1004,7 +1028,7 @@ export class RoomCore<C> {
 	/** The owner asks their AI here for its diary; it is read where the AI runs, and comes back as DIARY. */
 	private askDiary(m: Member, msg: Extract<ClientToHost, { t: "DIARY_ASK" }>, now: number): string | null {
 		const ai = this.memberById(msg.id);
-		const ac = this.byId.get(msg.id);
+		const ac = this.connectionFor(msg.id);
 		if (!ai || ac === undefined) return "AIがこのエリアにいないので、日記を読めません";
 		if (m.kind !== "human" || ai.kind !== "ai" || ai.ownerId !== m.id) return "自分のAIの日記だけ読めます";
 		const asked = this.diaryAsks.get(ai.id);
@@ -1022,7 +1046,7 @@ export class RoomCore<C> {
 		ask.parts = msg.parts;
 		ask.next++;
 		if (ask.next >= msg.parts) this.diaryAsks.delete(m.id);
-		const oc = this.byId.get(msg.to);
+		const oc = this.connectionFor(msg.to);
 		if (oc === undefined) return;
 		this.transport.send(oc, {
 			t: "DIARY",
@@ -1045,7 +1069,7 @@ export class RoomCore<C> {
 		const seats = this.world.seats ?? [];
 		const here = this.positionOf(m, now);
 		const taken = new Set<number>();
-		for (const o of this.members.values())
+		for (const o of this.memberValues())
 			if (o.id !== m.id && o.move.kind === "idle" && o.move.seat !== undefined) taken.add(o.move.seat);
 		const free = (i: number) => {
 			const s = seats[i];
@@ -1070,11 +1094,11 @@ export class RoomCore<C> {
 		const at = seats[ownerSeat];
 		if (!at) return;
 		const taken = new Set<number>([ownerSeat]);
-		for (const o of this.members.values()) {
+		for (const o of this.memberValues()) {
 			if (o.move.kind === "idle" && o.move.seat !== undefined) taken.add(o.move.seat);
 			if (o.seatPlan) taken.add(o.seatPlan.seat);
 		}
-		for (const [conn, ai] of this.members) {
+		for (const [conn, ai] of this.memberEntries()) {
 			if (ai.kind !== "ai" || ai.ownerId !== owner.id || this.togetherNow(ai, now)) continue;
 			const from = this.positionOf(ai, now);
 			let best: { i: number; d: number } | undefined;
@@ -1104,14 +1128,14 @@ export class RoomCore<C> {
 	/** The host time the next AI is due to sit down (for the alarm), if any. */
 	get wakeAt(): number | undefined {
 		let t: number | undefined;
-		for (const m of this.members.values())
+		for (const m of this.memberValues())
 			if (m.seatPlan && (t === undefined || m.seatPlan.at < t)) t = m.seatPlan.at;
 		return t;
 	}
 
 	/** AIs that have walked up to their seat sit down on it. */
 	private settleSeatPlans(now: number): void {
-		for (const [conn, ai] of this.members) {
+		for (const [conn, ai] of this.memberEntries()) {
 			const plan = ai.seatPlan;
 			if (!plan || plan.at > now) continue;
 			delete ai.seatPlan;
@@ -1153,7 +1177,7 @@ export class RoomCore<C> {
 			this.answer(target, m.id, true, now);
 			return null;
 		}
-		const tc = this.byId.get(target.id);
+		const tc = this.connectionFor(target.id);
 		if (tc !== undefined) this.transport.send(tc, { t: "OFFERED", from: m.id, kind });
 		return null;
 	}
@@ -1167,8 +1191,8 @@ export class RoomCore<C> {
 		const offer = this.offers.get(key);
 		this.offers.delete(key);
 		const from = this.memberById(to);
-		const fc = this.byId.get(to);
-		const mc = this.byId.get(m.id);
+		const fc = this.connectionFor(to);
+		const mc = this.connectionFor(m.id);
 		if (!offer || now - offer.at > OFFER_TTL_MS || !from || fc === undefined || mc === undefined) return;
 		const a = this.positionOf(from, now);
 		const b = this.positionOf(m, now);
@@ -1219,7 +1243,7 @@ export class RoomCore<C> {
 		const other = this.memberById(t.with);
 		if (!other || other.kind === "human" || other.together?.with !== m.id) return;
 		delete other.together;
-		const oc = this.byId.get(other.id);
+		const oc = this.connectionFor(other.id);
 		const here = this.positionOf(other, now);
 		if (oc === undefined || poseAt(other.move, now).moving) return;
 		const from = this.positionOf(m, now);
@@ -1261,7 +1285,7 @@ export class RoomCore<C> {
 	 */
 	travel(who: Pick<Member, "id" | "kind" | "companion">, to: AreaId, at: string): void {
 		if (who.kind !== "human" || !who.companion) return;
-		for (const [ac, ai] of this.members)
+		for (const [ac, ai] of this.memberEntries())
 			if (ai.kind === "ai" && ai.ownerId === who.id)
 				this.transport.send(ac, { t: "FOLLOW", owner: who.id, to, at });
 	}
@@ -1300,7 +1324,7 @@ export class RoomCore<C> {
 					if (d > BODY_CALL_REACH) return "自分のAIのそばへ行ってください";
 					const u: Vec2 = [(there[0] - here[0]) / d, (there[1] - here[1]) / d];
 					const spot: Vec2 = [here[0] + u[0] * BODY_CALLED_TO, here[1] + u[1] * BODY_CALLED_TO];
-					const ac = this.byId.get(to.id);
+					const ac = this.connectionFor(to.id);
 					if (ac === undefined || !this.walkOf(to).isWalkable(spot)) return "そこには来られません";
 					at = now + this.stepTo(ac, to, there, spot, now) + 200;
 				} else if (d > BODY_REACH) return `もっと近くに行ってください（いま${Math.round(d * 10) / 10}m）`;
@@ -1364,7 +1388,7 @@ export class RoomCore<C> {
 		}
 		const ahead = owner.heading ?? [0, 1];
 		let slot = 0;
-		for (const [conn, ai] of this.members) {
+		for (const [conn, ai] of this.memberEntries()) {
 			if (ai.kind !== "ai" || ai.ownerId !== owner.id) continue;
 			const side = slot++ % 2 === 0 ? 1 : -1;
 			delete ai.seatPlan;
@@ -1386,7 +1410,7 @@ export class RoomCore<C> {
 		this.endLeads(owner);
 		const at = this.positionOf(owner, now);
 		let slot = 0;
-		for (const [conn, ai] of this.members) {
+		for (const [conn, ai] of this.memberEntries()) {
 			if (ai.kind !== "ai" || ai.ownerId !== owner.id) continue;
 			const side = slot++ % 2 === 0 ? 1 : -1;
 			this.stopDoing(conn, ai, now);
@@ -1405,7 +1429,7 @@ export class RoomCore<C> {
 	/** Tells the owner's AIs here that they walk with the owner now, or no longer. */
 	private tellCompany(owner: Member, on: boolean): void {
 		const now = this.clock();
-		for (const [conn, ai] of this.members)
+		for (const [conn, ai] of this.memberEntries())
 			if (ai.kind === "ai" && ai.ownerId === owner.id) {
 				this.transport.send(conn, { t: "COMPANY", owner: owner.id, on });
 				// its mood goes up from now on (or no more)
@@ -1428,7 +1452,7 @@ export class RoomCore<C> {
 	/** An AI walking with its owner asks them to come along to a place; the owner's page asks them. */
 	private askLead(conn: C, m: Member, msg: Extract<ClientToHost, { t: "LEAD" }>, now: number): string | null {
 		const owner = m.kind === "ai" ? this.memberById(m.ownerId) : undefined;
-		const oc = owner ? this.byId.get(owner.id) : undefined;
+		const oc = owner ? this.connectionFor(owner.id) : undefined;
 		if (!owner || oc === undefined || !owner.companion) return "オーナーと歩いているときだけ誘えます";
 		if (m.leadAskedAt !== undefined && now - m.leadAskedAt < LEAD_INTERVAL_MS)
 			return "さっき誘ったばかりです";
@@ -1460,8 +1484,8 @@ export class RoomCore<C> {
 		if (!lead || lead.owner !== m.id) return false;
 		this.leads.delete(to);
 		const ai = this.memberById(to);
-		const ac = this.byId.get(to);
-		const mc = this.byId.get(m.id);
+		const ac = this.connectionFor(to);
+		const mc = this.connectionFor(m.id);
 		if (!ai || ac === undefined || mc === undefined || now - lead.at > OFFER_TTL_MS) return true;
 		const path =
 			accept && this.accompanying(ai)
@@ -1489,7 +1513,7 @@ export class RoomCore<C> {
 
 	/** Ends the owner's AIs' walks to a place, and their open asks. */
 	private endLeads(owner: Member): void {
-		for (const [conn, ai] of this.members) {
+		for (const [conn, ai] of this.memberEntries()) {
 			if (ai.kind !== "ai" || ai.ownerId !== owner.id) continue;
 			this.leads.delete(ai.id);
 			if (!ai.lead) continue;
@@ -1613,7 +1637,7 @@ export class RoomCore<C> {
 		if (!activityOpen(a, cityTime(now).minutes))
 			return `${a.name}は、いまの時間はできません（${hoursText(a)}）`;
 		if (m.doing?.activity === a.id) return `もう${a.name}をしています`;
-		const others = [...this.members.values()].filter((o) => o.id !== m.id && o.doing?.activity === a.id);
+		const others = [...this.memberValues()].filter((o) => o.id !== m.id && o.doing?.activity === a.id);
 		if (a.capacity !== undefined && others.length >= a.capacity) return `${a.name}は、いまいっぱいです`;
 		if (m.life) {
 			const err = cannotStart(decay(m.life, now), a);
@@ -1677,8 +1701,8 @@ export class RoomCore<C> {
 	/** Activities whose time is up end; AIs whose city day is over wake up to a new one. */
 	private lifeTick(now: number): void {
 		const block = cityTime(now).block;
-		for (const [conn, m] of [...this.members]) {
-			if (this.away.has(conn)) continue;
+		for (const [conn, m] of [...this.memberEntries()]) {
+			if (this.participantFor(conn)?.connection.kind === "away") continue;
 			if (m.doing && m.doing.until <= now) this.stopDoing(conn, m, now);
 			if (m.life && m.life.block !== block) {
 				// the work done so far belongs to the day that ends
@@ -1729,9 +1753,9 @@ export class RoomCore<C> {
 			life: m.life,
 			...(m.coins !== undefined ? { coins: m.coins } : {}),
 		};
-		const own = this.byId.get(m.id);
+		const own = this.connectionFor(m.id);
 		if (self && own !== undefined) this.transport.send(own, msg);
-		const owner = m.kind === "ai" ? this.byId.get(m.ownerId) : undefined;
+		const owner = m.kind === "ai" ? this.connectionFor(m.ownerId) : undefined;
 		if (owner !== undefined) this.transport.send(owner, msg);
 	}
 
@@ -1839,7 +1863,7 @@ export class RoomCore<C> {
 			const r = eatFood(decay(m.life, now), food);
 			m.life = r.life;
 			this.lifeStore?.save(m.id, r.life);
-			const conn = this.byId.get(m.id);
+			const conn = this.connectionFor(m.id);
 			if (conn !== undefined) {
 				this.transport.persist(conn, m);
 				this.transport.send(conn, {
@@ -1857,14 +1881,14 @@ export class RoomCore<C> {
 	}
 
 	/** Adds to (or takes from) a wallet, saves it and tells its owner. */
-	private spend(m: Member, delta: number, why: "buy" | JobKind): void {
+	private spend(m: Member, delta: number, why: "buy" | JobKind, transport = this.transport): void {
 		if (m.coins === undefined || delta === 0) return;
 		m.coins += delta;
 		this.wallets?.add(m.id, delta);
-		const conn = this.byId.get(m.id);
+		const conn = this.connectionFor(m.id);
 		if (conn !== undefined) {
-			this.transport.persist(conn, m);
-			this.transport.send(conn, { t: "WALLET", coins: m.coins, change: delta, why });
+			transport.persist(conn, m);
+			transport.send(conn, { t: "WALLET", coins: m.coins, change: delta, why });
 		}
 	}
 
@@ -1896,7 +1920,7 @@ export class RoomCore<C> {
 			if (err) return err;
 		}
 		// one thing at a time: an activity ends
-		const conn = this.byId.get(m.id);
+		const conn = this.connectionFor(m.id);
 		if (conn !== undefined && m.doing) this.stopDoing(conn, m, now);
 		if (m.job) {
 			this.payJob(m, now);
@@ -1917,12 +1941,12 @@ export class RoomCore<C> {
 	}
 
 	/** What working or studying has earned since it was last paid: one coin per EARN_MS. */
-	private payJob(m: Member, now: number): void {
+	private payJob(m: Member, now: number, transport = this.transport): void {
 		if (!m.job) return;
 		const earned = Math.floor((now - m.job.since) / EARN_MS) - m.job.paid;
 		if (earned <= 0) return;
 		m.job.paid += earned;
-		this.spend(m, earned, m.job.kind);
+		this.spend(m, earned, m.job.kind, transport);
 	}
 
 	/**
@@ -1939,7 +1963,7 @@ export class RoomCore<C> {
 		job.settled = now;
 		job.used = round2((job.used ?? 0) + (r.delta.energy ?? 0));
 		if (save) this.lifeStore?.save(m.id, r.life);
-		const conn = tell ? this.byId.get(m.id) : undefined;
+		const conn = tell ? this.connectionFor(m.id) : undefined;
 		if (conn === undefined) return;
 		const zone = this.world.jobZones?.find((z) => z.id === job.zone);
 		this.transport.send(conn, {
@@ -1956,14 +1980,14 @@ export class RoomCore<C> {
 	}
 
 	private jobChanged(m: Member): void {
-		const conn = this.byId.get(m.id);
+		const conn = this.connectionFor(m.id);
 		if (conn !== undefined) this.transport.persist(conn, m);
 		this.broadcastAll({ t: "JOBBED", id: m.id, job: m.job?.kind ?? null });
 	}
 
 	/** Pays everyone at work, and ends the work of those no longer where they work. */
 	payJobs(now = this.clock()): void {
-		for (const m of this.members.values()) {
+		for (const m of this.memberValues()) {
 			if (!m.job) continue;
 			if (!this.inJobZone(m, m.job.zone, now)) this.stopJob(m, now);
 			else {
@@ -1990,7 +2014,7 @@ export class RoomCore<C> {
 
 	/** Records liveness for a message the adapter handled itself. */
 	touch(conn: C): void {
-		const v = this.volatile.get(conn);
+		const v = this.participantFor(conn)?.runtime;
 		if (v) v.lastSeen = this.clock();
 	}
 
@@ -2229,7 +2253,7 @@ export class RoomCore<C> {
 
 		if (conv && target) {
 			if (target.kind === "ai") {
-				const targetConn = this.byId.get(target.id);
+				const targetConn = this.connectionFor(target.id);
 				if (targetConn !== undefined)
 					this.transport.send(targetConn, {
 						t: "ADDRESSED",
@@ -2284,7 +2308,7 @@ export class RoomCore<C> {
 		if (a?.kind === "ai" && b?.kind === "ai" && this.rules.aiPairCooldownMs > 0)
 			this.pairCooldown.set(pairKey(c.a, c.b), this.clock() + this.rules.aiPairCooldownMs);
 		for (const id of [c.a, c.b]) {
-			const conn = this.byId.get(id);
+			const conn = this.connectionFor(id);
 			if (conn !== undefined) this.transport.send(conn, { t: "CONV_END", convId: c.id, reason });
 		}
 		this.syncConvs(c.a, c.b);
@@ -2465,7 +2489,7 @@ export class RoomCore<C> {
 		if (near(this.world.spawn, SPAWN_CLEAR)) return "スポーン地点のそばには建てられません";
 		const landmark = this.world.landmarks.find((l) => near(l.pos, LANDMARK_CLEAR));
 		if (landmark) return `${landmark.name}の上には建てられません`;
-		for (const o of this.members.values())
+		for (const o of this.memberValues())
 			if (near(this.positionOf(o, now), 0.2)) return `そこに${o.name}がいます`;
 		return null;
 	}
@@ -2478,7 +2502,7 @@ export class RoomCore<C> {
 		for (const l of this.world.landmarks)
 			if (!find(spawn, walk.closestPoint(l.pos)))
 				return `道をふさいでしまいます（${l.name}へ行けなくなります）`;
-		for (const o of this.members.values())
+		for (const o of this.memberValues())
 			if (!find(walk.closestPoint(this.positionOf(o, now)), spawn))
 				return `道をふさいでしまいます（${o.name}が出られなくなります）`;
 		return null;
@@ -2494,7 +2518,7 @@ export class RoomCore<C> {
 
 	/** Someone walking a path that now runs into something built stops where they are. */
 	private stopThoseCrossing(now: number): void {
-		for (const [conn, m] of this.members) {
+		for (const [conn, m] of this.memberEntries()) {
 			if (m.move.kind !== "path") continue;
 			const rest = remainingPath(m.move, now);
 			if (rest.length < 2 || this.walk.validatePath(rest)) continue;
@@ -2506,7 +2530,7 @@ export class RoomCore<C> {
 
 	/** Builds change where everyone can walk, so everyone hears about them (not only within interest). */
 	private broadcastAll(msg: HostToClient): void {
-		for (const conn of this.members.keys()) this.transport.send(conn, msg);
+		for (const conn of this.connections()) this.transport.send(conn, msg);
 	}
 
 	// ---- spatial ------------------------------------------------------------
@@ -2535,7 +2559,7 @@ export class RoomCore<C> {
 
 	contextFor(m: Member, now = this.clock()): SpatialContext {
 		const pos = this.positionOf(m, now);
-		const nearbyAvatars = [...this.members.values()]
+		const nearbyAvatars = [...this.memberValues()]
 			.filter((o) => o.id !== m.id && !this.blockedBetween(m.id, o.id))
 			.map((o) => ({
 				id: o.id,
@@ -2610,7 +2634,7 @@ export class RoomCore<C> {
 		const now = this.clock();
 		const at = this.positionOf(subject, now);
 		const roster = msg.t === "JOINED" || msg.t === "LEFT" || msg.t === "STATUS_CHANGED";
-		for (const [conn, r] of this.members) {
+		for (const [conn, r] of this.memberEntries()) {
 			if (conn === except) continue;
 			if (social && r.id !== subject.id && this.silenced(r.id, subject.id)) continue;
 			if (!roster && r.kind === "ai" && r.id !== subject.id && r.id !== alsoTo) {
@@ -2621,21 +2645,18 @@ export class RoomCore<C> {
 	}
 
 	private removeMember(conn: C, reason: LeaveReason): void {
-		const m = this.members.get(conn);
-		this.volatile.delete(conn);
-		this.away.delete(conn);
-		if (!m) return;
+		const participant = this.participantFor(conn);
+		if (!participant) return;
+		const m = participant.member;
 		// what working or studying earned until now goes into the wallet (D1); it is not carried on elsewhere
 		if (m.job) {
-			this.payJob(m, this.clock());
+			this.payJob(m, this.clock(), this.directTransport);
 			this.settleJob(m, this.clock(), false);
 			delete m.job;
 		}
-		this.members.delete(conn);
-		if (this.byId.get(m.id) === conn) {
-			this.byId.delete(m.id);
-			this.relations.delete(m.id);
-		}
+		this.participants.delete(m.id);
+		this.connectionToId.delete(conn);
+		this.relations.delete(m.id);
 		for (const c of [...this.convs.values()]) if (c.a === m.id || c.b === m.id) this.endConv(c, "left");
 		this.leads.delete(m.id);
 		// what they were doing ends with what they did of it; their life is saved as it is
@@ -2654,9 +2675,34 @@ export class RoomCore<C> {
 		this.broadcastAbout(m, { t: "LEFT", id: m.id, reason });
 	}
 
-	private memberById(id: AvatarId): Member | undefined {
-		const conn = this.byId.get(id);
-		return conn === undefined ? undefined : this.members.get(conn);
+	memberById(id: AvatarId): Member | undefined {
+		return this.participants.get(id)?.member;
+	}
+
+	memberFor(conn: C): Member | undefined {
+		return this.participantFor(conn)?.member;
+	}
+
+	private participantFor(conn: C): Participant<C> | undefined {
+		const id = this.connectionToId.get(conn);
+		const participant = id === undefined ? undefined : this.participants.get(id);
+		return participant?.connection.conn === conn ? participant : undefined;
+	}
+
+	private connectionFor(id: AvatarId): C | undefined {
+		return this.participants.get(id)?.connection.conn;
+	}
+
+	*memberEntries(): IterableIterator<[C, Member]> {
+		for (const { member, connection } of this.participants.values()) yield [connection.conn, member];
+	}
+
+	*memberValues(): IterableIterator<Member> {
+		for (const { member } of this.participants.values()) yield member;
+	}
+
+	*connections(): IterableIterator<C> {
+		for (const { connection } of this.participants.values()) yield connection.conn;
 	}
 
 	toState(m: Member): AvatarState {
