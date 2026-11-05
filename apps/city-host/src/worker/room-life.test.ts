@@ -174,6 +174,24 @@ describe("an AI's life in the room", () => {
 		expect(saved.at(-1)?.[0]).toBe("a_mina");
 	});
 
+	test("reconnection preserves the current life and wallet instead of stale entry values", () => {
+		const { room, advance, now } = setup();
+		const first = conn("first");
+		const staleLife = { ...newLife(SEVEN), energy: 40 };
+		room.join(first, ai({ life: staleLife }), "bath");
+		room.handle(first, { t: "ACT", activity: "onsen_bath" });
+		expect(of(first, "WALLET").at(-1)?.coins).toBe(92);
+		advance(realMs(30) + 1000);
+		room.sweep(() => now());
+		expect(of(first, "ACT_DONE")[0]?.life?.energy).toBeCloseTo(48, 0);
+		room.dropped(first);
+		const back = conn("back");
+		room.join(back, ai({ life: staleLife, coins: 100 }));
+		expect(of(back, "WELCOME")[0]).toMatchObject({ resumed: true });
+		expect(of(back, "WELCOME")[0]?.life?.energy).toBeCloseTo(48, 0);
+		expect(of(back, "WALLET")[0]?.coins).toBe(92);
+	});
+
 	test("too far, closed, full, too hungry or too poor: refused", () => {
 		const { room } = setup();
 		const c = conn("mina");
