@@ -66,6 +66,7 @@ import { BuildPanel } from "./build-ui.ts";
 import { BuildsView, makeObject, modelsFromHost } from "./builds.ts";
 import { VIEW_LABEL, VIEWS, type View, ViewController } from "./camera.ts";
 import { createCityAvatars } from "./city-avatars.ts";
+import { MOTION_EMOJI, showExpression } from "./city-expression.ts";
 import { el } from "./dom.ts";
 import { type Me, patchMe, showLogin, showWelcome } from "./entry.ts";
 import { Following } from "./following.ts";
@@ -92,19 +93,6 @@ export interface Navigator {
 	isWalkable(p: Vec2): boolean;
 }
 
-const MOTION_EMOJI: Record<Motion, string> = {
-	wave: "👋",
-	nod: "🙂",
-	bow: "🙇",
-	jump: "⤴️",
-	sit: "🪑",
-	lie: "🛌",
-	handstand: "🤸",
-	roll: "⤵️",
-	backroll: "↩️",
-	backflip: "🔄",
-	stepback: "🔙",
-};
 const TOGETHER_LABEL: Record<Together, string> = { handshake: "握手", hug: "ハグ" };
 /** Patting your AI's head (🤚, H): the palm comes down on top and moves gently from side to side. */
 const PAT: BodyKey[] = [
@@ -977,36 +965,11 @@ async function startCity(
 				case "CORRECT":
 					if (myId) avatars.get(myId)?.setMove(m.move);
 					break;
-				case "ACTED": {
-					if (relations.silenced(m.id)) break;
-					const v = avatars.get(m.id);
-					const towards = m.target ? avatars.get(m.target)?.root.position : undefined;
-					// shown with the body; an avatar that cannot (a capsule, or walking) shows the emoji
-					if (v && !v.act(m.motion, conn.hostNow(), towards)) v.say(MOTION_EMOJI[m.motion], conn.hostNow());
+				case "ACTED":
+				case "BODIED":
+				case "SAID":
+					showExpression(m, { avatars, relations, attention, hostNow: () => conn.hostNow(), myId, addLog });
 					break;
-				}
-				case "BODIED": {
-					if (relations.silenced(m.id)) break;
-					const v = avatars.get(m.id);
-					const partner = m.to ? (avatars.get(m.to) ?? null) : null;
-					// a model without bones to move shows a hand over its head
-					if (v && !v.moveBody(m.keys, m.at, partner, m.to)) v.say("🤲", conn.hostNow());
-					break;
-				}
-				case "SAID": {
-					if (relations.silenced(m.id)) break;
-					const v = avatars.get(m.id);
-					v?.say(m.text, conn.hostNow());
-					// an AI and its owner talking: it faces them (docs/prd.md 3.4.9)
-					const heard = m.to ? avatars.get(m.to) : undefined;
-					if (v?.state.kind === "ai" && (!m.to || m.to === v.state.ownerId))
-						attention.said(v.state.id, conn.hostNow());
-					if (heard?.state.kind === "ai" && heard.state.ownerId === m.id)
-						attention.said(heard.state.id, conn.hostNow());
-					const to = m.to ? avatars.get(m.to)?.state.name : undefined;
-					addLog(`${v?.state.name ?? "?"}${to ? ` → ${to}` : ""}`, m.text, m.id === myId ? "mine" : "");
-					break;
-				}
 				case "WALLET":
 					statusHud.wallet(m.coins, (m.change ?? 0) > 0);
 					break;
