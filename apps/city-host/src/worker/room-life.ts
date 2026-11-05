@@ -40,10 +40,12 @@ import {
 	WALK_SPEED,
 	withCompany,
 } from "@rojibura/protocol";
+import type { RoomMovement } from "./room-movement.ts";
 import type { RoomSpace } from "./room-space.ts";
 import type { ItemStore, LifeStore, Member, Transport, WalletStore, World } from "./room-types.ts";
 
 interface LifePort<C> {
+	movement: RoomMovement<C>;
 	space: RoomSpace;
 	clock(): number;
 	newId(): string;
@@ -165,15 +167,13 @@ export class RoomLife<C> {
 		if (m.life) m.life = decay(m.life, now);
 		m.doing = { activity: a.id, since: now, until: now + Math.round(realMs(a.minutes)) };
 		const face = m.move.kind === "idle" ? m.move.face : undefined;
-		m.move = {
+		this.port.movement.commit(conn, m, {
 			kind: "idle",
 			pos: this.port.space.positionOf(m, now),
 			at: now,
 			...(a.pose ? { posture: a.pose } : {}),
 			...(face ? { face } : {}),
-		};
-		this.transport.persist(conn, m);
-		this.port.broadcastAbout(m, { t: "MOVED", id: m.id, move: m.move });
+		});
 		this.port.broadcastAbout(m, { t: "ACTING", id: m.id, doing: m.doing });
 		this.sendLife(m);
 		return null;

@@ -38,6 +38,7 @@ import {
 	WALK_SPEED,
 } from "@rojibura/protocol";
 import type { RoomLife } from "./room-life.ts";
+import type { RoomMovement } from "./room-movement.ts";
 import { type RoomSpace, remainingPath } from "./room-space.ts";
 import type { Member, Transport, World } from "./room-types.ts";
 
@@ -45,6 +46,7 @@ interface BodyRuntime {
 	lastBodyAt: number;
 }
 interface InteractionPort<C> {
+	movement: RoomMovement<C>;
 	clock(): number;
 	memberById(id: AvatarId): Member | undefined;
 	memberValues(): IterableIterator<Member>;
@@ -116,16 +118,14 @@ export class RoomInteractions<C> {
 					: m.move.kind === "idle"
 						? m.move.face
 						: undefined;
-			m.move = {
+			this.port.movement.commit(conn, m, {
 				kind: "idle",
 				pos: this.space.positionOf(m, now),
 				at: now,
 				posture: msg.motion,
 				...(face ? { face } : {}),
 				...(seat !== undefined ? { seat } : {}),
-			};
-			this.transport.persist(conn, m);
-			this.port.broadcastAbout(m, { t: "MOVED", id: m.id, move: m.move });
+			});
 			if (seat !== undefined && m.kind === "human" && m.companion) this.seatCompany(m, seat, now);
 		}
 		this.port.broadcastAbout(
@@ -230,13 +230,7 @@ export class RoomInteractions<C> {
 			if (!path && dist(from, front) >= 0.2) continue;
 			taken.add(pick.i);
 			this.life.stopDoing(conn, ai, now);
-			if (path) {
-				ai.move = { kind: "path", path, speed: WALK_SPEED, at: now };
-				this.port.broadcastAbout(ai, { t: "MOVED", id: ai.id, move: ai.move });
-			}
-			const ms = path ? (polylineLength(path) / WALK_SPEED) * 1000 : 0;
-			ai.seatPlan = { seat: pick.i, at: now + ms + 150 };
-			this.transport.persist(conn, ai);
+			this.port.movement.approachSeat(conn, ai, path, pick.i, now);
 		}
 	}
 
@@ -264,16 +258,14 @@ export class RoomInteractions<C> {
 				this.transport.persist(conn, ai);
 				continue;
 			}
-			ai.move = {
+			this.port.movement.commit(conn, ai, {
 				kind: "idle",
 				pos: this.space.positionOf(ai, now),
 				at: now,
 				posture: "sit",
 				...(this.world.seats?.[seat]?.face ? { face: this.world.seats[seat]?.face as Vec2 } : {}),
 				seat,
-			};
-			this.transport.persist(conn, ai);
-			this.port.broadcastAbout(ai, { t: "MOVED", id: ai.id, move: ai.move });
+			});
 			this.port.broadcastAbout(ai, { t: "ACTED", id: ai.id, motion: "sit", target: undefined, at: now });
 		}
 	}
@@ -370,9 +362,12 @@ export class RoomInteractions<C> {
 			here[1] + ((here[1] - from[1]) / d) * STEP_BACK,
 		];
 		if (!this.space.walkOf(other).validatePath([here, to])) return;
-		other.move = { kind: "path", path: [here, to], speed: STEP_BACK / STEP_BACK_S, at: now };
-		this.transport.persist(oc, other);
-		this.port.broadcastAbout(other, { t: "MOVED", id: other.id, move: other.move });
+		this.port.movement.commit(oc, other, {
+			kind: "path",
+			path: [here, to],
+			speed: STEP_BACK / STEP_BACK_S,
+			at: now,
+		});
 		this.port.broadcastAbout(
 			other,
 			{ t: "ACTED", id: other.id, motion: "stepback", at: now },
@@ -387,11 +382,13 @@ export class RoomInteractions<C> {
 		this.life.stopDoing(conn, m, now);
 		const d = dist(here, to);
 		const walk = d > 0.05 && this.space.walkOf(m).validatePath([here, to]);
-		m.move = walk
-			? { kind: "path", path: [here, to], speed: WALK_SPEED, at: now }
-			: { kind: "idle", pos: to, at: now };
-		this.transport.persist(conn, m);
-		this.port.broadcastAbout(m, { t: "MOVED", id: m.id, move: m.move });
+		this.port.movement.commit(
+			conn,
+			m,
+			walk
+				? { kind: "path", path: [here, to], speed: WALK_SPEED, at: now }
+				: { kind: "idle", pos: to, at: now },
+		);
 		return walk ? (d / WALK_SPEED) * 1000 : 0;
 	}
 
@@ -613,9 +610,7 @@ export class RoomInteractions<C> {
 		const end = path[path.length - 1] as Vec2;
 		ai.lead = { to: end, place: lead.place, until: now + ms + LEAD_GRACE_MS };
 		this.life.stopDoing(ac, ai, now);
-		ai.move = { kind: "path", path, speed: WALK_SPEED, at: now };
-		this.transport.persist(ac, ai);
-		this.port.broadcastAbout(ai, { t: "MOVED", id: ai.id, move: ai.move });
+		this.port.movement.commit(ac, ai, { kind: "path", path, speed: WALK_SPEED, at: now });
 		this.transport.send(mc, { t: "LEADING", by: ai.id, to: end, place: lead.place });
 		return true;
 	}
@@ -716,13 +711,11 @@ export class RoomInteractions<C> {
 		// as long as the owner takes; when the owner has stopped, a walk (a run if far behind)
 		const speed = ms > 0 ? (length / ms) * 1000 : length > 6 ? 4 : WALK_SPEED;
 		this.life.stopDoing(conn, ai, now);
-		ai.move = {
+		this.port.movement.commit(conn, ai, {
 			kind: "path",
 			path,
 			speed: this.life.speedFor(ai, Math.min(MAX_SPEED, Math.max(0.5, speed)), now),
 			at: now,
-		};
-		this.transport.persist(conn, ai);
-		this.port.broadcastAbout(ai, { t: "MOVED", id: ai.id, move: ai.move });
+		});
 	}
 }
