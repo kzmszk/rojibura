@@ -68,6 +68,7 @@ import { type Me, patchMe, showLogin, showWelcome } from "./entry.ts";
 import { Following } from "./following.ts";
 import { Going } from "./going.ts";
 import { ItemsView } from "./items.ts";
+import { keyboardIntent } from "./keyboard-input.ts";
 import { type MapPlace, MapView } from "./map.ts";
 import { actionBar, Relations, showAdmin } from "./moderation.ts";
 import { SEASONS, type Season } from "./nature/season.ts";
@@ -1134,58 +1135,85 @@ async function startCity(
 		const k = movementKey(e);
 		if (k && k !== "shift" && softFocus && document.activeElement === input && !input.value && !e.isComposing)
 			input.blur();
-		if (k && k !== "shift" && !typing() && view.view === "cinema" && keys.has("shift")) {
-			// (a key pressed while Shift is held: walking goes on as it was)
-			e.preventDefault();
-			lookKeys.add(k);
-			return;
-		}
-		if (k && !typing()) {
-			e.preventDefault();
-			stopGoing();
-			keys.add(k);
-			settleUntil = 0;
-			steer(performance.now());
-			return;
-		}
-		if (e.key === "Enter" && !typing()) {
-			input.focus();
-			e.preventDefault();
-		} else if (!typing() && flyAlt !== null && (e.key === " " || e.key.toLowerCase() === "c")) {
-			// afloat, Space goes up and C down
-			e.preventDefault();
-			lift.add(e.key === " " ? "up" : "down");
-		} else if (!typing() && !panel.open && e.key.toLowerCase() === "m") {
-			cityMap.toggle();
-		} else if (!typing() && !panel.open && e.key.toLowerCase() === "u" && area.fly) {
-			toggleFly();
-		} else if (!typing() && !panel.open && (e.key === " " || ACTIONS.some(([, , key]) => key === e.key))) {
-			e.preventDefault();
-			act(
-				e.key === " " ? "jump" : (ACTIONS.find(([, , key]) => key === e.key) as (typeof ACTIONS)[number])[0],
-			);
-		} else if (!typing() && !panel.open && e.key.toLowerCase() === "v") {
-			nextView();
-		} else if (!typing() && !panel.open && e.key.toLowerCase() === "e") {
-			pickNearest();
-		} else if (!typing() && !panel.open && e.key.toLowerCase() === "r") {
-			seatOrStand();
-		} else if (!typing() && !panel.open && e.key.toLowerCase() === "h") {
-			patMine();
-		} else if (!typing() && !panel.open && e.key.toLowerCase() === "t") {
-			throwHeld();
-		} else if (!typing() && !panel.open && e.key.toLowerCase() === "g") {
-			if (myId && items.heldBy(myId)) conn.send({ t: "DROP" });
-		} else if (e.key.toLowerCase() === "f" && !typing() && talkTo) {
-			startFollow(talkTo);
-		} else if (panel.open && !typing() && (e.key.toLowerCase() === "q" || e.key.toLowerCase() === "e")) {
-			panel.turn(e.key.toLowerCase() === "q" ? -15 : 15);
-		} else if (e.key === "Escape") {
-			if (panel.open) panel.hide();
-			cityMap.hide();
-			stopGoing();
-			setTarget(null);
-			input.blur();
+		const intent = keyboardIntent({
+			key: e.key,
+			movement: k,
+			typing: typing(),
+			cinema: view.view === "cinema",
+			shiftHeld: keys.has("shift"),
+			flying: flyAlt !== null,
+			panelOpen: panel.open,
+			flyAllowed: Boolean(area.fly),
+			motion: ACTIONS.find(([, , key]) => key === e.key)?.[0],
+			followTarget: talkTo,
+		});
+		switch (intent.kind) {
+			case "look":
+				e.preventDefault();
+				lookKeys.add(intent.key);
+				break;
+			case "move":
+				e.preventDefault();
+				stopGoing();
+				keys.add(intent.key);
+				settleUntil = 0;
+				steer(performance.now());
+				break;
+			case "focus":
+				input.focus();
+				e.preventDefault();
+				break;
+			case "lift":
+				e.preventDefault();
+				lift.add(intent.direction);
+				break;
+			case "map":
+				cityMap.toggle();
+				break;
+			case "fly":
+				toggleFly();
+				break;
+			case "act":
+				e.preventDefault();
+				act(intent.motion);
+				break;
+			case "view":
+				nextView();
+				break;
+			case "pick":
+				pickNearest();
+				break;
+			case "seat":
+				seatOrStand();
+				break;
+			case "pat":
+				patMine();
+				break;
+			case "throw":
+				throwHeld();
+				break;
+			case "drop":
+				if (myId && items.heldBy(myId)) conn.send({ t: "DROP" });
+				break;
+			case "follow":
+				startFollow(intent.targetId);
+				break;
+			case "turn":
+				panel.turn(intent.degrees);
+				break;
+			case "escape":
+				if (panel.open) panel.hide();
+				cityMap.hide();
+				stopGoing();
+				setTarget(null);
+				input.blur();
+				break;
+			case "none":
+				break;
+			default: {
+				const exhaustive: never = intent;
+				return exhaustive;
+			}
 		}
 	});
 
