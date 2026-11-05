@@ -10,7 +10,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
-import type { Mind, ToolResult } from "../../core/resident.ts";
+import type { Mind, ToolResult } from "../../core/mind.ts";
 import type { Logger } from "../../core/types.ts";
 import { type ResidentTool, residentTools } from "./resident-tools.ts";
 

@@ -14,7 +14,7 @@ import {
 	SettingsManager,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import type { Mind, ToolResult } from "../../core/resident.ts";
+import type { Mind, ToolResult } from "../../core/mind.ts";
 import type { Logger } from "../../core/types.ts";
 import { residentTools } from "./resident-tools.ts";
 

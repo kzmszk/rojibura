@@ -13,7 +13,6 @@ import {
 	type BodyKey,
 	type BodyPart,
 	type BudgetLevel,
-	type ClientToHost,
 	COMPANION_FREE,
 	cannotStart,
 	cityTime,
@@ -41,7 +40,8 @@ import {
 	type Vec2,
 	WALK_SPEED,
 } from "@rojibura/protocol";
-import { bodyGuide, type Mirror, type Move, type MoveBook, movesLine } from "./body.ts";
+import { bodyGuide, type Move, movesLine } from "./body.ts";
+import type { BodyToolOptions } from "./body-tools.ts";
 import { BodyTools } from "./body-tools.ts";
 import { type Conversation, Conversations, type Pending } from "./conversations.ts";
 import { Invitation } from "./invitation.ts";
@@ -56,39 +56,22 @@ import {
 	tail,
 } from "./journal.ts";
 import { dayEntry, doneEntry, doneEvent, lifeGuide, lifeLines } from "./life-text.ts";
+import type { Mind, ToolResult } from "./mind.ts";
 import { PrivacyIndex } from "./privacy.ts";
 import { clean, cleanNote, FALLBACK_REPLIES } from "./prompt.ts";
 import { Stroll } from "./stroll.ts";
-import type { Landmark, Logger, Memory, Navigator, Persona } from "./types.ts";
+import type { Landmark, Memory, Navigator, Persona } from "./types.ts";
 import { World } from "./world.ts";
 
-/** What a tool call gives back to the mind: words, and a picture (JPEG) for a mind that can see. */
-export type ToolResult = string | { text: string; image?: Uint8Array };
+export type { Mind, ToolResult } from "./mind.ts";
 
-/** A long-lived mind. While `prompt` runs, the tools it calls go to `Resident.act`. */
-export interface Mind {
-	readonly name: string;
-	/** Hands one batch of city events to the mind; resolves with its plain text once its turn is over. */
-	prompt(text: string): Promise<{ text: string }>;
-	/** Ends the current turn early. */
-	abort(): void;
-}
-
-export interface ResidentOptions {
+export interface ResidentOptions extends BodyToolOptions {
 	persona: Persona;
 	mind: Mind;
 	nav: Navigator;
 	landmarks: Landmark[];
-	logger: Logger;
-	send: (msg: ClientToHost) => void;
 	/** Notes per person (and on itself, under "self"). Without it the resident remembers only what its mind does. */
 	memory?: Memory;
-	/** Where it rehearses body scripts and gets pictures of itself (docs/prd.md 3.4.11). */
-	mirror?: Mirror;
-	/** The moves it has learned, and its album. With `mirror`, it moves its own body. */
-	moves?: MoveBook;
-	/** Whether the mind sees the mirror's pictures (a model that takes images). */
-	sees?: boolean;
 	/** Its diary and long-term memory (docs/life.md 5). With it, it lives: eats, works, plays, looks back. */
 	journal?: Journal;
 	/** What can be done in the area (activities.json), and what the shops' food does. */
