@@ -27,6 +27,15 @@ function error(status: number, message: string): Response {
 	return json({ error: message }, status);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+async function readBody(request: Request): Promise<Record<string, unknown>> {
+	const body: unknown = await request.json().catch(() => null);
+	return isRecord(body) ? body : {};
+}
+
 type ModerationDeps = {
 	db: D1Database;
 	currentAccount: (request: Request) => Promise<Account | null>;
@@ -60,12 +69,12 @@ async function onboarding(request: Request, deps: ModerationDeps): Promise<Respo
 async function relations(request: Request, deps: ModerationDeps): Promise<Response> {
 	const account = await deps.currentAccount(request);
 	if (!account) return error(401, "login required");
-	const b = (await request.json().catch(() => null)) as {
-		targetId?: string;
-		kind?: string;
-		on?: boolean;
-	} | null;
-	if (!b?.targetId || !/^[ha]_[A-Za-z0-9_-]{1,64}$/.test(b.targetId) || b.targetId === account.id)
+	const b = await readBody(request);
+	if (
+		typeof b.targetId !== "string" ||
+		!/^[ha]_[A-Za-z0-9_-]{1,64}$/.test(b.targetId) ||
+		b.targetId === account.id
+	)
 		return error(400, "bad target");
 	if (b.kind !== "mute" && b.kind !== "block") return error(400, "bad kind");
 	const on = b.on !== false;
@@ -83,18 +92,17 @@ async function relations(request: Request, deps: ModerationDeps): Promise<Respon
 async function submitReport(request: Request, deps: ModerationDeps): Promise<Response> {
 	const account = await deps.currentAccount(request);
 	if (!account) return error(401, "login required");
-	const b = (await request.json().catch(() => null)) as {
-		targetId?: string;
-		reason?: string;
-		note?: string;
-	} | null;
-	if (!b?.targetId || !/^[ha]_[A-Za-z0-9_-]{1,64}$/.test(b.targetId)) return error(400, "bad target");
-	if (!REPORT_REASONS.includes(b.reason ?? "")) return error(400, "bad reason");
+	const b = await readBody(request);
+	if (typeof b.targetId !== "string" || !/^[ha]_[A-Za-z0-9_-]{1,64}$/.test(b.targetId))
+		return error(400, "bad target");
+	if (typeof b.reason !== "string" || !REPORT_REASONS.includes(b.reason)) return error(400, "bad reason");
+	if (b.note != null && typeof b.note !== "string") return error(400, "bad note");
 	const note = (b.note ?? "").slice(0, 500);
+	const targetId = b.targetId;
 	const excerpts = await Promise.all(
 		AREA_IDS.map((a) =>
 			deps
-				.roomCommand(a, { op: "excerpt", id: b.targetId as string, minutes: 5 })
+				.roomCommand(a, { op: "excerpt", id: targetId, minutes: 5 })
 				.then((r) => r.json() as Promise<{ lines: unknown[] }>)
 				.catch(() => ({ lines: [] })),
 		),
@@ -102,7 +110,7 @@ async function submitReport(request: Request, deps: ModerationDeps): Promise<Res
 	const id = await createReport(deps.db, {
 		reporterId: account.id,
 		targetId: b.targetId,
-		reason: b.reason as string,
+		reason: b.reason,
 		note,
 		excerpt: excerpts.flatMap((e) => e.lines),
 	});
@@ -136,18 +144,27 @@ async function moderatorReports(request: Request, url: URL, deps: ModerationDeps
 async function moderationAction(request: Request, deps: ModerationDeps): Promise<Response> {
 	const account = await deps.currentAccount(request);
 	if (!account || !isModerator(account)) return error(403, "moderators only");
-	const b = (await request.json().catch(() => null)) as {
-		action?: string;
-		subjectId?: string;
-		minutes?: number;
-		reason?: string;
-		reportId?: string;
-	} | null;
-	const subject = b?.subjectId ?? "";
-	if (!/^[ha]_[A-Za-z0-9_-]{1,64}$/.test(subject)) return error(400, "bad subject");
-	const reason = (b?.reason ?? "").slice(0, 200) || "モデレーション";
+	const b = await readBody(request);
+	const subject = b.subjectId;
+	if (typeof subject !== "string" || !/^[ha]_[A-Za-z0-9_-]{1,64}$/.test(subject))
+		return error(400, "bad subject");
+	if (b.reason != null && typeof b.reason !== "string") return error(400, "bad reason");
+	const reason = (b.reason ?? "").slice(0, 200) || "モデレーション";
+	if (b.action === "suspend" && !subject.startsWith("a_")) return error(400, "only agents can be suspended");
+	if (b.action === "approve" && (!subject.startsWith("a_") || account.role !== "admin"))
+		return error(403, "admins approve agents");
+	if (
+		b.action !== "mute" &&
+		b.action !== "kick" &&
+		b.action !== "ban" &&
+		b.action !== "suspend" &&
+		b.action !== "approve" &&
+		b.action !== "resolve"
+	)
+		return error(400, "bad action");
+	if (b.reportId != null && typeof b.reportId !== "string") return error(400, "bad report");
 	const now = Date.now();
-	switch (b?.action) {
+	switch (b.action) {
 		case "mute": {
 			const minutes = Math.min(Math.max(1, Number(b.minutes) || 10), 24 * 60);
 			await deps.broadcastCommand({ op: "mute", id: subject, until: now + minutes * 60_000 });
@@ -182,25 +199,25 @@ async function moderationAction(request: Request, deps: ModerationDeps): Promise
 			break;
 		}
 		case "suspend":
-			if (!subject.startsWith("a_")) return error(400, "only agents can be suspended");
 			await setAgentTrust(deps.db, subject, "suspended");
 			await deps.broadcastCommand({ op: "kick", id: subject });
 			break;
 		case "approve":
-			if (!subject.startsWith("a_") || account.role !== "admin") return error(403, "admins approve agents");
 			await setAgentTrust(deps.db, subject, "approved");
 			break;
 		case "resolve":
 			break;
-		default:
-			return error(400, "bad action");
+		default: {
+			const exhaustive: never = b.action;
+			return exhaustive;
+		}
 	}
-	if (b?.reportId) await resolveReport(deps.db, b.reportId);
+	if (b.reportId) await resolveReport(deps.db, b.reportId);
 	await logModAction(deps.db, {
 		actorId: account.id,
-		action: b?.action ?? "",
+		action: b.action,
 		subjectId: subject,
-		detail: { minutes: b?.minutes, reason, reportId: b?.reportId },
+		detail: { minutes: b.minutes, reason, reportId: b.reportId },
 	});
 	return json({ ok: true });
 }

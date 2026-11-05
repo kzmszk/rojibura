@@ -99,12 +99,181 @@ describe("moderation route contract", () => {
 			body: { error: "bad target" },
 		});
 	});
-	test("non-string report note currently rejects after validation", async () => {
-		await expect(
-			route("/api/reports", "POST", { targetId: "a_owned", reason: "spam", note: 1 }),
-		).rejects.toThrow();
+	test.each([1, false, ["note"], { text: "note" }])(
+		"rejects non-string report note %j before collecting excerpts",
+		async (note) => {
+			expect(await result("/api/reports", "POST", { targetId: "a_owned", reason: "spam", note })).toEqual({
+				status: 400,
+				body: { error: "bad note" },
+			});
+			expect(room).not.toHaveBeenCalled();
+			expect(sqlite.prepare("SELECT * FROM reports").all()).toHaveLength(0);
+		},
+	);
+	test("report validation checks authentication, target and reason before note", async () => {
+		current = null;
+		expect(await result("/api/reports", "POST", { targetId: "bad", reason: "bad", note: 1 })).toEqual({
+			status: 401,
+			body: { error: "login required" },
+		});
+		current = account;
+		expect(await result("/api/reports", "POST", { targetId: "bad", reason: "bad", note: 1 })).toEqual({
+			status: 400,
+			body: { error: "bad target" },
+		});
+		expect(await result("/api/reports", "POST", { targetId: "a_owned", reason: "bad", note: 1 })).toEqual({
+			status: 400,
+			body: { error: "bad reason" },
+		});
+		expect(room).not.toHaveBeenCalled();
 		expect(sqlite.prepare("SELECT * FROM reports").all()).toHaveLength(0);
 	});
+	test.each([
+		[{}, ""],
+		[{ note: null }, ""],
+		[{ note: "hello" }, "hello"],
+	])("report accepts note %j", async (input, expected) => {
+		expect(
+			await result("/api/reports", "POST", { targetId: "a_owned", reason: "spam", ...input }),
+		).toMatchObject({
+			status: 201,
+		});
+		expect(sqlite.prepare("SELECT note FROM reports").get()).toMatchObject({ note: expected });
+	});
+	test.each([1, false, ["a_owned"], { id: "a_owned" }])(
+		"rejects non-string report target %j",
+		async (targetId) => {
+			expect(await result("/api/reports", "POST", { targetId, reason: "spam" })).toEqual({
+				status: 400,
+				body: { error: "bad target" },
+			});
+			expect(room).not.toHaveBeenCalled();
+			expect(sqlite.prepare("SELECT * FROM reports").all()).toHaveLength(0);
+		},
+	);
+	test.each([1, false, ["h_other"], { id: "h_other" }])(
+		"rejects non-string relation target %j",
+		async (targetId) => {
+			expect(await result("/api/relations", "POST", { targetId, kind: "mute" })).toEqual({
+				status: 400,
+				body: { error: "bad target" },
+			});
+			expect(broadcast).not.toHaveBeenCalled();
+			expect(sqlite.prepare("SELECT * FROM relations").all()).toHaveLength(0);
+		},
+	);
+	test.each([1, false, ["a_owned"], { id: "a_owned" }])(
+		"rejects non-string action subject %j",
+		async (subjectId) => {
+			current = moderator;
+			expect(await result("/api/mod/action", "POST", { action: "kick", subjectId })).toEqual({
+				status: 400,
+				body: { error: "bad subject" },
+			});
+			expect(broadcast).not.toHaveBeenCalled();
+			expect(sqlite.prepare("SELECT * FROM bans").all()).toHaveLength(0);
+			expect(sqlite.prepare("SELECT * FROM mod_actions").all()).toHaveLength(0);
+		},
+	);
+	test.each([1, false, ["reason"], { text: "reason" }])(
+		"rejects non-string action reason %j",
+		async (reason) => {
+			current = moderator;
+			expect(
+				await result("/api/mod/action", "POST", { action: "kick", subjectId: "a_owned", reason }),
+			).toEqual({
+				status: 400,
+				body: { error: "bad reason" },
+			});
+			expect(broadcast).not.toHaveBeenCalled();
+			expect(sqlite.prepare("SELECT * FROM bans").all()).toHaveLength(0);
+			expect(sqlite.prepare("SELECT * FROM mod_actions").all()).toHaveLength(0);
+		},
+	);
+	test("action validation retains authorization and subject precedence", async () => {
+		current = null;
+		expect(await result("/api/mod/action", "POST", { subjectId: "bad", reason: 1 })).toEqual({
+			status: 403,
+			body: { error: "moderators only" },
+		});
+		current = moderator;
+		expect(await result("/api/mod/action", "POST", { subjectId: "bad", reason: 1 })).toEqual({
+			status: 400,
+			body: { error: "bad subject" },
+		});
+		expect(broadcast).not.toHaveBeenCalled();
+		expect(sqlite.prepare("SELECT * FROM mod_actions").all()).toHaveLength(0);
+	});
+	test.each([{}, { reason: null }, { reason: "" }])("action defaults reason for %j", async (input) => {
+		current = moderator;
+		expect(
+			await result("/api/mod/action", "POST", { action: "kick", subjectId: "a_owned", ...input }),
+		).toMatchObject({ status: 200 });
+		expect(sqlite.prepare("SELECT reason FROM bans").get()).toMatchObject({ reason: "モデレーション" });
+	});
+	test.each([["r_1"], { id: "r_1" }, false, 1])(
+		"rejects non-string report ID %j before action effects",
+		async (reportId) => {
+			current = moderator;
+			expect(
+				await result("/api/mod/action", "POST", { action: "kick", subjectId: "a_owned", reportId }),
+			).toEqual({
+				status: 400,
+				body: { error: "bad report" },
+			});
+			expect(broadcast).not.toHaveBeenCalled();
+			expect(sqlite.prepare("SELECT * FROM bans").all()).toHaveLength(0);
+			expect(sqlite.prepare("SELECT * FROM mod_actions").all()).toHaveLength(0);
+		},
+	);
+	test("action validity and permission take precedence over bad report ID", async () => {
+		current = moderator;
+		for (const [action, subjectId, status, error] of [
+			["approve", "a_owned", 403, "admins approve agents"],
+			["suspend", "h_owner", 400, "only agents can be suspended"],
+			["unknown", "a_owned", 400, "bad action"],
+		] as const) {
+			expect(await result("/api/mod/action", "POST", { action, subjectId, reportId: [] })).toEqual({
+				status,
+				body: { error },
+			});
+		}
+		expect(broadcast).not.toHaveBeenCalled();
+		expect(sqlite.prepare("SELECT * FROM mod_actions").all()).toHaveLength(0);
+	});
+	test.each([{}, { reportId: null }, { reportId: "" }])(
+		"action accepts optional report ID %j",
+		async (input) => {
+			current = moderator;
+			expect(
+				await result("/api/mod/action", "POST", { action: "resolve", subjectId: "a_owned", ...input }),
+			).toMatchObject({ status: 200 });
+			expect(sqlite.prepare("SELECT action FROM mod_actions").all()).toHaveLength(1);
+		},
+	);
+	test.each([{ body: null }, { body: [] }, { body: "text" }, { body: 1 }])(
+		"invalid JSON envelope $body returns field errors without effects",
+		async ({ body }) => {
+			expect(await result("/api/relations", "POST", body)).toEqual({
+				status: 400,
+				body: { error: "bad target" },
+			});
+			expect(await result("/api/reports", "POST", body)).toEqual({
+				status: 400,
+				body: { error: "bad target" },
+			});
+			current = moderator;
+			expect(await result("/api/mod/action", "POST", body)).toEqual({
+				status: 400,
+				body: { error: "bad subject" },
+			});
+			expect(room).not.toHaveBeenCalled();
+			expect(broadcast).not.toHaveBeenCalled();
+			expect(sqlite.prepare("SELECT * FROM relations").all()).toHaveLength(0);
+			expect(sqlite.prepare("SELECT * FROM reports").all()).toHaveLength(0);
+			expect(sqlite.prepare("SELECT * FROM mod_actions").all()).toHaveLength(0);
+		},
+	);
 	test("relation writes before notification and defaults on unless false", async () => {
 		broadcast.mockImplementationOnce(async () => {
 			expect(sqlite.prepare("SELECT target_id, kind FROM relations").get()).toMatchObject({
