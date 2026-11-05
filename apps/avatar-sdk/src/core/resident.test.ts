@@ -582,6 +582,23 @@ describe("its own body", () => {
 		expect(moves.moves[0]?.uses).toBe(1);
 	}, 5000);
 
+	test("stopping cancels a body script waiting for its approach", async () => {
+		vi.useFakeTimers();
+		try {
+			const s = setup([{ calls: [["move_body", { keys: pat, to: "h_saki" }]] }], {
+				body: { mirror: fakeMirror(), moves: fakeBook() },
+			});
+			current = s.resident;
+			await s.resident.turnNow();
+			expect(s.sent.some((m) => m.t === "MOVE_PATH")).toBe(true);
+			s.resident.stop();
+			await vi.advanceTimersByTimeAsync(5000);
+			expect(s.sent.some((m) => m.t === "BODY")).toBe(false);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	test("touches nobody but its owner, says what is wrong with a script, and can only rehearse so often", async () => {
 		const mirror = fakeMirror();
 		const s = setup(
