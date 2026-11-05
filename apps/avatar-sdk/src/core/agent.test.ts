@@ -1020,3 +1020,78 @@ test("chooses the first exercise when two are equally close", async () => {
 		vi.useRealTimers();
 	}
 });
+
+test.each(["area", "company", "rejected"] as const)(
+	"an abandoned shopping errand does not buy after %s interrupts it",
+	async (interruption) => {
+		const nine = Date.UTC(2026, 10, 2, 11) + realMs(180);
+		vi.useFakeTimers({ now: nine });
+		try {
+			const sent: ClientToHost[] = [];
+			const nav = { findPath: (a: [number, number], b: [number, number]) => [a, b] };
+			const shop = {
+				id: "seven",
+				name: "店",
+				currency: "銅貨",
+				counter: [10, 0] as [number, number],
+				goods: [{ id: "meal", name: "食事", price: 3, color: "#fff", food: true }],
+			};
+			const agent = new Agent({
+				persona: { name: "ミナ", personality: "" },
+				llm: { name: "fake", complete: async () => null },
+				memory: memory(),
+				nav,
+				landmarks: [],
+				logger: { info: () => {}, warn: () => {} },
+				send: (m) => sent.push(m),
+				wanderMs: [1000, 1000],
+				random: () => 0.99,
+				shops: [shop],
+				foods: { meal: { energy: 25, meal: true } },
+			});
+			const life = newLife(nine);
+			agent.handle({
+				t: "WELCOME",
+				you: "a_mina",
+				serverTime: nine,
+				budget: 0,
+				avatars: [
+					{
+						id: "a_mina",
+						kind: "ai",
+						name: "ミナ",
+						status: "active",
+						assets: { thumb: "", lod: "", vrm: "" },
+						move: { kind: "idle", pos: [0, 0], at: 0 },
+					},
+				],
+				life: { ...life, energy: 30 },
+			});
+			agent.handle({ t: "WALLET", coins: 100 });
+			await vi.advanceTimersByTimeAsync(3100);
+			expect(sent.some((m) => m.t === "MOVE_PATH")).toBe(true);
+			if (interruption === "area") agent.setCity(nav, [], { shops: [shop] });
+			if (interruption === "company") {
+				agent.handle({ t: "COMPANY", owner: "h_k", on: true });
+				agent.handle({ t: "COMPANY", owner: "h_k", on: false });
+			}
+			if (interruption === "rejected") agent.handle({ t: "NOTICE", kind: "rejected", message: "no" });
+			agent.handle({
+				t: "LIFE",
+				id: "a_mina",
+				life: {
+					...life,
+					at: Date.now(),
+					energy: 100,
+					duties: { ...life.duties, meals: 2, work: true, exercise: true },
+				},
+			});
+			agent.handle({ t: "MOVED", id: "a_mina", move: { kind: "idle", pos: [10, 0], at: Date.now() } });
+			await vi.advanceTimersByTimeAsync(20_000);
+			expect(sent.filter((m) => m.t === "BUY")).toEqual([]);
+			agent.stop();
+		} finally {
+			vi.useRealTimers();
+		}
+	},
+);
