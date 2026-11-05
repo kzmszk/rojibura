@@ -60,10 +60,11 @@ import { api, onApiUsage } from "./api.ts";
 import { AreaNature, SEASON_LABEL } from "./area-nature.ts";
 import { currentArea, DETAIL_KEY, savedDetail, sceneFiles, touchFirst, travelUrl } from "./areas.ts";
 import { avatarPicker, saveAvatar, savedAvatar, startingAvatar } from "./avatar-picker.ts";
-import { AvatarView, setSeats, TRAVEL } from "./avatars.ts";
+import { type AvatarView, setSeats, TRAVEL } from "./avatars.ts";
 import { BuildPanel } from "./build-ui.ts";
 import { BuildsView, makeObject, modelsFromHost } from "./builds.ts";
 import { VIEW_LABEL, VIEWS, type View, ViewController } from "./camera.ts";
+import { createCityAvatars } from "./city-avatars.ts";
 import { el } from "./dom.ts";
 import { type Me, patchMe, showLogin, showWelcome } from "./entry.ts";
 import { Following } from "./following.ts";
@@ -75,7 +76,6 @@ import { SEASONS, type Season } from "./nature/season.ts";
 import { CityConnection, type ConnState } from "./net.ts";
 import { rememberFirstVisit, reportFirstVisit } from "./onboarding.ts";
 import { PortalsView } from "./portals.ts";
-import { reconcileAvatars } from "./reconcile-avatars.ts";
 import { CityScene } from "./scene.ts";
 import { SettingsPanel } from "./settings.ts";
 import { ShopsUi } from "./shops.ts";
@@ -804,7 +804,8 @@ async function startCity(
 		});
 	root.append(hud, chat, toast, travel, actsBar, offerBox, agentPanel.el, settings.el, shops.el, cityMap.el);
 
-	const avatars = new Map<AvatarId, AvatarView>();
+	const cityAvatars = createCityAvatars(scene.scene, badgeOf);
+	const avatars = cityAvatars.avatars;
 	/** When an AI and its owner last spoke to each other (host time), by the AI. */
 	const talkAt = new Map<AvatarId, number>();
 	let myId: AvatarId | null = null;
@@ -887,25 +888,14 @@ async function startCity(
 		relations,
 		toast: (t) => showToast(t),
 		onBlocked: (id) => {
-			avatars.get(id)?.dispose();
-			avatars.delete(id);
+			cityAvatars.remove(id);
 			setTarget(null);
 		},
 	});
 	motionBar.append(bar.el);
 
-	const add = (s: AvatarView["state"]) => {
-		if (relations.blocks.has(s.id)) return;
-		avatars.get(s.id)?.dispose();
-		const v = new AvatarView(s, s.id === myId);
-		avatars.set(s.id, v);
-		scene.scene.add(v.root);
-		v.setDoing(badgeOf(s.doing));
-	};
 	// the activities arrive after the first people may have: their badges then
-	void lifeFiles.then(() => {
-		for (const v of avatars.values()) v.setDoing(badgeOf(v.state.doing));
-	});
+	void lifeFiles.then(() => cityAvatars.refreshBadges());
 	const view = new ViewController(scene, { parent: root, walkable: (p) => nav.isWalkable(p) });
 	/** The view chosen outside, while indoors switched it to the eyes. */
 	let viewOutside: View | null = null;
@@ -954,7 +944,7 @@ async function startCity(
 					myId = m.you;
 					// (re)subscribe after every (re)connect
 					if (usage?.isShown) conn.send({ t: "WATCH_USAGE", on: true });
-					reconcileAvatars(avatars, m.avatars, m.you, relations.blocks, add, badgeOf, showFlying, (id) =>
+					cityAvatars.reconcile(m.avatars, m.you, relations.blocks, showFlying, (id) =>
 						agentPanel.present(id),
 					);
 					listTargets();
@@ -1038,7 +1028,7 @@ async function startCity(
 					addLog("", `${avatars.get(m.by)?.state.name ?? "だれか"} が建物を片付けました`, "sys");
 					break;
 				case "JOINED":
-					add(m.avatar);
+					cityAvatars.add(m.avatar, myId, relations.blocks);
 					listTargets();
 					addLog("", `${m.avatar.name} が来ました`, "sys");
 					agentPanel.present(m.avatar.id);
@@ -1049,8 +1039,7 @@ async function startCity(
 					statusHud.gone(m.id);
 					const v = avatars.get(m.id);
 					if (v) addLog("", `${v.state.name} が帰りました`, "sys");
-					v?.dispose();
-					avatars.delete(m.id);
+					cityAvatars.remove(m.id);
 					if (talkTo === m.id) setTarget(null);
 					else listTargets();
 					break;
