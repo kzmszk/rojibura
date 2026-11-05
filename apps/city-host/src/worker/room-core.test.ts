@@ -1,6 +1,6 @@
 import type { ClientToHost, HostToClient, Item, Vec2 } from "@rojibura/protocol";
 import { AI_CONV_MAX_TURNS, PRESENCE_TIMEOUT_MS } from "@rojibura/protocol";
-import { beforeEach, describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import { AWAY_GRACE_MS, RoomCore } from "./room-core.ts";
 import type { JoinInfo, Member, Walkable, WalletStore, World } from "./room-types.ts";
 
@@ -1500,11 +1500,20 @@ describe("floating and warping (docs/prd.md 3.4.13, 3.4.14)", () => {
 		const b = conn("b");
 		ctx.room.join(a, human("alice"));
 		ctx.room.join(b, human("bob"));
-		ctx.room.handle(a, { t: "WARP", to: "cafe" });
+		const outwardRounding = vi.spyOn(Math, "random").mockReturnValueOnce(0.095).mockReturnValueOnce(0.999);
+		try {
+			ctx.room.handle(a, { t: "WARP", to: "cafe" });
+		} finally {
+			outwardRounding.mockRestore();
+		}
 		const moved = last(b);
 		expect(moved?.t).toBe("MOVED");
 		if (moved?.t !== "MOVED" || moved.move.kind !== "idle") throw new Error("no move");
-		expect(Math.hypot(moved.move.pos[0] - 10, moved.move.pos[1] - 10)).toBeLessThanOrEqual(3.01);
+		const maxWarpRadius = 3;
+		const maxCoordinateRoundingError = 0.05;
+		expect(Math.hypot(moved.move.pos[0] - 10, moved.move.pos[1] - 10)).toBeLessThanOrEqual(
+			maxWarpRadius + Math.hypot(maxCoordinateRoundingError, maxCoordinateRoundingError),
+		);
 		ctx.room.handle(a, { t: "WARP", to: "cafe" });
 		expect(last(a)).toMatchObject({ t: "NOTICE", kind: "rejected" });
 		ctx.room.handle(a, { t: "WARP", to: "nowhere" });
@@ -1577,13 +1586,13 @@ describe("movement publication order", () => {
 		const b = conn("b");
 		room.join(a, human("alice"));
 		room.join(b, human("bob"));
+		const alice = room.memberFor(a);
+		if (!alice) throw new Error("alice did not join");
+		const start = room.positionOf(alice);
 		events.length = 0;
 		room.handle(a, {
 			t: "MOVE_PATH",
-			path: [
-				[-10, -10],
-				[-10, 10],
-			],
+			path: [start, [-10, 10]],
 			speed: 1.4,
 			seq: 1,
 		});
