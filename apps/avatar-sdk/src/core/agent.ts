@@ -8,7 +8,6 @@ import {
 	type AvatarState,
 	activityOpen,
 	type BudgetLevel,
-	type ClientToHost,
 	cannotStart,
 	cityTime,
 	clockText,
@@ -20,7 +19,6 @@ import {
 	HUNGRY,
 	ITEM_REACH,
 	type ItemId,
-	type JobZone,
 	LEAD_MIN_DISTANCE,
 	LEAD_PLACE_MAX,
 	LEAD_TEXT_MAX,
@@ -33,6 +31,7 @@ import {
 	type Vec2,
 	WALK_SPEED,
 } from "@rojibura/protocol";
+import type { ErrandOptions } from "./errand.ts";
 import { Errands } from "./errand.ts";
 import { type DiaryPage, diaryMessages, jstDate } from "./journal.ts";
 import {
@@ -47,29 +46,22 @@ import {
 	userPrompt,
 } from "./prompt.ts";
 import { Stroll } from "./stroll.ts";
-import type { Decision, Landmark, LLM, Logger, Memory, Navigator, Persona } from "./types.ts";
+import type { Decision, Landmark, LLM, Memory, Navigator, Persona } from "./types.ts";
 import { World } from "./world.ts";
 
-export interface AgentOptions {
+export interface AgentOptions extends ErrandOptions {
 	persona: Persona;
 	llm: LLM;
 	memory: Memory;
 	nav: Navigator;
-	landmarks: Landmark[];
-	logger: Logger;
-	send: (msg: ClientToHost) => void;
 	/** LLM calls per day before the agent rests (docs/prd.md 3.5.2). */
 	dailyLlmLimit?: number;
 	/** Summarize each finished conversation into memory with one more LLM call (default true). */
 	summarize?: boolean;
 	/** Wander interval range in ms (scaled by the budget level). */
 	wanderMs?: [number, number];
-	/** What can be done in the area (docs/life.md 3): with it, it eats, works and plays by what it needs. */
-	activities?: Activity[];
-	/** The area's shops, what their food does, and where one works or studies (docs/prd.md 3.8.6). */
-	shops?: Shop[];
+	/** What the area's food does (docs/prd.md 3.8.6). */
 	foods?: Record<string, Food>;
-	jobZones?: JobZone[];
 	random?: () => number;
 }
 

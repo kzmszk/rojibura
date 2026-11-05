@@ -1,3 +1,4 @@
+import type { ClientToHost } from "@rojibura/protocol";
 import {
 	type AvatarId,
 	type AvatarState,
@@ -10,10 +11,23 @@ import {
 	parseBodyKeys,
 	sanitizeText,
 } from "@rojibura/protocol";
+import type { Mirror, MoveBook } from "./body.ts";
 import { MOVE_ABOUT_MAX, MOVE_NAME_MAX, MOVE_NOTES_KEPT, type Move } from "./body.ts";
+import type { ToolResult } from "./mind.ts";
 import { clean, cleanNote } from "./prompt.ts";
-import type { ResidentOptions, ToolResult } from "./resident.ts";
+import type { Logger } from "./types.ts";
 import type { World } from "./world.ts";
+
+export interface BodyToolOptions {
+	logger: Logger;
+	send: (msg: ClientToHost) => void;
+	/** Where it rehearses body scripts and gets pictures of itself (docs/prd.md 3.4.11). */
+	mirror?: Mirror;
+	/** The moves it has learned, and its album. With `mirror`, it moves its own body. */
+	moves?: MoveBook;
+	/** Whether the mind sees the mirror's pictures (a model that takes images). */
+	sees?: boolean;
+}
 
 /** What the mirror showed last, not yet learned under a name. */
 interface Practice {
@@ -32,7 +46,7 @@ export class BodyTools {
 	private bodyTimer: ReturnType<typeof setTimeout> | null = null;
 
 	private readonly deps: {
-		options: Pick<ResidentOptions, "mirror" | "moves" | "sees" | "send" | "logger">;
+		options: BodyToolOptions;
 		world: World;
 		find: (name: string) => AvatarState | undefined;
 		approach: (target: AvatarState, distance: number) => number | string;

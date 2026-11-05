@@ -1,3 +1,4 @@
+import type { Activity, ClientToHost } from "@rojibura/protocol";
 import {
 	ACTIVITY_REACH,
 	dist,
@@ -9,8 +10,19 @@ import {
 	type Vec2,
 	WALK_SPEED,
 } from "@rojibura/protocol";
-import type { AgentOptions } from "./agent.ts";
+import type { Landmark, Logger } from "./types.ts";
 import type { World } from "./world.ts";
+
+export interface ErrandOptions {
+	landmarks: Landmark[];
+	logger: Logger;
+	send: (msg: ClientToHost) => void;
+	/** What can be done in the area (docs/life.md 3): with it, it eats, works and plays by what it needs. */
+	activities?: Activity[];
+	/** The area's shops and where one works or studies (docs/prd.md 3.8.6). */
+	shops?: Shop[];
+	jobZones?: JobZone[];
+}
 
 /** Where it is walking, a leg at a time, and what it will do there. */
 type Errand = (
@@ -25,14 +37,14 @@ const MAX_LEGS = 8;
 export class Errands {
 	private going: Errand | null = null;
 
-	private readonly o: AgentOptions;
+	private readonly o: ErrandOptions;
 	private readonly world: World;
 	private readonly walkTo: (to: Vec2) => boolean;
 	private readonly schedule: (delay: number) => void;
 	private readonly random: () => number;
 
 	constructor(
-		o: AgentOptions,
+		o: ErrandOptions,
 		world: World,
 		walkTo: (to: Vec2) => boolean,
 		schedule: (delay: number) => void,
@@ -65,7 +77,7 @@ export class Errands {
 		);
 	}
 
-	activity(a: NonNullable<AgentOptions["activities"]>[number], here: Vec2): boolean {
+	activity(a: NonNullable<ErrandOptions["activities"]>[number], here: Vec2): boolean {
 		const place = this.o.landmarks.find((l) => l.id === a.place);
 		if (!place) return false;
 		const e: Errand = { kind: "act", id: a.id };
