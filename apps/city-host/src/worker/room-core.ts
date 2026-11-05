@@ -3,14 +3,12 @@
 
 import type { KeepOut, ModelNav, PlacedModel } from "@rojibura/nav";
 import {
-	ACTIVITY_REACH,
 	type Activity,
 	type AreaId,
 	type AvatarAssets,
 	type AvatarId,
 	type AvatarKind,
 	type AvatarState,
-	activityOpen,
 	BODY_CALL_REACH,
 	BODY_CALLED_TO,
 	BODY_INTERVAL_MS,
@@ -24,33 +22,17 @@ import {
 	type ClientToHost,
 	COMPANION_FREE,
 	COMPANION_FREE_STEP,
-	COMPANY_MOOD_MS,
-	cannotJob,
-	cannotStart,
-	canRun,
-	cityMinutesOf,
-	cityTime,
-	type DayReview,
 	DIARY_ASK_MS,
 	DIARY_TTL_MS,
 	type Doing,
 	decay,
 	dist,
-	EARN_MS,
-	eatFood,
 	FLY_REACH,
-	FLY_RUN_SPEED,
 	type Food,
-	finishActivity,
-	finishJob,
 	type HostToClient,
-	hoursText,
 	INTEREST_RADIUS_DEFAULT,
-	ITEM_REACH,
 	type Item,
-	type ItemId,
 	type ItemKind,
-	insidePolygon,
 	isPosture,
 	type JobInfo,
 	type JobKind,
@@ -60,43 +42,34 @@ import {
 	LEAD_REACH,
 	type LeaveReason,
 	type LifeState,
-	MAX_GOODS,
 	MAX_PATH_LENGTH,
 	MAX_PATH_POINTS,
 	MAX_SPEED,
 	type ModelId,
 	type MoveState,
-	newDay,
-	newLife,
 	OFFER_REACH,
 	OFFER_TTL_MS,
-	POSITION_TOLERANCE,
 	PRESENCE_TIMEOUT_MS,
 	polylineLength,
 	poseAt,
 	RATE_VIOLATIONS_BEFORE_CLOSE,
-	realMs,
 	SEAT_REACH,
 	type Seat,
 	type Sex,
-	SHOP_REACH,
 	type Shop,
 	type SpatialContext,
 	STEP_BACK,
 	STEP_BACK_S,
 	type Status,
-	THROW_MS,
-	THROW_RANGE,
-	THROW_RELEASE_MS,
 	TOGETHER_GAP,
 	TOGETHER_MS,
 	type Together,
 	type Vec2,
 	WALK_SPEED,
 	WARP_INTERVAL_MS,
-	withCompany,
 } from "@rojibura/protocol";
 import { RoomConversations } from "./room-conversations.ts";
+import { RoomLife } from "./room-life.ts";
 import { type Bucket, takeToken, within } from "./room-rate.ts";
 import { RoomSpace } from "./room-space.ts";
 import { PRODUCTION_RULES, type RoomRules } from "./rules.ts";
@@ -360,7 +333,6 @@ export class RoomCore<C> {
 	private readonly transport: Transport<C>;
 	private readonly world: World;
 	private readonly clock: () => number;
-	private readonly newId: () => string;
 	/** Production limits, or free play (docs/prd.md 3.7). */
 	readonly rules: RoomRules;
 	private readonly space: RoomSpace;
@@ -376,12 +348,7 @@ export class RoomCore<C> {
 		AvatarId,
 		{ owner: AvatarId; at: number; next: number; parts?: number }
 	>();
-	/** Small things in the area (docs/prd.md 3.4.7). */
-	private readonly items = new Map<ItemId, Item>();
-	private readonly itemStore: ItemStore | undefined;
-	private readonly lifeStore: LifeStore | undefined;
-	private readonly wallets: WalletStore | undefined;
-	private readonly directTransport: Transport<C>;
+	private readonly life: RoomLife<C>;
 
 	constructor(
 		transport: Transport<C>,
@@ -398,7 +365,6 @@ export class RoomCore<C> {
 	) {
 		// nothing reaches a dropped connection: what matters is kept for when they are back, and their state
 		// is saved on the new connection
-		this.directTransport = transport;
 		this.transport = {
 			send: (c, msg) => {
 				const state = this.participantFor(c)?.connection;
@@ -426,44 +392,39 @@ export class RoomCore<C> {
 		});
 		this.world = world;
 		this.clock = clock;
-		this.newId = newId;
 		this.rules = options.rules ?? PRODUCTION_RULES;
-		this.itemStore = options.items;
-		this.lifeStore = options.life;
-		this.wallets = options.wallets;
 		this.space = new RoomSpace(world, this.rules, options.store, {
 			clock,
 			newId,
 			members: () => this.memberValues(),
 			memberById: (id) => this.memberById(id),
 			blockedBetween: (a, b) => this.blockedBetween(a, b),
-			activityName: (id) => this.activity(id)?.name ?? id,
-			canJob: (m, kind, now) => !!this.jobZoneAt(m, kind, now),
+			activityName: (id) => this.life.activity(id)?.name ?? id,
+			canJob: (m, kind, now) => !!this.life.jobZoneAt(m, kind, now),
 			broadcastAll: (msg) => this.broadcastAll(msg),
 			stopThoseCrossing: (now) => this.stopThoseCrossing(now),
 		});
+		this.life = new RoomLife(world, this.transport, transport, options, {
+			space: this.space,
+			clock,
+			newId,
+			memberValues: () => this.memberValues(),
+			memberEntries: () => this.memberEntries(),
+			has: (id) => this.has(id),
+			connectionFor: (id) => this.connectionFor(id),
+			isAway: (conn) => this.participantFor(conn)?.connection.kind === "away",
+			accompanying: (m) => this.accompanying(m),
+			broadcastAbout: (m, msg) => this.broadcastAbout(m, msg),
+			broadcastAll: (msg) => this.broadcastAll(msg),
+			notice: (conn, kind, message) => this.notice(conn, kind, message),
+		});
 	}
 
-	/**
-	 * Puts the small things where they were saved, or where the area starts them. Things held by someone who
-	 * is not here (they left while the room slept) lie where they were picked up.
-	 */
 	loadItems(saved: Item[] | undefined): void {
-		this.items.clear();
-		const items: Item[] =
-			saved ??
-			(this.world.items ?? [])
-				.filter((i) => this.space.terrain.isWalkable(i.pos))
-				.map((i) => ({ id: `i_${this.newId()}`, kind: i.kind, pos: i.pos }));
-		for (const item of items) {
-			if (item.holder && !this.participants.has(item.holder)) delete item.holder;
-			this.items.set(item.id, item);
-		}
+		this.life.loadItems(saved);
 	}
-
-	/** The small things, for saving or checking. */
 	get itemList(): Item[] {
-		return [...this.items.values()];
+		return this.life.itemList;
 	}
 
 	/** The walkable area now (the guide plans its walks on it). */
@@ -490,8 +451,6 @@ export class RoomCore<C> {
 		this.connectionToId.set(conn, member.id);
 		this.conversations.restore(member);
 	}
-
-	/** Copies the conversation state of `ids` into their persisted member state. */
 
 	/** Returns a reason when the area cannot take this avatar (docs/prd.md 3.3 item 7). */
 	admissionError(info: JoinInfo): string | null {
@@ -534,7 +493,7 @@ export class RoomCore<C> {
 			move: { kind: "idle", pos: this.space.spawnPoint(arrive), at: now },
 			interest: INTEREST_RADIUS_DEFAULT,
 		};
-		const entered = member.kind === "ai" ? this.lifeOnEntry(info.life, now) : null;
+		const entered = member.kind === "ai" ? this.life.lifeOnEntry(info.life, now) : null;
 		if (entered) member.life = entered.life;
 		else delete member.life;
 		this.participants.set(member.id, {
@@ -547,12 +506,12 @@ export class RoomCore<C> {
 		this.transport.persist(conn, member);
 		this.welcome(conn, member, now);
 		if (entered?.review) {
-			this.lifeStore?.save(member.id, entered.life);
+			this.life.saveLife(member.id, entered.life);
 			this.transport.send(conn, { t: "DAY", review: entered.review, life: entered.life });
 		}
 		// the owner's page shows how their AI is doing (docs/life.md 8), whichever of them came first
-		if (member.kind === "ai") this.sendLife(member, false);
-		else for (const ai of this.memberValues()) if (ai.ownerId === member.id) this.sendLife(ai, false);
+		if (member.kind === "ai") this.life.sendLife(member, false);
+		else for (const ai of this.memberValues()) if (ai.ownerId === member.id) this.life.sendLife(ai, false);
 		if (member.coins !== undefined) this.transport.send(conn, { t: "WALLET", coins: member.coins });
 		this.broadcastAbout(member, { t: "JOINED", avatar: this.toState(member) }, conn);
 		// an AI whose owner is walking with company joins them at once
@@ -621,7 +580,7 @@ export class RoomCore<C> {
 		};
 		if (resumed) welcome.resumed = true;
 		if (this.canBuild) welcome.builds = this.space.buildList;
-		if (this.items.size > 0) welcome.items = [...this.items.values()];
+		if (this.life.itemList.length > 0) welcome.items = this.life.itemList;
 		if (member.life) welcome.life = decay(member.life, now);
 		this.transport.send(conn, welcome);
 	}
@@ -676,7 +635,7 @@ export class RoomCore<C> {
 	sweep(lastPing: (conn: C) => number | null): void {
 		const now = this.clock();
 		this.expireAway();
-		this.payJobs(now);
+		this.life.payJobs(now);
 		for (const [conn, m] of [...this.memberEntries()]) {
 			if (this.participantFor(conn)?.connection.kind === "away") continue;
 			const v = this.participantFor(conn)?.runtime;
@@ -689,7 +648,7 @@ export class RoomCore<C> {
 		}
 		this.conversations.expireConversations(now);
 		this.settleSeatPlans(now);
-		this.lifeTick(now);
+		this.life.lifeTick(now);
 		this.conversations.expireCooldowns(now);
 	}
 
@@ -800,7 +759,7 @@ export class RoomCore<C> {
 				msg.t === "MOVE_PATH" ? this.movePath(conn, m, msg, now) : this.moveVel(conn, m, msg, now);
 				if (m.companion) this.accompany(m, now);
 				// walking out of where one works or studies ends it
-				if (m.job && !this.inJobZone(m, m.job.zone, now)) this.stopJob(m, now);
+				if (m.job && !this.life.inJobZone(m, m.job.zone, now)) this.life.stopJob(m, now);
 				return;
 			}
 			case "FLY":
@@ -812,11 +771,11 @@ export class RoomCore<C> {
 				const err = msg.t === "FLY" ? this.fly(conn, m, msg.alt, now) : this.warp(conn, m, msg.to, now);
 				if (err) this.notice(conn, "rejected", err);
 				if (!err && m.companion) this.accompany(m, now);
-				if (m.job && !this.inJobZone(m, m.job.zone, now)) this.stopJob(m, now);
+				if (m.job && !this.life.inJobZone(m, m.job.zone, now)) this.life.stopJob(m, now);
 				return;
 			}
 			case "JOB": {
-				const err = msg.kind ? this.startJob(m, msg.kind, now) : this.stopJob(m, now);
+				const err = msg.kind ? this.life.startJob(m, msg.kind, now) : this.life.stopJob(m, now);
 				if (err) this.notice(conn, "rejected", err);
 				return;
 			}
@@ -932,14 +891,14 @@ export class RoomCore<C> {
 					msg.t === "OFFER"
 						? this.offer(m, msg.kind, msg.to, now)
 						: msg.t === "PICK"
-							? this.pick(m, msg.item, now)
+							? this.life.pick(m, msg.item, now)
 							: msg.t === "THROW"
-								? this.throwItem(m, msg.dir, now)
+								? this.life.throwItem(m, msg.dir, now)
 								: msg.t === "BUY"
-									? this.buy(m, msg.shop, msg.goods, now)
+									? this.life.buy(m, msg.shop, msg.goods, now)
 									: msg.t === "USE"
-										? this.use(m, now)
-										: this.drop(m, now);
+										? this.life.use(m, now)
+										: this.life.drop(m, now);
 				if (err) this.notice(conn, "rejected", err);
 				return;
 			}
@@ -951,12 +910,12 @@ export class RoomCore<C> {
 					this.violation(conn, v, now);
 					return;
 				}
-				const err = this.startDoing(conn, m, msg.activity, now);
+				const err = this.life.startDoing(conn, m, msg.activity, now);
 				if (err) this.notice(conn, "rejected", err);
 				return;
 			}
 			case "ACT_STOP":
-				this.stopDoing(conn, m, now);
+				this.life.stopDoing(conn, m, now);
 				return;
 			case "DIARY_ASK": {
 				const err = this.askDiary(m, msg, now);
@@ -1062,7 +1021,7 @@ export class RoomCore<C> {
 			const path = dist(from, front) < 0.2 ? null : this.leadPath(from, front, this.space.walkOf(ai));
 			if (!path && dist(from, front) >= 0.2) continue;
 			taken.add(pick.i);
-			this.stopDoing(conn, ai, now);
+			this.life.stopDoing(conn, ai, now);
 			if (path) {
 				ai.move = { kind: "path", path, speed: WALK_SPEED, at: now };
 				this.broadcastAbout(ai, { t: "MOVED", id: ai.id, move: ai.move });
@@ -1217,7 +1176,7 @@ export class RoomCore<C> {
 
 	/** Walks a member a short way to `to` (or puts them there); returns how long it takes (ms). */
 	private stepTo(conn: C, m: Member, here: Vec2, to: Vec2, now: number): number {
-		this.stopDoing(conn, m, now);
+		this.life.stopDoing(conn, m, now);
 		const d = dist(here, to);
 		const walk = d > 0.05 && this.space.walkOf(m).validatePath([here, to]);
 		m.move = walk
@@ -1362,7 +1321,7 @@ export class RoomCore<C> {
 		for (const [conn, ai] of this.memberEntries()) {
 			if (ai.kind !== "ai" || ai.ownerId !== owner.id) continue;
 			const side = slot++ % 2 === 0 ? 1 : -1;
-			this.stopDoing(conn, ai, now);
+			this.life.stopDoing(conn, ai, now);
 			const there = this.beside(
 				at,
 				owner.heading ?? [0, 1],
@@ -1452,7 +1411,7 @@ export class RoomCore<C> {
 		if (!path) return true;
 		const end = path[path.length - 1] as Vec2;
 		ai.lead = { to: end, place: lead.place, until: now + ms + LEAD_GRACE_MS };
-		this.stopDoing(ac, ai, now);
+		this.life.stopDoing(ac, ai, now);
 		ai.move = { kind: "path", path, speed: WALK_SPEED, at: now };
 		this.transport.persist(ac, ai);
 		this.broadcastAbout(ai, { t: "MOVED", id: ai.id, move: ai.move });
@@ -1548,412 +1507,19 @@ export class RoomCore<C> {
 		if (length < 0.15) return;
 		// as long as the owner takes; when the owner has stopped, a walk (a run if far behind)
 		const speed = ms > 0 ? (length / ms) * 1000 : length > 6 ? 4 : WALK_SPEED;
-		this.stopDoing(conn, ai, now);
+		this.life.stopDoing(conn, ai, now);
 		ai.move = {
 			kind: "path",
 			path,
-			speed: this.speedFor(ai, Math.min(MAX_SPEED, Math.max(0.5, speed)), now),
+			speed: this.life.speedFor(ai, Math.min(MAX_SPEED, Math.max(0.5, speed)), now),
 			at: now,
 		};
 		this.transport.persist(conn, ai);
 		this.broadcastAbout(ai, { t: "MOVED", id: ai.id, move: ai.move });
 	}
 
-	// ---- life: activities and the meters (docs/life.md) ----------------------
-
-	private activity(id: string): Activity | undefined {
-		return this.world.activities?.find((a) => a.id === id);
-	}
-
-	/**
-	 * An AI's life as it comes in: where it left off (time away does not count), or a first day. On a new city
-	 * day, the day it last lived is scored and it wakes up (`review`).
-	 */
-	private lifeOnEntry(saved: LifeState | undefined, now: number): { life: LifeState; review?: DayReview } {
-		if (!saved) return { life: newLife(now) };
-		const life: LifeState = { ...saved, at: now };
-		return cityTime(now).block !== saved.block ? newDay(life, now) : { life };
-	}
-
-	/** Starts activity `id` where `m` stands: they stop walking, and sit if it is done sitting. */
-	private startDoing(conn: C, m: Member, id: string, now: number): string | null {
-		const a = this.activity(id);
-		if (!a) return "ここではできないことです";
-		const place = this.world.landmarks.find((l) => l.id === a.place);
-		if (!place) return "ここではできないことです";
-		if (dist(this.positionOf(m, now), place.pos) > ACTIVITY_REACH)
-			return `${place.name}まで行ってからにしてください`;
-		if (!activityOpen(a, cityTime(now).minutes))
-			return `${a.name}は、いまの時間はできません（${hoursText(a)}）`;
-		if (m.doing?.activity === a.id) return `もう${a.name}をしています`;
-		const others = [...this.memberValues()].filter((o) => o.id !== m.id && o.doing?.activity === a.id);
-		if (a.capacity !== undefined && others.length >= a.capacity) return `${a.name}は、いまいっぱいです`;
-		if (m.life) {
-			const err = cannotStart(decay(m.life, now), a);
-			if (err) return err;
-		}
-		// it costs coins from the wallet, like a shop (the host's guide pays nothing)
-		const cost = m.system ? 0 : (a.cost ?? 0);
-		if (cost > 0) {
-			if (m.coins === undefined) return "お財布が見つかりません（入り直してください）";
-			if (m.coins < cost) return `銅貨が${cost - m.coins}枚足りません（働くか勉強すると増えます）`;
-		}
-		this.stopDoing(conn, m, now);
-		if (m.job) this.stopJob(m, now);
-		if (cost > 0) this.spend(m, -cost, "buy");
-		if (m.life) m.life = decay(m.life, now);
-		m.doing = { activity: a.id, since: now, until: now + Math.round(realMs(a.minutes)) };
-		const face = m.move.kind === "idle" ? m.move.face : undefined;
-		m.move = {
-			kind: "idle",
-			pos: this.positionOf(m, now),
-			at: now,
-			...(a.pose ? { posture: a.pose } : {}),
-			...(face ? { face } : {}),
-		};
-		this.transport.persist(conn, m);
-		this.broadcastAbout(m, { t: "MOVED", id: m.id, move: m.move });
-		this.broadcastAbout(m, { t: "ACTING", id: m.id, doing: m.doing });
-		this.sendLife(m);
-		return null;
-	}
-
-	/**
-	 * Ends what `m` is doing: done once its time is up, otherwise stopped part way, with that share of its
-	 * effects and pay. `tell`: false when they are leaving (nobody needs to hear, nothing to persist).
-	 */
-	private stopDoing(conn: C, m: Member, now: number, tell = true): void {
-		const d = m.doing;
-		if (!d) return;
-		delete m.doing;
-		const a = this.activity(d.activity);
-		const share = Math.min(1, Math.max(0, (now - d.since) / Math.max(1, d.until - d.since)));
-		const done: Extract<HostToClient, { t: "ACT_DONE" }> = {
-			t: "ACT_DONE",
-			activity: d.activity,
-			share: round2(share),
-		};
-		if (m.life && a) {
-			const r = finishActivity(decay(m.life, now), a, share);
-			m.life = r.life;
-			done.delta = r.delta;
-			done.life = r.life;
-			this.lifeStore?.save(m.id, r.life);
-		}
-		if (!tell) return;
-		this.transport.persist(conn, m);
-		this.transport.send(conn, done);
-		this.broadcastAbout(m, { t: "ACTING", id: m.id, doing: null });
-		this.sendLife(m, false);
-	}
-
-	/** Activities whose time is up end; AIs whose city day is over wake up to a new one. */
-	private lifeTick(now: number): void {
-		const block = cityTime(now).block;
-		for (const [conn, m] of [...this.memberEntries()]) {
-			if (this.participantFor(conn)?.connection.kind === "away") continue;
-			if (m.doing && m.doing.until <= now) this.stopDoing(conn, m, now);
-			if (m.life && m.life.block !== block) {
-				// the work done so far belongs to the day that ends
-				if (m.job) this.settleJob(m, now, false);
-				const { life, review } = newDay(decay(m.life, now), now);
-				m.life = life;
-				this.transport.persist(conn, m);
-				this.lifeStore?.save(m.id, life);
-				this.transport.send(conn, { t: "DAY", review, life });
-				this.sendLife(m, false);
-			}
-			if (m.life) this.companyMood(conn, m, now);
-			// too hungry to go on working or studying
-			if (m.job && m.life) {
-				const from = m.job.settled ?? m.job.since;
-				const left = finishJob(decay(m.life, now), m.job.kind, cityMinutesOf(now - from)).life.energy;
-				if (left <= 0) {
-					this.stopJob(m, now);
-					this.notice(conn, "rejected", "おなかがすいて、もう働けません。何か食べてください");
-				}
-			}
-		}
-	}
-
-	/** Walking with its owner here, an AI feels better: COMPANY_MOOD for each COMPANY_MOOD_MS beside them. */
-	private companyMood(conn: C, m: Member, now: number): void {
-		if (!m.life || !this.accompanying(m)) {
-			if (m.companyAt === undefined) return;
-			delete m.companyAt;
-			this.transport.persist(conn, m);
-			return;
-		}
-		const since = m.companyAt ?? now;
-		const life = withCompany(m.life, now - since);
-		m.companyAt = since + Math.floor((now - since) / COMPANY_MOOD_MS) * COMPANY_MOOD_MS;
-		this.transport.persist(conn, m);
-		if (life === m.life || life.mood === m.life.mood) return;
-		m.life = life;
-		this.sendLife(m);
-	}
-
-	/** Tells an AI (`self`) and its owner here what its life is now. */
-	private sendLife(m: Member, self = true): void {
-		if (!m.life) return;
-		const msg: HostToClient = {
-			t: "LIFE",
-			id: m.id,
-			life: m.life,
-			...(m.coins !== undefined ? { coins: m.coins } : {}),
-		};
-		const own = this.connectionFor(m.id);
-		if (self && own !== undefined) this.transport.send(own, msg);
-		const owner = m.kind === "ai" ? this.connectionFor(m.ownerId) : undefined;
-		if (owner !== undefined) this.transport.send(owner, msg);
-	}
-
-	/** On the ground no faster than MAX_SPEED (afloat, FLY_RUN_SPEED); an AI too hungry or unfit to run walks. */
-	private speedFor(m: Member, speed: number, now: number): number {
-		const capped = Math.min(speed, m.fly !== undefined ? FLY_RUN_SPEED : MAX_SPEED);
-		return m.life && capped > WALK_SPEED && !canRun(decay(m.life, now)) ? WALK_SPEED : capped;
-	}
-
-	/** How far a move may start from where the host thinks one is: further afloat, where one goes fast. */
-	private tolerance(m: Member): number {
-		const speed = m.fly !== undefined && m.move.kind !== "idle" ? m.move.speed : 0;
-		return POSITION_TOLERANCE + speed * 0.3;
-	}
-
-	// ---- small things (docs/prd.md 3.4.7) -----------------------------------
-
-	private holding(id: AvatarId): Item | undefined {
-		for (const item of this.items.values()) if (item.holder === id) return item;
-		return undefined;
-	}
-
-	private itemChanged(item: Item): void {
-		this.itemStore?.save([...this.items.values()]);
-		this.broadcastAll({ t: "ITEM", item });
-	}
-
-	private pick(m: Member, id: ItemId, now: number): string | null {
-		const item = this.items.get(id);
-		if (!item) return "それはありません";
-		if (item.holder) return "ほかの人が持っています";
-		if (this.holding(m.id)) return "もう何か持っています";
-		if (item.flight && now < item.flight.at + item.flight.dur) return "まだ飛んでいます";
-		if (dist(this.positionOf(m, now), item.pos) > ITEM_REACH) return "もっと近くに行ってください";
-		item.holder = m.id;
-		delete item.flight;
-		this.itemChanged(item);
-		return null;
-	}
-
-	/** Lands THROW_RANGE ahead, or on the nearest ground short of it (no bouncing, no catching). */
-	private throwItem(m: Member, dir: Vec2, now: number): string | null {
-		const item = this.holding(m.id);
-		if (!item) return "何も持っていません";
-		const from = this.positionOf(m, now);
-		const ahead: Vec2 = [from[0] + dir[0] * THROW_RANGE, from[1] + dir[1] * THROW_RANGE];
-		delete item.holder;
-		item.pos = this.space.terrain.isWalkable(ahead) ? ahead : this.space.terrain.closestPoint(ahead);
-		item.flight = { from, at: now + THROW_RELEASE_MS, dur: THROW_MS };
-		this.itemChanged(item);
-		return null;
-	}
-
-	private drop(m: Member, now: number): string | null {
-		const item = this.holding(m.id);
-		if (!item) return "何も持っていません";
-		delete item.holder;
-		delete item.flight;
-		item.pos = this.positionOf(m, now);
-		this.itemChanged(item);
-		return null;
-	}
-
-	// ---- shops (docs/prd.md 3.8.6) -------------------------------------------
-
-	/** Buys at a shop's counter: the thing is in the buyer's hand. Coins are not counted (yet). */
-	private buy(m: Member, shopId: string, goodsId: string, now: number): string | null {
-		const shop = this.world.shops?.find((s) => s.id === shopId);
-		const goods = shop?.goods.find((g) => g.id === goodsId);
-		if (!shop || !goods) return "そのお店では売っていません";
-		if (this.holding(m.id)) return "手に持っているものを置いてから買ってください";
-		if (dist(this.positionOf(m, now), shop.counter) > SHOP_REACH) return "お店のカウンターまで行ってください";
-		// the host's own guide has no wallet and pays nothing; anyone else without one cannot buy
-		if (m.coins === undefined && !m.system) return "お財布が見つかりません（入り直してください）";
-		if (m.coins !== undefined) {
-			if (m.coins < goods.price)
-				return `${shop.currency}が${goods.price - m.coins}枚足りません（お店や宿で働くか、学校で勉強すると増えます）`;
-			this.spend(m, -goods.price, "buy");
-		}
-		const item: Item = {
-			id: `i_${this.newId()}`,
-			kind: "goods",
-			goods: { id: goods.id, name: goods.name, color: goods.color, ...(goods.food ? { food: true } : {}) },
-			pos: this.positionOf(m, now),
-			holder: m.id,
-		};
-		this.items.set(item.id, item);
-		this.itemChanged(item);
-		// bought things pile up: the oldest one lying about goes
-		const bought = [...this.items.values()].filter((i) => i.kind === "goods");
-		const spare = bought.filter((i) => !i.holder);
-		for (let k = 0; k < bought.length - MAX_GOODS && k < spare.length; k++) this.itemGone(spare[k] as Item);
-		return null;
-	}
-
-	/** Eats or drinks what the member holds; for an AI that lives here, it is food (docs/life.md 2). */
-	private use(m: Member, now: number): string | null {
-		const item = this.holding(m.id);
-		if (!item) return "何も持っていません";
-		const goods = item.goods;
-		if (!goods?.food) return "それは食べられません";
-		this.itemGone(item, m.id);
-		if (m.life) {
-			const food = this.world.foods?.[goods.id];
-			const r = eatFood(decay(m.life, now), food);
-			m.life = r.life;
-			this.lifeStore?.save(m.id, r.life);
-			const conn = this.connectionFor(m.id);
-			if (conn !== undefined) {
-				this.transport.persist(conn, m);
-				this.transport.send(conn, {
-					t: "ACT_DONE",
-					activity: goods.id,
-					share: 1,
-					name: `${goods.name}を${food?.drink ? "飲んだ" : "食べた"}${food?.meal ? "（ごはん）" : ""}`,
-					delta: r.delta,
-					life: r.life,
-				});
-			}
-			this.sendLife(m, false);
-		}
-		return null;
-	}
-
-	/** Adds to (or takes from) a wallet, saves it and tells its owner. */
-	private spend(m: Member, delta: number, why: "buy" | JobKind, transport = this.transport): void {
-		if (m.coins === undefined || delta === 0) return;
-		m.coins += delta;
-		this.wallets?.add(m.id, delta);
-		const conn = this.connectionFor(m.id);
-		if (conn !== undefined) {
-			transport.persist(conn, m);
-			transport.send(conn, { t: "WALLET", coins: m.coins, change: delta, why });
-		}
-	}
-
-	// ---- working and studying (docs/prd.md 3.8.6) -----------------------------
-
-	/** The zone of this kind where `m` stands, if any. */
-	private jobZoneAt(m: Member, kind: JobKind, now: number): JobZone | undefined {
-		const pos = this.positionOf(m, now);
-		return this.world.jobZones?.find((z) => z.kind === kind && insidePolygon(pos, z.poly));
-	}
-
-	/** Still in that zone, and not walking out of it. */
-	private inJobZone(m: Member, zoneId: string, now: number): boolean {
-		const zone = this.world.jobZones?.find((z) => z.id === zoneId);
-		if (!zone) return false;
-		const end = m.move.kind === "path" ? m.move.path[m.move.path.length - 1] : undefined;
-		return insidePolygon(this.positionOf(m, now), zone.poly) && (!end || insidePolygon(end, zone.poly));
-	}
-
-	private startJob(m: Member, kind: JobKind, now: number): string | null {
-		const zone = this.jobZoneAt(m, kind, now);
-		if (!zone)
-			return kind === "work"
-				? "ここでは働けません（お店、温泉宿の帳場、広場の屋台で働けます）"
-				: "ここでは勉強できません（学校と本屋で勉強できます）";
-		if (m.job?.kind === kind && m.job.zone === zone.id) return null;
-		if (m.life) {
-			const err = cannotJob(decay(m.life, now));
-			if (err) return err;
-		}
-		// one thing at a time: an activity ends
-		const conn = this.connectionFor(m.id);
-		if (conn !== undefined && m.doing) this.stopDoing(conn, m, now);
-		if (m.job) {
-			this.payJob(m, now);
-			this.settleJob(m, now, true);
-		}
-		m.job = { kind, zone: zone.id, since: now, paid: 0 };
-		this.jobChanged(m);
-		return null;
-	}
-
-	private stopJob(m: Member, now: number): string | null {
-		if (!m.job) return null;
-		this.payJob(m, now);
-		this.settleJob(m, now, true);
-		delete m.job;
-		this.jobChanged(m);
-		return null;
-	}
-
-	/** What working or studying has earned since it was last paid: one coin per EARN_MS. */
-	private payJob(m: Member, now: number, transport = this.transport): void {
-		if (!m.job) return;
-		const earned = Math.floor((now - m.job.since) / EARN_MS) - m.job.paid;
-		if (earned <= 0) return;
-		m.job.paid += earned;
-		this.spend(m, earned, m.job.kind, transport);
-	}
-
-	/**
-	 * The work or study until `now` goes into an AI's life (energy, skill, the day's work, docs/life.md 2).
-	 * `tell`: it is over, and the AI hears what it did (ACT_DONE, for its diary). `save`: false for the
-	 * minute-by-minute update while it goes on (D1 is written when it ends, on a new morning and on leaving).
-	 */
-	private settleJob(m: Member, now: number, tell: boolean, save = true): void {
-		const job = m.job;
-		if (!job || !m.life) return;
-		const info = this.world.jobs?.[job.zone];
-		const r = finishJob(decay(m.life, now), job.kind, cityMinutesOf(now - (job.settled ?? job.since)), info);
-		m.life = r.life;
-		job.settled = now;
-		job.used = round2((job.used ?? 0) + (r.delta.energy ?? 0));
-		if (save) this.lifeStore?.save(m.id, r.life);
-		const conn = tell ? this.connectionFor(m.id) : undefined;
-		if (conn === undefined) return;
-		const zone = this.world.jobZones?.find((z) => z.id === job.zone);
-		this.transport.send(conn, {
-			t: "ACT_DONE",
-			activity: job.zone,
-			share: 1,
-			name: `${zone?.name ?? job.zone}で${job.kind === "work" ? "働いた" : "勉強した"}`,
-			...(info?.about ? { about: info.about } : {}),
-			minutes: Math.round(cityMinutesOf(now - job.since)),
-			delta: { energy: Math.round(job.used * 10) / 10, ...(job.paid > 0 ? { coins: job.paid } : {}) },
-			life: r.life,
-		});
-		this.sendLife(m, false);
-	}
-
-	private jobChanged(m: Member): void {
-		const conn = this.connectionFor(m.id);
-		if (conn !== undefined) this.transport.persist(conn, m);
-		this.broadcastAll({ t: "JOBBED", id: m.id, job: m.job?.kind ?? null });
-	}
-
-	/** Pays everyone at work, and ends the work of those no longer where they work. */
 	payJobs(now = this.clock()): void {
-		for (const m of this.memberValues()) {
-			if (!m.job) continue;
-			if (!this.inJobZone(m, m.job.zone, now)) this.stopJob(m, now);
-			else {
-				this.payJob(m, now);
-				// an AI hears how its day's work is going (and its owner sees it) as it goes
-				if (m.life) {
-					this.settleJob(m, now, false, false);
-					this.sendLife(m);
-				}
-			}
-		}
-	}
-
-	private itemGone(item: Item, by?: AvatarId): void {
-		this.items.delete(item.id);
-		this.itemStore?.save([...this.items.values()]);
-		this.broadcastAll({ t: "ITEM_GONE", id: item.id, ...(by ? { by } : {}) });
+		this.life.payJobs(now);
 	}
 
 	private moveToken(v: Volatile, now: number): boolean {
@@ -1975,7 +1541,7 @@ export class RoomCore<C> {
 	private movePath(conn: C, m: Member, msg: Extract<ClientToHost, { t: "MOVE_PATH" }>, now: number): void {
 		const here = this.positionOf(m, now);
 		const start = msg.path[0] as Vec2;
-		const fromHere = dist(start, here) <= this.tolerance(m);
+		const fromHere = dist(start, here) <= this.life.tolerance(m);
 		const clear = (path: Vec2[]) =>
 			m.fly !== undefined ? path.every((p) => this.inSky(p)) : this.space.walkOf(m).validatePath(path);
 		// start exactly where the host thinks the avatar is, so everyone interpolates the same line; that way is
@@ -1991,8 +1557,8 @@ export class RoomCore<C> {
 			this.reject(conn, m, here, now);
 			return;
 		}
-		this.stopDoing(conn, m, now);
-		m.move = { kind: "path", path, speed: this.speedFor(m, msg.speed, now), at: now };
+		this.life.stopDoing(conn, m, now);
+		m.move = { kind: "path", path, speed: this.life.speedFor(m, msg.speed, now), at: now };
 		this.transport.persist(conn, m);
 		this.broadcastAbout(m, { t: "MOVED", id: m.id, move: m.move });
 	}
@@ -2005,19 +1571,25 @@ export class RoomCore<C> {
 				? this.inSky(msg.pos)
 				: this.space.walkOf(m).isWalkable(msg.pos) &&
 					(dist(msg.pos, here) < 0.05 || this.space.walkOf(m).validatePath([here, msg.pos]));
-		if (dist(msg.pos, here) > this.tolerance(m) || !open) {
+		if (dist(msg.pos, here) > this.life.tolerance(m) || !open) {
 			this.reject(conn, m, here, now);
 			return;
 		}
 		const still = msg.dir[0] === 0 && msg.dir[1] === 0;
-		if (msg.speed > 0 && !still) this.stopDoing(conn, m, now);
+		if (msg.speed > 0 && !still) this.life.stopDoing(conn, m, now);
 		// speed 0 with a direction: standing, turned that way (docs/prd.md 3.4.11)
 		m.move =
 			msg.speed === 0 && !still
 				? { kind: "idle", pos: msg.pos, at: now, face: msg.dir }
 				: msg.speed === 0 || still
 					? { kind: "idle", pos: msg.pos, at: now }
-					: { kind: "vel", pos: msg.pos, dir: msg.dir, speed: this.speedFor(m, msg.speed, now), at: now };
+					: {
+							kind: "vel",
+							pos: msg.pos,
+							dir: msg.dir,
+							speed: this.life.speedFor(m, msg.speed, now),
+							at: now,
+						};
 		this.transport.persist(conn, m);
 		this.broadcastAbout(m, { t: "MOVED", id: m.id, move: m.move });
 	}
@@ -2039,7 +1611,7 @@ export class RoomCore<C> {
 		const lifting = m.fly === undefined;
 		m.fly = alt;
 		if (lifting) {
-			this.stopDoing(conn, m, now);
+			this.life.stopDoing(conn, m, now);
 			// a posture ends: one floats up standing
 			const here = this.positionOf(m, now);
 			if (m.move.kind === "idle" && m.move.posture) {
@@ -2079,7 +1651,7 @@ export class RoomCore<C> {
 		if (!place) return "その場所はありません";
 		if (m.warpedAt !== undefined && now - m.warpedAt < WARP_INTERVAL_MS) return "少し待ってください";
 		m.warpedAt = now;
-		this.stopDoing(conn, m, now);
+		this.life.stopDoing(conn, m, now);
 		if (m.fly !== undefined) {
 			delete m.fly;
 			this.broadcastAbout(m, { t: "FLEW", id: m.id, alt: null });
@@ -2176,11 +1748,7 @@ export class RoomCore<C> {
 		if (!participant) return;
 		const m = participant.member;
 		// what working or studying earned until now goes into the wallet (D1); it is not carried on elsewhere
-		if (m.job) {
-			this.payJob(m, this.clock(), this.directTransport);
-			this.settleJob(m, this.clock(), false);
-			delete m.job;
-		}
+		this.life.leaveJob(m);
 		this.participants.delete(m.id);
 		this.connectionToId.delete(conn);
 		this.relations.delete(m.id);
@@ -2188,17 +1756,11 @@ export class RoomCore<C> {
 		this.leads.delete(m.id);
 		// what they were doing ends with what they did of it; their life is saved as it is
 		const now = this.clock();
-		if (m.doing) this.stopDoing(conn, m, now, false);
-		else if (m.life) this.lifeStore?.save(m.id, decay(m.life, now));
+		this.life.leaveActivity(conn, m, now);
 		// their AIs no longer walk with them
 		if (m.companion) this.tellCompany(m, false);
 		// what they held stays where they were
-		const held = this.holding(m.id);
-		if (held) {
-			delete held.holder;
-			held.pos = this.positionOf(m);
-			this.itemChanged(held);
-		}
+		this.life.dropHeld(m);
 		this.broadcastAbout(m, { t: "LEFT", id: m.id, reason });
 	}
 
@@ -2269,7 +1831,7 @@ function round1(n: number): number {
 	return Math.round(n * 10) / 10;
 }
 
-function round2(n: number): number {
+function _round2(n: number): number {
 	return Math.round(n * 100) / 100;
 }
 
