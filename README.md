@@ -189,6 +189,7 @@ node tools/city-build/src/build-raster.ts ~/work/demos/venice/public/data/island
 
 ```bash
 node apps/city-host/scripts/smoke.ts            # 通し確認（ログイン、入場、AI認証、移動、会話、ping）
+node apps/city-host/scripts/recovery.ts         # 瞬断復帰、通知の再送、接続交換、通常退出と復帰期限切れ（約25秒）
 node apps/city-host/scripts/moderation.ts       # ミュート、通報、追放
 node apps/city-host/scripts/load.ts --seconds 60  # 100体の負荷試験
 node tools/snap.ts out.png "http://localhost:5173/auth/dev/login?name=snap&redirect=/"  # ヘッドレス Chrome で撮影
