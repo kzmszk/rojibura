@@ -40,8 +40,8 @@ import {
 	WALK_SPEED,
 	withCompany,
 } from "@rojibura/protocol";
-import type { ItemStore, LifeStore, Member, Transport, WalletStore, World } from "./room-core.ts";
 import type { RoomSpace } from "./room-space.ts";
+import type { ItemStore, LifeStore, Member, Transport, WalletStore, World } from "./room-types.ts";
 
 interface LifePort<C> {
 	space: RoomSpace;
@@ -122,7 +122,7 @@ export class RoomLife<C> {
 	}
 	// ---- life: activities and the meters (docs/life.md) ----------------------
 
-	activity(id: string): Activity | undefined {
+	private activity(id: string): Activity | undefined {
 		return this.world.activities?.find((a) => a.id === id);
 	}
 

@@ -11,7 +11,8 @@ import {
 import type { Build, ClientToHost, HostToClient, Vec2 } from "@rojibura/protocol";
 import { AI_CONV_MAX_TURNS } from "@rojibura/protocol";
 import { describe, expect, test } from "vitest";
-import { type JoinInfo, RoomCore, type World } from "./room-core.ts";
+import { RoomCore } from "./room-core.ts";
+import type { JoinInfo, World } from "./room-types.ts";
 import { FREE_PLAY_RULES, PRODUCTION_RULES, type RoomRules } from "./rules.ts";
 import { walkFor } from "./world.ts";
 

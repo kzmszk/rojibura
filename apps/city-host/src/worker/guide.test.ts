@@ -3,7 +3,8 @@ import type { HostToClient, Vec2 } from "@rojibura/protocol";
 import { beforeEach, describe, expect, test } from "vitest";
 import { fixedAnswer, GUIDE_DAILY_LLM_CALLS, GUIDE_ID, Guide, type GuideSaved } from "./guide.ts";
 import { GuideMemory, type Kv, SETTLE_MS } from "./guide-memory.ts";
-import { type JoinInfo, RoomCore, type World } from "./room-core.ts";
+import { RoomCore } from "./room-core.ts";
+import type { JoinInfo, World } from "./room-types.ts";
 
 type Conn = { name: string; inbox: HostToClient[] };
 

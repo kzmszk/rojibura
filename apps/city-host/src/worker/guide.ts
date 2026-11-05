@@ -25,7 +25,8 @@ import {
 	WALK_SPEED,
 } from "@rojibura/protocol";
 import { GuideMemory, jstDay, MEMORY_SCHEMA, type SummaryJob } from "./guide-memory.ts";
-import type { JoinInfo, Member, RoomCore, World } from "./room-core.ts";
+import type { RoomCore } from "./room-core.ts";
+import type { JoinInfo, Member, World } from "./room-types.ts";
 import { GUIDE_PRESET } from "./world.ts";
 
 export const GUIDE_ID = "a_guide";

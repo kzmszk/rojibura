@@ -14,6 +14,7 @@ import {
 	type JobKind,
 	MAX_PATH_LENGTH,
 	MAX_PATH_POINTS,
+	type MoveState,
 	polylineLength,
 	poseAt,
 	type Sex,
@@ -21,7 +22,7 @@ import {
 	type Vec2,
 } from "@rojibura/protocol";
 import { findBuildPlacement } from "./build-placement.ts";
-import type { BuildStore, Member, Walkable, World } from "./room-core.ts";
+import type { BuildStore, Member, Walkable, World } from "./room-types.ts";
 import type { RoomRules } from "./rules.ts";
 
 interface SpacePort {
@@ -30,8 +31,6 @@ interface SpacePort {
 	members(): IterableIterator<Member>;
 	memberById(id: AvatarId): Member | undefined;
 	blockedBetween(a: AvatarId, b: AvatarId): boolean;
-	activityName(id: string): string;
-	canJob(member: Member, kind: JobKind, now: number): boolean;
 	broadcastAll(message: HostToClient): void;
 	stopThoseCrossing(now: number): void;
 }
@@ -57,6 +56,21 @@ export class RoomSpace {
 		this.store = store;
 		this.port = port;
 		this.walk = world.walk;
+	}
+	landingPoint(m: Member, p: Vec2): Vec2 {
+		const walk = this.walkOf(m);
+		let at: Vec2 = walk.isWalkable(p) ? p : walk.closestPoint(p);
+		for (let r = 1; r <= 30 && !walk.isWalkable(at); r++)
+			for (let k = 0; k < 16; k++) {
+				const q: Vec2 = [p[0] + Math.cos((k * Math.PI) / 8) * r, p[1] + Math.sin((k * Math.PI) / 8) * r];
+				if (walk.isWalkable(q)) {
+					at = q;
+					break;
+				}
+			}
+		if (!walk.isWalkable(at)) at = this.world.spawn;
+		const rounded: Vec2 = [round1(at[0]), round1(at[1])];
+		return walk.isWalkable(rounded) ? rounded : at;
 	}
 	get terrain(): Walkable {
 		return this.walk;
@@ -222,7 +236,7 @@ export class RoomSpace {
 		return poseAt(m.move, now, (p) => (this.walk.isWalkable(p) ? p : this.walk.closestPoint(p))).pos;
 	}
 
-	contextFor(m: Member, now = this.port.clock()): SpatialContext {
+	contextFor(m: Member, now: number, canJobAt: (kind: JobKind) => boolean): SpatialContext {
 		const pos = this.positionOf(m, now);
 		const nearbyAvatars = [...this.port.members()]
 			.filter((o) => o.id !== m.id && !this.port.blockedBetween(m.id, o.id))
@@ -231,7 +245,11 @@ export class RoomSpace {
 				name: o.name,
 				kind: o.kind,
 				distance: round1(dist(pos, this.positionOf(o, now))),
-				...(o.doing ? { doing: this.port.activityName(o.doing.activity) } : {}),
+				...(o.doing
+					? {
+							doing: this.world.activities?.find((a) => a.id === o.doing?.activity)?.name ?? o.doing.activity,
+						}
+					: {}),
 			}))
 			.filter((o) => o.distance <= CONTEXT_AVATAR_RADIUS)
 			.sort((a, b) => a.distance - b.distance)
@@ -251,7 +269,7 @@ export class RoomSpace {
 		};
 		if (m.coins !== undefined) context.coins = m.coins;
 		if (m.job) context.job = m.job.kind;
-		const canJob = (["work", "study"] as const).filter((k) => this.port.canJob(m, k, now));
+		const canJob = (["work", "study"] as const).filter((k) => canJobAt(k));
 		if (canJob.length > 0) context.canJob = canJob;
 		// free play: the area's own builds; elsewhere: what was published, part of the city
 		const builds = this.canBuild ? [...this.builds.values()] : (this.world.fixedBuilds ?? []);
@@ -282,4 +300,20 @@ export class RoomSpace {
 		}
 		return at && this.walk.isWalkable(at.pos) ? at.pos : this.world.spawn;
 	}
+}
+
+/** The part of a path move still ahead at `now`, starting where the avatar is. */
+export function remainingPath(move: Extract<MoveState, { kind: "path" }>, now: number): Vec2[] {
+	let left = (move.speed * Math.max(0, now - move.at)) / 1000;
+	for (let i = 1; i < move.path.length; i++) {
+		const a = move.path[i - 1] as Vec2;
+		const b = move.path[i] as Vec2;
+		const seg = dist(a, b);
+		if (left < seg) {
+			const f = seg > 0 ? left / seg : 0;
+			return [[a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f], ...move.path.slice(i)];
+		}
+		left -= seg;
+	}
+	return [];
 }

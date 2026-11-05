@@ -14,7 +14,8 @@ import {
 	WALK_SPEED,
 } from "@rojibura/protocol";
 import { describe, expect, test } from "vitest";
-import { type JoinInfo, RoomCore, type Walkable } from "./room-core.ts";
+import { RoomCore } from "./room-core.ts";
+import type { JoinInfo, Walkable } from "./room-types.ts";
 
 const walk: Walkable = {
 	isWalkable: (p) => Math.abs(p[0]) <= 40 && Math.abs(p[1]) <= 40,

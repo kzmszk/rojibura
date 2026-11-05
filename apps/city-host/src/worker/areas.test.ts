@@ -2,7 +2,8 @@
 // (That each area's files are where `dir` says is checked in tools/city-build/src/areas.test.ts.)
 import type { HostToClient, Vec2 } from "@rojibura/protocol";
 import { expect, test } from "vitest";
-import { type JoinInfo, RoomCore } from "./room-core.ts";
+import { RoomCore } from "./room-core.ts";
+import type { JoinInfo } from "./room-types.ts";
 import { AREA_IDS, AREAS, MAIN_AREA, worldOf } from "./world.ts";
 
 test("the main area comes first and builds", () => {

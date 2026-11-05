@@ -27,15 +27,8 @@ import { GuideMemory, type Kv } from "./guide-memory.ts";
 import { CLOSING_NOTICE_MS, closingTime, describeHours, type Hours, isOpen, parseHours } from "./hours.ts";
 import { checkModelNav, cleanModelName, glbJson, modelIdOf, paintColor } from "./models.ts";
 import { freePlayOn } from "./modes.ts";
-import {
-	type ChatLine,
-	CLOSE_CLOSING,
-	CLOSE_POLICY,
-	type JoinInfo,
-	type Member,
-	RoomCore,
-	type World,
-} from "./room-core.ts";
+import { CLOSE_CLOSING, CLOSE_POLICY, RoomCore } from "./room-core.ts";
+import type { ChatLine, JoinInfo, Member, World } from "./room-types.ts";
 import { FREE_PLAY_RULES, PRODUCTION_RULES } from "./rules.ts";
 import { meteredD1, type SavedUsage, UsageMeter } from "./usage.ts";
 import { BUILTIN_MODELS, freePlayWorld, MAIN_AREA, PUBLISHED, worldOf } from "./world.ts";

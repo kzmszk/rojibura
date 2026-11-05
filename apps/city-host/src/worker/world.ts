@@ -48,7 +48,7 @@ import modelIndex from "../../../../assets/models/index.json";
 import lampNav from "../../../../assets/models/lamp.nav.json";
 import towerNav from "../../../../assets/models/tower.nav.json";
 import treeNav from "../../../../assets/models/tree.nav.json";
-import type { BuildWorld, Walkable, World } from "./room-core.ts";
+import type { BuildWorld, Walkable, World } from "./room-types.ts";
 
 /** Segments are sampled this densely so a long segment cannot cut across an obstacle. */
 const SAMPLE_SPACING = 0.25;

@@ -1,14 +1,8 @@
 import type { ClientToHost, HostToClient, Item, Vec2 } from "@rojibura/protocol";
 import { AI_CONV_MAX_TURNS, PRESENCE_TIMEOUT_MS } from "@rojibura/protocol";
 import { beforeEach, describe, expect, test } from "vitest";
-import {
-	AWAY_GRACE_MS,
-	type JoinInfo,
-	RoomCore,
-	type Walkable,
-	type WalletStore,
-	type World,
-} from "./room-core.ts";
+import { AWAY_GRACE_MS, RoomCore } from "./room-core.ts";
+import type { JoinInfo, Walkable, WalletStore, World } from "./room-types.ts";
 
 // 40 x 40 m square with a 10 x 10 m building in the middle (x, z in [-5, 5]).
 const inBuilding = (p: Vec2) => Math.abs(p[0]) < 5 && Math.abs(p[1]) < 5;

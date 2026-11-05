@@ -5,8 +5,8 @@ import {
 	type HostToClient,
 	type SpatialContext,
 } from "@rojibura/protocol";
-import type { ChatLine, Conv, Member, Transport } from "./room-core.ts";
 import { type Bucket, takeToken, within } from "./room-rate.ts";
+import type { ChatLine, Conv, Member, Transport } from "./room-types.ts";
 import type { RoomRules } from "./rules.ts";
 
 interface SpeechRuntime {
@@ -44,7 +44,10 @@ export class RoomConversations<C> {
 	private readonly convs = new Map<string, Conv>();
 	private readonly pairCooldown = new Map<string, number>();
 	private readonly humanToAi = new Map<string, number[]>();
-	readonly chatLog: ChatLine[] = [];
+	private readonly log: ChatLine[] = [];
+	get chatLog(): readonly ChatLine[] {
+		return this.log;
+	}
 	private readonly port: ConversationPort<C>;
 	constructor(port: ConversationPort<C>) {
 		this.port = port;
@@ -202,8 +205,8 @@ export class RoomConversations<C> {
 		if (target) said.to = target.id;
 		if (conv) said.convId = conv.id;
 		this.port.broadcastAbout(m, said, undefined, target?.id, true);
-		this.chatLog.push({ at: now, id: m.id, name: m.name, to: target?.id, text: msg.text });
-		if (this.chatLog.length > CHAT_LOG_MAX) this.chatLog.splice(0, this.chatLog.length - CHAT_LOG_MAX);
+		this.log.push({ at: now, id: m.id, name: m.name, to: target?.id, text: msg.text });
+		if (this.log.length > CHAT_LOG_MAX) this.log.splice(0, this.log.length - CHAT_LOG_MAX);
 
 		if (conv && target) {
 			if (target.kind === "ai") {
