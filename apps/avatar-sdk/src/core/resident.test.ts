@@ -349,6 +349,46 @@ describe("Resident", () => {
 		expect(s.prompts[1]).not.toContain("ひとつめ");
 	});
 
+	test("a human speaking again during a turn gets a separate answer", async () => {
+		let release = () => {};
+		const hold = new Promise<void>((r) => {
+			release = r;
+		});
+		const s = setup([{ hold, text: "古い返事" }, { text: "新しい返事" }]);
+		current = s.resident;
+		s.resident.handle(addressed("h_saki", "ひとつめ"));
+		await until(() => s.prompts.length === 1);
+		s.resident.handle(addressed("h_saki", "ふたつめ"));
+		release();
+		await until(() => says(s.sent).length === 1 && !s.resident.busy);
+		expect(s.prompts).toHaveLength(2);
+		expect(s.prompts[1]).toContain("ふたつめ");
+		expect(says(s.sent)).toEqual([{ t: "SAY", text: "新しい返事", convId: "c_h_saki" }]);
+	});
+
+	test("an address still receives an answer when recall finishes after the conversation ends", async () => {
+		let release = () => {};
+		const hold = new Promise<void>((r) => {
+			release = r;
+		});
+		const mem = memory();
+		const recall = mem.recall;
+		mem.recall = async (id) => {
+			if (id === "h_saki") await hold;
+			return recall(id);
+		};
+		const s = setup([{ text: "返事" }], { memory: mem });
+		current = s.resident;
+		s.resident.handle(addressed("h_saki", "こんにちは", "c_1"));
+		s.resident.handle({ t: "CONV_END", convId: "c_1", reason: "timeout" });
+		expect(mem.notes.h_saki?.[0]).toContain("こんにちは");
+		expect(s.prompts).toHaveLength(0);
+		release();
+		await until(() => says(s.sent).length === 1);
+		expect(s.prompts[0]).toContain("こんにちは");
+		expect(says(s.sent)).toEqual([{ t: "SAY", text: "返事", convId: "c_1" }]);
+	});
+
 	test("city text is cleaned and stays inside the event block", async () => {
 		const s = setup([{}]);
 		current = s.resident;
