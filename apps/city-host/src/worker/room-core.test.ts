@@ -26,7 +26,12 @@ const walk: Walkable = {
 
 type Conn = { name: string; inbox: HostToClient[]; closed?: number };
 
-function setup(extra: Partial<World> = {}, saved?: (items: Item[]) => void, wallets?: WalletStore) {
+function setup(
+	extra: Partial<World> = {},
+	saved?: (items: Item[]) => void,
+	wallets?: WalletStore,
+	persisted?: (conn: Conn) => void,
+) {
 	let now = 1_000_000;
 	let n = 0;
 	const clock = { now: () => now, advance: (ms: number) => (now += ms) };
@@ -36,7 +41,7 @@ function setup(extra: Partial<World> = {}, saved?: (items: Item[]) => void, wall
 			close: (c, code) => {
 				c.closed = code;
 			},
-			persist: () => {},
+			persist: (c) => persisted?.(c),
 		},
 		{
 			walk,
@@ -336,6 +341,90 @@ describe("a dropped connection", () => {
 		ctx.room.handle(back, { t: "SAY", text: "聞こえるよ", convId });
 		expect(last(h)).toMatchObject({ t: "SAID", id: "a_mina", to: "h_alice", convId });
 		expect(ctx.room.size).toBe(3);
+	});
+
+	test("away messages are replayed in order after welcome and wallet, up to 50", () => {
+		const listener = conn("listener");
+		const speaker = conn("speaker");
+		const watcher = conn("watcher");
+		place(listener, human("alice", { coins: 100 }), [0, -10]);
+		place(speaker, ai("guide", "host", { system: true }), [3, -10]);
+		place(watcher, human("bob"), [4, -10]);
+		listener.inbox.length = 0;
+		watcher.inbox.length = 0;
+		ctx.room.dropped(listener);
+		for (let i = 0; i < 52; i++) ctx.room.handle(speaker, { t: "SAY", text: `message ${i}` });
+		ctx.room.handle(speaker, { t: "MOVE_VEL", pos: [3, -10], dir: [0, 0], speed: 0, seq: 1 });
+		expect(watcher.inbox).toContainEqual(expect.objectContaining({ t: "MOVED", id: "a_guide" }));
+		expect(listener.inbox).toEqual([]);
+
+		const back = conn("back");
+		ctx.room.join(back, human("alice", { coins: 1 }));
+		expect(back.inbox.slice(0, 2)).toMatchObject([
+			{ t: "WELCOME", resumed: true },
+			{ t: "WALLET", coins: 100 },
+		]);
+		expect(back.inbox.slice(2).map((m) => (m.t === "SAID" ? m.text : m.t))).toEqual(
+			Array.from({ length: 50 }, (_, i) => `message ${i}`),
+		);
+	});
+
+	test("conversation updates are not persisted to the disconnected socket", () => {
+		const persisted: Conn[] = [];
+		ctx = setup({}, undefined, undefined, (c) => persisted.push(c));
+		const { h, bot, convId } = talking();
+		persisted.length = 0;
+		ctx.room.dropped(bot);
+		ctx.room.handle(h, { t: "SAY", text: "聞こえる？", convId });
+		expect(persisted).toContain(h);
+		expect(persisted).not.toContain(bot);
+		const back = conn("back");
+		ctx.room.join(back, ai("mina", "alice"));
+		expect(persisted).toContain(back);
+	});
+
+	test("a late drop from the old connection cannot remove the one that resumed", () => {
+		const { bot, other } = talking();
+		const saved = structuredClone(ctx.room.members.get(bot));
+		if (!saved) throw new Error("not joined");
+		ctx.room.dropped(bot);
+		const back = conn("back");
+		ctx.room.join(back, ai("mina", "alice"));
+		other.inbox.length = 0;
+		expect(ctx.room.dropped(bot, saved)).toBeNull();
+		ctx.clock.advance(AWAY_GRACE_MS + 1);
+		ctx.room.expireAway();
+		expect(ctx.room.has("a_mina")).toBe(true);
+		expect(types(other)).not.toContain("LEFT");
+		ctx.room.handle(back, { t: "SAY", text: "まだここにいるよ" });
+		expect(other.inbox).toContainEqual(
+			expect.objectContaining({ t: "SAID", id: "a_mina", text: "まだここにいるよ" }),
+		);
+	});
+
+	test("reconnection retains the previous connection's movement rate limit", () => {
+		const first = conn("first");
+		place(first, human("alice"), [-10, -10]);
+		for (let i = 0; i < 8; i++)
+			ctx.room.handle(first, { t: "MOVE_VEL", pos: [-10, -10], dir: [0, 0], speed: 0, seq: i });
+		expect(first.inbox.filter((m) => m.t === "NOTICE")).toEqual([]);
+		ctx.room.dropped(first);
+		const back = conn("back");
+		ctx.room.join(back, human("alice"));
+		ctx.room.handle(back, { t: "MOVE_VEL", pos: [-10, -10], dir: [0, 0], speed: 0, seq: 8 });
+		expect(back.inbox).toContainEqual(expect.objectContaining({ t: "NOTICE", kind: "rate_limited" }));
+	});
+
+	test("a connection still resumes after the deadline until expiration is processed", () => {
+		const first = conn("first");
+		place(first, human("alice"), [-10, -10]);
+		ctx.room.dropped(first);
+		ctx.clock.advance(AWAY_GRACE_MS + 1);
+		const back = conn("back");
+		ctx.room.join(back, human("alice"));
+		expect(back.inbox[0]).toMatchObject({ t: "WELCOME", resumed: true });
+		ctx.room.expireAway();
+		expect(ctx.room.has("h_alice")).toBe(true);
 	});
 
 	test("not back in time, it leaves then; until then it waits, heartbeat or not", () => {
