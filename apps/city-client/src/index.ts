@@ -19,9 +19,7 @@ import {
 	cityTime,
 	clockText,
 	type Doing,
-	deltaText,
 	dist,
-	energyWord,
 	FLY_ALT_MAX,
 	FLY_ALT_MIN,
 	FLY_REACH,
@@ -31,9 +29,7 @@ import {
 	hoursText,
 	ITEM_REACH,
 	type ItemId,
-	type LifeState,
 	MAX_SAY_LENGTH,
-	MEALS_PER_DAY,
 	type Motion,
 	OFFER_REACH,
 	OFFER_TTL_MS,
@@ -46,7 +42,6 @@ import {
 	SEAT_REACH,
 	type Seat,
 	type SeatsData,
-	SKILL_NAMES,
 	seatsOf,
 	TOGETHER_MS,
 	type Together,
@@ -67,6 +62,7 @@ import { BuildsView, makeObject, modelsFromHost } from "./builds.ts";
 import { VIEW_LABEL, VIEWS, type View, ViewController } from "./camera.ts";
 import { createCityAvatars } from "./city-avatars.ts";
 import { MOTION_EMOJI, showExpression } from "./city-expression.ts";
+import { activityBadge, showLifeMessage } from "./city-life.ts";
 import { el } from "./dom.ts";
 import { type Me, patchMe, showLogin, showWelcome } from "./entry.ts";
 import { Following } from "./following.ts";
@@ -321,26 +317,7 @@ async function startCity(
 			...(area.portals ?? []).map((p) => ({ id: p.id, name: p.name, pos: p.pos, major: true, gate: true })),
 		]);
 	});
-	const badgeOf = (d?: Doing | null) => {
-		if (!d) return null;
-		const a = activities.find((x) => x.id === d.activity);
-		return { emoji: a?.emoji ?? "⏳", name: a?.name ?? d.activity, exercise: a?.kind === "exercise" };
-	};
-	/** An AI's life in a few lines, for its owner's panel. */
-	const lifeText = (life: LifeState, doing?: Doing, coins?: number) => {
-		const skills = Object.entries(life.skills)
-			.filter(([, v]) => v > 0)
-			.map(([k, v]) => `${SKILL_NAMES[k] ?? k} ${Math.round(v)}`)
-			.join("・");
-		const badge = badgeOf(doing);
-		return [
-			`暮らして${life.days}日目`,
-			`エネルギー ${Math.round(life.energy)}（${energyWord(life.energy)}）・体力 ${Math.round(life.fitness)}・こころ ${Math.round(life.mood)}${coins !== undefined ? `・👛 ${coins} 銅貨` : ""}`,
-			`今日：ごはん ${life.duties.meals}/${MEALS_PER_DAY}・仕事か勉強 ${life.duties.work ? "✓" : "まだ"}・運動 ${life.duties.exercise ? "✓" : "まだ"}`,
-			...(skills ? [`腕前：${skills}`] : []),
-			...(badge ? [`いま：${badge.emoji} ${badge.name}`] : []),
-		].join("\n");
-	};
+	const badgeOf = (d?: Doing | null) => activityBadge(d, activities);
 	// free play (docs/prd.md 3.7): what has been built, and the walkable area with it
 	let navVersion = 0;
 	modelsFromHost(building);
@@ -974,51 +951,24 @@ async function startCity(
 					statusHud.wallet(m.coins, (m.change ?? 0) > 0);
 					break;
 				case "JOBBED":
-					avatars.get(m.id)?.setJob(m.job);
-					if (m.id === myId)
-						showToast(
-							m.job === "work"
-								? "働きはじめました（1分で1銅貨）。歩いて出ると終わります"
-								: m.job === "study"
-									? "勉強をはじめました（1分で1銅貨）。歩いて出ると終わります"
-									: "おつかれさまでした",
-						);
+				case "ACTING":
+				case "ACT_DONE":
+				case "LIFE":
+					showLifeMessage(m, {
+						avatars,
+						activities,
+						myId,
+						statusHud,
+						agentPanel,
+						showToast,
+						invalidateActivities: () => {
+							shownActs = "";
+						},
+					});
 					break;
 				case "STATUS_CHANGED":
 					avatars.get(m.id)?.setStatus(m.status);
 					break;
-				// what people do at places (docs/life.md 3, 8)
-				case "ACTING": {
-					const v = avatars.get(m.id);
-					if (!v) break;
-					if (m.doing) v.state.doing = m.doing;
-					else delete v.state.doing;
-					v.setDoing(badgeOf(m.doing));
-					statusHud.doing(m.id, badgeOf(m.doing));
-					shownActs = "";
-					break;
-				}
-				case "ACT_DONE": {
-					const a = activities.find((x) => x.id === m.activity);
-					const change = m.delta ? deltaText(m.delta) : "";
-					// an activity of the area, or (an AI's page) work done or something eaten
-					showToast(
-						a
-							? `${a.emoji} ${a.name}を${m.share >= 0.999 ? "終えました" : "やめました"}${change ? `（${change}）` : ""}`
-							: `${m.name ?? m.activity}${change ? `（${change}）` : ""}`,
-					);
-					break;
-				}
-				case "LIFE": {
-					const doing = avatars.get(m.id)?.state.doing;
-					agentPanel.life(m.id, lifeText(m.life, doing, m.coins));
-					statusHud.ai(m.id, {
-						life: m.life,
-						...(m.coins !== undefined ? { coins: m.coins } : {}),
-						doing: badgeOf(doing),
-					});
-					break;
-				}
 				case "DIARY":
 					agentPanel.diary(m);
 					break;
