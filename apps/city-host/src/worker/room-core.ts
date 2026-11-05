@@ -1,7 +1,7 @@
 // Area logic of CityRoomDO, independent of the Workers runtime so it can be tested in Node
 // (docs/prd.md 3.2, 3.3). The Durable Object adapter (room.ts) owns sockets, hibernation and auth.
 
-import { boxNav, type KeepOut, keepingOut, type ModelNav, type PlacedModel } from "@rojibura/nav";
+import type { KeepOut, ModelNav, PlacedModel } from "@rojibura/nav";
 import {
 	ACTIVITY_REACH,
 	type Activity,
@@ -17,7 +17,6 @@ import {
 	BODY_LOOK_REACH,
 	BODY_REACH,
 	type Build,
-	type BuildAt,
 	type BuildId,
 	bodyNeedsPartner,
 	bodyTouches,
@@ -26,9 +25,6 @@ import {
 	COMPANION_FREE,
 	COMPANION_FREE_STEP,
 	COMPANY_MOOD_MS,
-	CONTEXT_AVATAR_RADIUS,
-	CONTEXT_LANDMARK_RADIUS,
-	CONTEXT_MAX_ITEMS,
 	cannotJob,
 	cannotStart,
 	canRun,
@@ -100,9 +96,9 @@ import {
 	WARP_INTERVAL_MS,
 	withCompany,
 } from "@rojibura/protocol";
-import { findBuildPlacement } from "./build-placement.ts";
 import { RoomConversations } from "./room-conversations.ts";
 import { type Bucket, takeToken, within } from "./room-rate.ts";
+import { RoomSpace } from "./room-space.ts";
 import { PRODUCTION_RULES, type RoomRules } from "./rules.ts";
 
 /** What the area needs to know about the walkable ground (implemented with @rojibura/nav). */
@@ -298,8 +294,6 @@ const SEAT_FRONT = 0.5;
 /** After something done together, the two may still step back this long (ms): the host leaves them be. */
 const STEP_BACK_GRACE_MS = 3000;
 
-const BLOCK_DEFAULT_SIZE: [number, number, number] = [1, 1, 1];
-
 interface Volatile {
 	moveBucket: Bucket;
 	sayBucket: Bucket;
@@ -369,13 +363,7 @@ export class RoomCore<C> {
 	private readonly newId: () => string;
 	/** Production limits, or free play (docs/prd.md 3.7). */
 	readonly rules: RoomRules;
-	/** Things built in the area, oldest first (free play). */
-	private readonly builds = new Map<BuildId, Build>();
-	private readonly store: BuildStore | undefined;
-	/** The walkable area: the city's, with the builds on it. */
-	private walk: Walkable;
-	/** The walkable area for each sex (without the rooms it keeps out of), made from `walk` when first needed. */
-	private walkBySex = new WeakMap<Walkable, Map<Sex, Walkable>>();
+	private readonly space: RoomSpace;
 	/** Offers to do something together, by "from to" (docs/prd.md 3.4.6); they lapse after OFFER_TTL_MS. */
 	private readonly offers = new Map<string, { kind: Together; at: number }>();
 	/** An AI's open ask to its owner to come along, by the AI (docs/prd.md 3.4.10); lapses after OFFER_TTL_MS. */
@@ -440,11 +428,20 @@ export class RoomCore<C> {
 		this.clock = clock;
 		this.newId = newId;
 		this.rules = options.rules ?? PRODUCTION_RULES;
-		this.store = options.store;
 		this.itemStore = options.items;
 		this.lifeStore = options.life;
 		this.wallets = options.wallets;
-		this.walk = world.walk;
+		this.space = new RoomSpace(world, this.rules, options.store, {
+			clock,
+			newId,
+			members: () => this.memberValues(),
+			memberById: (id) => this.memberById(id),
+			blockedBetween: (a, b) => this.blockedBetween(a, b),
+			activityName: (id) => this.activity(id)?.name ?? id,
+			canJob: (m, kind, now) => !!this.jobZoneAt(m, kind, now),
+			broadcastAll: (msg) => this.broadcastAll(msg),
+			stopThoseCrossing: (now) => this.stopThoseCrossing(now),
+		});
 	}
 
 	/**
@@ -456,7 +453,7 @@ export class RoomCore<C> {
 		const items: Item[] =
 			saved ??
 			(this.world.items ?? [])
-				.filter((i) => this.walk.isWalkable(i.pos))
+				.filter((i) => this.space.terrain.isWalkable(i.pos))
 				.map((i) => ({ id: `i_${this.newId()}`, kind: i.kind, pos: i.pos }));
 		for (const item of items) {
 			if (item.holder && !this.participants.has(item.holder)) delete item.holder;
@@ -471,12 +468,12 @@ export class RoomCore<C> {
 
 	/** The walkable area now (the guide plans its walks on it). */
 	get terrain(): Walkable {
-		return this.walk;
+		return this.space.terrain;
 	}
 
 	/** Can people build here at all. */
 	get canBuild(): boolean {
-		return this.rules.build !== null && this.world.build !== undefined;
+		return this.space.canBuild;
 	}
 
 	// ---- membership ---------------------------------------------------------
@@ -534,7 +531,7 @@ export class RoomCore<C> {
 		const member: Member = {
 			...info,
 			status: "active",
-			move: { kind: "idle", pos: this.spawnPoint(arrive), at: now },
+			move: { kind: "idle", pos: this.space.spawnPoint(arrive), at: now },
 			interest: INTEREST_RADIUS_DEFAULT,
 		};
 		const entered = member.kind === "ai" ? this.lifeOnEntry(info.life, now) : null;
@@ -623,7 +620,7 @@ export class RoomCore<C> {
 			avatars: [...this.memberValues()].map((m) => this.toState(m)),
 		};
 		if (resumed) welcome.resumed = true;
-		if (this.canBuild) welcome.builds = [...this.builds.values()];
+		if (this.canBuild) welcome.builds = this.space.buildList;
 		if (this.items.size > 0) welcome.items = [...this.items.values()];
 		if (member.life) welcome.life = decay(member.life, now);
 		this.transport.send(conn, welcome);
@@ -917,7 +914,7 @@ export class RoomCore<C> {
 				return;
 			case "BUILD":
 			case "UNBUILD": {
-				const err = msg.t === "BUILD" ? this.build(m, msg, now) : this.unbuild(m, msg);
+				const err = msg.t === "BUILD" ? this.space.build(m, msg, now) : this.space.unbuild(m, msg);
 				if (err) this.notice(conn, "rejected", err, msg.ref);
 				return;
 			}
@@ -1062,7 +1059,7 @@ export class RoomCore<C> {
 			const seat = pick ? seats[pick.i] : undefined;
 			if (!pick || !seat) continue;
 			const front: Vec2 = [seat.pos[0] + seat.face[0] * SEAT_FRONT, seat.pos[1] + seat.face[1] * SEAT_FRONT];
-			const path = dist(from, front) < 0.2 ? null : this.leadPath(from, front, this.walkOf(ai));
+			const path = dist(from, front) < 0.2 ? null : this.leadPath(from, front, this.space.walkOf(ai));
 			if (!path && dist(from, front) >= 0.2) continue;
 			taken.add(pick.i);
 			this.stopDoing(conn, ai, now);
@@ -1153,7 +1150,8 @@ export class RoomCore<C> {
 		const half = TOGETHER_GAP[offer.kind] / 2;
 		const pa: Vec2 = [mid[0] - u[0] * half, mid[1] - u[1] * half];
 		const pb: Vec2 = [mid[0] + u[0] * half, mid[1] + u[1] * half];
-		const fits = d <= OFFER_REACH + 1 && this.walkOf(from).isWalkable(pa) && this.walkOf(m).isWalkable(pb);
+		const fits =
+			d <= OFFER_REACH + 1 && this.space.walkOf(from).isWalkable(pa) && this.space.walkOf(m).isWalkable(pb);
 		this.transport.send(fc, { t: "ANSWERED", by: m.id, kind: offer.kind, accept: accept && fits });
 		if (!accept || !fits) return;
 		const ms = Math.max(this.stepTo(fc, from, a, pa, now), this.stepTo(mc, m, b, pb, now));
@@ -1204,7 +1202,7 @@ export class RoomCore<C> {
 			here[0] + ((here[0] - from[0]) / d) * STEP_BACK,
 			here[1] + ((here[1] - from[1]) / d) * STEP_BACK,
 		];
-		if (!this.walkOf(other).validatePath([here, to])) return;
+		if (!this.space.walkOf(other).validatePath([here, to])) return;
 		other.move = { kind: "path", path: [here, to], speed: STEP_BACK / STEP_BACK_S, at: now };
 		this.transport.persist(oc, other);
 		this.broadcastAbout(other, { t: "MOVED", id: other.id, move: other.move });
@@ -1221,7 +1219,7 @@ export class RoomCore<C> {
 	private stepTo(conn: C, m: Member, here: Vec2, to: Vec2, now: number): number {
 		this.stopDoing(conn, m, now);
 		const d = dist(here, to);
-		const walk = d > 0.05 && this.walkOf(m).validatePath([here, to]);
+		const walk = d > 0.05 && this.space.walkOf(m).validatePath([here, to]);
 		m.move = walk
 			? { kind: "path", path: [here, to], speed: WALK_SPEED, at: now }
 			: { kind: "idle", pos: to, at: now };
@@ -1276,7 +1274,7 @@ export class RoomCore<C> {
 					const u: Vec2 = [(there[0] - here[0]) / d, (there[1] - here[1]) / d];
 					const spot: Vec2 = [here[0] + u[0] * BODY_CALLED_TO, here[1] + u[1] * BODY_CALLED_TO];
 					const ac = this.connectionFor(to.id);
-					if (ac === undefined || !this.walkOf(to).isWalkable(spot)) return "そこには来られません";
+					if (ac === undefined || !this.space.walkOf(to).isWalkable(spot)) return "そこには来られません";
 					at = now + this.stepTo(ac, to, there, spot, now) + 200;
 				} else if (d > BODY_REACH) return `もっと近くに行ってください（いま${Math.round(d * 10) / 10}m）`;
 			} else if (d > BODY_LOOK_REACH) return "その人は遠すぎます";
@@ -1371,7 +1369,7 @@ export class RoomCore<C> {
 				side,
 				COMPANION_STANDING,
 				false,
-				this.walkOf(ai),
+				this.space.walkOf(ai),
 			);
 			this.land(conn, ai, there ?? at, now);
 		}
@@ -1393,7 +1391,7 @@ export class RoomCore<C> {
 	// ---- an AI taking its owner somewhere (docs/prd.md 3.4.10) -----------------
 
 	/** The way from `from` to `to` as one move, or null; a way of more points ends where one move does. */
-	private leadPath(from: Vec2, to: Vec2, walk = this.walk): Vec2[] | null {
+	private leadPath(from: Vec2, to: Vec2, walk = this.space.terrain): Vec2[] | null {
 		const way = walk.findPath?.(walk.closestPoint(from), to) ?? [from, to];
 		if (way.length < 2) return null;
 		const path = [from, ...way.slice(1)].slice(0, MAX_PATH_POINTS);
@@ -1409,9 +1407,9 @@ export class RoomCore<C> {
 			return "さっき誘ったばかりです";
 		const here = this.positionOf(m, now);
 		if (dist(here, this.positionOf(owner, now)) > LEAD_REACH) return "オーナーが遠すぎます";
-		const to = this.walkOf(m).closestPoint(msg.to);
+		const to = this.space.walkOf(m).closestPoint(msg.to);
 		if (dist(here, to) < LEAD_MIN_DISTANCE) return "そこはすぐそばです";
-		if (!this.leadPath(here, to, this.walkOf(m))) return "そこへは歩いて行けません";
+		if (!this.leadPath(here, to, this.space.walkOf(m))) return "そこへは歩いて行けません";
 		m.leadAskedAt = now;
 		this.transport.persist(conn, m);
 		this.leads.set(m.id, { owner: owner.id, to, place: msg.place, at: now });
@@ -1440,7 +1438,7 @@ export class RoomCore<C> {
 		if (!ai || ac === undefined || mc === undefined || now - lead.at > OFFER_TTL_MS) return true;
 		const path =
 			accept && this.accompanying(ai)
-				? this.leadPath(this.positionOf(ai, now), lead.to, this.walkOf(ai))
+				? this.leadPath(this.positionOf(ai, now), lead.to, this.space.walkOf(ai))
 				: null;
 		if (accept && !path) this.notice(mc, "rejected", "そこへは行けなくなりました");
 		const ms = path ? (polylineLength(path) / WALK_SPEED) * 1000 : 0;
@@ -1483,7 +1481,7 @@ export class RoomCore<C> {
 		side: number,
 		slot = COMPANION_WALKING,
 		strict = false,
-		walk = this.walk,
+		walk = this.space.terrain,
 	): Vec2 | null {
 		// facing +z the right hand is on -x: right = (-ahead.z, ahead.x)
 		const right: Vec2 = [-ahead[1], ahead[0]];
@@ -1499,7 +1497,7 @@ export class RoomCore<C> {
 	private companionStep(conn: C, ai: Member, owner: Member, side: number, ahead: Vec2, now: number): void {
 		const from = this.positionOf(ai, now);
 		const om = owner.move;
-		const walk = this.walkOf(ai);
+		const walk = this.space.walkOf(ai);
 		let path: Vec2[] | null = null;
 		let ms = 0;
 		if (om.kind === "path" && poseAt(om, now).moving) {
@@ -1525,7 +1523,7 @@ export class RoomCore<C> {
 				const go = om.speed * (walked + s);
 				// where the owner's own way is still clear that far on
 				const ahead: Vec2 = [om.pos[0] + om.dir[0] * go, om.pos[1] + om.dir[1] * go];
-				if (!this.walkOf(owner).validatePath([this.positionOf(owner, now), ahead])) continue;
+				if (!this.space.walkOf(owner).validatePath([this.positionOf(owner, now), ahead])) continue;
 				const there = this.beside(ahead, om.dir, side, COMPANION_WALKING, false, walk);
 				if (there) {
 					path = [from, there];
@@ -1754,7 +1752,7 @@ export class RoomCore<C> {
 		const from = this.positionOf(m, now);
 		const ahead: Vec2 = [from[0] + dir[0] * THROW_RANGE, from[1] + dir[1] * THROW_RANGE];
 		delete item.holder;
-		item.pos = this.walk.isWalkable(ahead) ? ahead : this.walk.closestPoint(ahead);
+		item.pos = this.space.terrain.isWalkable(ahead) ? ahead : this.space.terrain.closestPoint(ahead);
 		item.flight = { from, at: now + THROW_RELEASE_MS, dur: THROW_MS };
 		this.itemChanged(item);
 		return null;
@@ -1971,7 +1969,7 @@ export class RoomCore<C> {
 
 	/** Afloat one goes anywhere not too far out from where one can walk (docs/prd.md 3.4.13). */
 	private inSky(p: Vec2): boolean {
-		return dist(this.walk.closestPoint(p), p) <= FLY_REACH;
+		return dist(this.space.terrain.closestPoint(p), p) <= FLY_REACH;
 	}
 
 	private movePath(conn: C, m: Member, msg: Extract<ClientToHost, { t: "MOVE_PATH" }>, now: number): void {
@@ -1979,7 +1977,7 @@ export class RoomCore<C> {
 		const start = msg.path[0] as Vec2;
 		const fromHere = dist(start, here) <= this.tolerance(m);
 		const clear = (path: Vec2[]) =>
-			m.fly !== undefined ? path.every((p) => this.inSky(p)) : this.walkOf(m).validatePath(path);
+			m.fly !== undefined ? path.every((p) => this.inSky(p)) : this.space.walkOf(m).validatePath(path);
 		// start exactly where the host thinks the avatar is, so everyone interpolates the same line; that way is
 		// checked too (from a little elsewhere it could cut through a wall)
 		const mine: Vec2[] = [here, ...msg.path.slice(1)];
@@ -1987,8 +1985,8 @@ export class RoomCore<C> {
 			fromHere && polylineLength(mine) <= MAX_PATH_LENGTH && clear(msg.path) && clear(mine) ? mine : null;
 		// a path through something built (a client or AI that does not know about it yet), or from here through
 		// a wall: plan it again
-		if (!path && fromHere && m.fly === undefined && (this.builds.size > 0 || clear(msg.path)))
-			path = this.replan(here, msg.path[msg.path.length - 1] as Vec2, this.walkOf(m));
+		if (!path && fromHere && m.fly === undefined && (this.space.hasBuilds || clear(msg.path)))
+			path = this.space.replan(here, msg.path[msg.path.length - 1] as Vec2, this.space.walkOf(m));
 		if (!path) {
 			this.reject(conn, m, here, now);
 			return;
@@ -2005,8 +2003,8 @@ export class RoomCore<C> {
 		const open =
 			m.fly !== undefined
 				? this.inSky(msg.pos)
-				: this.walkOf(m).isWalkable(msg.pos) &&
-					(dist(msg.pos, here) < 0.05 || this.walkOf(m).validatePath([here, msg.pos]));
+				: this.space.walkOf(m).isWalkable(msg.pos) &&
+					(dist(msg.pos, here) < 0.05 || this.space.walkOf(m).validatePath([here, msg.pos]));
 		if (dist(msg.pos, here) > this.tolerance(m) || !open) {
 			this.reject(conn, m, here, now);
 			return;
@@ -2056,7 +2054,7 @@ export class RoomCore<C> {
 
 	/** Stands `m` still on the walkable ground nearest `p` (where one lands, or warps to). */
 	private land(conn: C, m: Member, p: Vec2, now: number): void {
-		const walk = this.walkOf(m);
+		const walk = this.space.walkOf(m);
 		let at: Vec2 = walk.isWalkable(p) ? p : walk.closestPoint(p);
 		// rings round it, then the spawn point, if the nearest point is not quite on the ground
 		for (let r = 1; r <= 30 && !walk.isWalkable(at); r++)
@@ -2086,7 +2084,7 @@ export class RoomCore<C> {
 			delete m.fly;
 			this.broadcastAbout(m, { t: "FLEW", id: m.id, alt: null });
 		}
-		this.land(conn, m, this.spawnPoint(to), now);
+		this.land(conn, m, this.space.spawnPoint(to), now);
 		this.bringCompany(m, now);
 		return null;
 	}
@@ -2114,137 +2112,20 @@ export class RoomCore<C> {
 		this.transport.send(conn, ref ? { t: "NOTICE", kind, message, ref } : { t: "NOTICE", kind, message });
 	}
 
-	// ---- building (free play, docs/prd.md 3.7) ----------------------------------
-
-	/** Puts back what was built (saved by the adapter), oldest first. */
 	loadBuilds(builds: Build[]): void {
-		this.builds.clear();
-		for (const b of [...builds].sort((p, q) => p.at - q.at || (p.id < q.id ? -1 : 1)))
-			this.builds.set(b.id, b);
-		this.rebuildWalk();
+		this.space.loadBuilds(builds);
 	}
-
 	get buildList(): Build[] {
-		return [...this.builds.values()];
+		return this.space.buildList;
 	}
-
-	/** Removes everything built (development). */
 	clearBuilds(by: AvatarId): number {
-		const ids = [...this.builds.keys()];
-		for (const id of ids) {
-			this.builds.delete(id);
-			this.store?.remove(id);
-		}
-		this.rebuildWalk();
-		for (const id of ids) this.broadcastAll({ t: "UNBUILT", id, by });
-		return ids.length;
+		return this.space.clearBuilds(by);
 	}
-
-	private nav(b: Pick<Build, "model" | "size">): ModelNav | undefined {
-		if (b.model === "block") return boxNav(...(b.size ?? BLOCK_DEFAULT_SIZE));
-		return this.world.build?.model(b.model);
+	positionOf(m: Member, now = this.clock()): Vec2 {
+		return this.space.positionOf(m, now);
 	}
-
-	private placed(b: Build): PlacedModel | null {
-		const nav = this.nav(b);
-		return nav ? { nav, pos: b.pos, y: b.y, rot: b.rot, scale: b.scale } : null;
-	}
-
-	private placedAll(): PlacedModel[] {
-		return [...this.builds.values()].map((b) => this.placed(b)).filter((p): p is PlacedModel => p !== null);
-	}
-
-	private rebuildWalk(): void {
-		const bw = this.world.build;
-		this.walk = bw && this.builds.size > 0 ? bw.walkWith(this.placedAll()) : this.world.walk;
-	}
-
-	/** Builds what BUILD asks for; returns why not. */
-	private build(m: Member, msg: Extract<ClientToHost, { t: "BUILD" }>, now: number): string | null {
-		const bw = this.world.build;
-		if (!this.rules.build || !bw) return "この街では建てられません";
-		if (this.builds.size >= this.rules.build.maxPerArea) return "この街にはもう建てられません（上限）";
-		const size = msg.model === "block" ? (msg.size ?? BLOCK_DEFAULT_SIZE) : undefined;
-		const nav = this.nav({ model: msg.model, size });
-		if (!nav) return "そのモデルはありません";
-		if (nav.walk && msg.scale !== undefined && msg.scale !== 1)
-			return "上を歩けるモデルは大きさを変えられません";
-		const scale = nav.walk ? 1 : (msg.scale ?? 1);
-		const anchor = this.anchor(msg.at, now);
-		if (typeof anchor === "string") return anchor;
-
-		const result = findBuildPlacement({
-			anchor,
-			nav,
-			scale,
-			rotation: msg.rot,
-			existing: this.placedAll(),
-			world: this.world,
-			buildWorld: bw,
-			people: [...this.memberValues()].map((o) => ({ name: o.name, pos: this.positionOf(o, now) })),
-		});
-		if (result.kind === "rejected") return result.error;
-		const { placed, walk } = result;
-		const b: Build = {
-			id: `b_${this.newId()}`,
-			model: msg.model,
-			pos: [round2(placed.pos[0]), round2(placed.pos[1])],
-			y: round2(placed.y),
-			rot: placed.rot,
-			scale,
-			by: m.id,
-			byName: m.name,
-			at: now,
-		};
-		if (size) b.size = size;
-		if (msg.color) b.color = msg.color;
-		if (msg.label) b.label = msg.label;
-		this.builds.set(b.id, b);
-		this.store?.save(b);
-		this.walk = walk;
-		this.broadcastAll({ t: "BUILT", build: b, ref: msg.ref });
-		this.stopThoseCrossing(now);
-		return null;
-	}
-
-	private unbuild(m: Member, msg: Extract<ClientToHost, { t: "UNBUILD" }>): string | null {
-		if (!this.canBuild) return "この街では建てられません";
-		// free play: anyone may take anything down (production rules would allow only the builder's own)
-		if (!this.builds.delete(msg.id)) return "その建物はありません";
-		this.store?.remove(msg.id);
-		this.rebuildWalk();
-		this.broadcastAll({ t: "UNBUILT", id: msg.id, by: m.id, ref: msg.ref });
-		return null;
-	}
-
-	/** Where a BUILD points: an exact spot, or a point to search around; and what to face. */
-	private anchor(at: BuildAt, now: number): { point: Vec2; exact: boolean; face?: Vec2 } | string {
-		let point: Vec2;
-		if ("pos" in at) return { point: at.pos, exact: true };
-		if ("landmark" in at) {
-			const l = this.world.landmarks.find((x) => x.id === at.landmark);
-			if (!l) return "そのランドマークはありません";
-			point = l.pos;
-		} else if ("avatar" in at) {
-			const a = this.memberById(at.avatar);
-			if (!a) return "その人はいません";
-			point = this.positionOf(a, now);
-		} else {
-			const b = this.builds.get(at.build);
-			if (!b) return "その建物はありません";
-			point = b.pos;
-		}
-		return at.offset
-			? { point: [point[0] + at.offset[0], point[1] + at.offset[1]], exact: true, face: point }
-			: { point, exact: false, face: point };
-	}
-
-	/** A path from here to (near) `to` on the walkable area with builds, within the protocol's limits. */
-	private replan(here: Vec2, to: Vec2, walk = this.walk): Vec2[] | null {
-		const path = walk.findPath?.(walk.closestPoint(here), walk.closestPoint(to));
-		if (!path || path.length < 2 || path.length > MAX_PATH_POINTS) return null;
-		path[0] = here;
-		return polylineLength(path) <= MAX_PATH_LENGTH && walk.validatePath(path) ? path : null;
+	contextFor(m: Member, now = this.clock()): SpatialContext {
+		return this.space.contextFor(m, now);
 	}
 
 	/** Someone walking a path that now runs into something built stops where they are. */
@@ -2252,7 +2133,7 @@ export class RoomCore<C> {
 		for (const [conn, m] of this.memberEntries()) {
 			if (m.move.kind !== "path") continue;
 			const rest = remainingPath(m.move, now);
-			if (rest.length < 2 || this.walk.validatePath(rest)) continue;
+			if (rest.length < 2 || this.space.terrain.validatePath(rest)) continue;
 			m.move = { kind: "idle", pos: this.positionOf(m, now), at: now };
 			this.transport.persist(conn, m);
 			this.broadcastAbout(m, { t: "MOVED", id: m.id, move: m.move });
@@ -2262,91 +2143,6 @@ export class RoomCore<C> {
 	/** Builds change where everyone can walk, so everyone hears about them (not only within interest). */
 	private broadcastAll(msg: HostToClient): void {
 		for (const conn of this.connections()) this.transport.send(conn, msg);
-	}
-
-	// ---- spatial ------------------------------------------------------------
-
-	/** Where `m` may walk: the walkable area without the rooms its sex keeps out of (docs/prd.md 3.8.6). */
-	private walkOf(m: { assets: AvatarAssets }): Walkable {
-		const sex = m.assets.sex;
-		const out = sex ? this.world.keepOut?.[sex] : undefined;
-		if (!sex || !out?.length) return this.walk;
-		let made = this.walkBySex.get(this.walk);
-		if (!made) {
-			made = new Map();
-			this.walkBySex.set(this.walk, made);
-		}
-		let w = made.get(sex);
-		if (!w) {
-			w = keepingOut(this.walk, out);
-			made.set(sex, w);
-		}
-		return w;
-	}
-
-	positionOf(m: Member, now = this.clock()): Vec2 {
-		return poseAt(m.move, now, (p) => (this.walk.isWalkable(p) ? p : this.walk.closestPoint(p))).pos;
-	}
-
-	contextFor(m: Member, now = this.clock()): SpatialContext {
-		const pos = this.positionOf(m, now);
-		const nearbyAvatars = [...this.memberValues()]
-			.filter((o) => o.id !== m.id && !this.blockedBetween(m.id, o.id))
-			.map((o) => ({
-				id: o.id,
-				name: o.name,
-				kind: o.kind,
-				distance: round1(dist(pos, this.positionOf(o, now))),
-				...(o.doing ? { doing: this.activity(o.doing.activity)?.name ?? o.doing.activity } : {}),
-			}))
-			.filter((o) => o.distance <= CONTEXT_AVATAR_RADIUS)
-			.sort((a, b) => a.distance - b.distance)
-			.slice(0, CONTEXT_MAX_ITEMS);
-		const nearbyLandmarks = this.world.landmarks
-			.map((l) => ({ id: l.id, name: l.name, distance: round1(dist(pos, l.pos)) }))
-			.filter((l) => l.distance <= CONTEXT_LANDMARK_RADIUS)
-			.sort((a, b) => a.distance - b.distance)
-			.slice(0, CONTEXT_MAX_ITEMS);
-		const nearest = nearbyLandmarks[0];
-		const area = nearest && nearest.distance <= 15 ? nearest.name : this.world.areaName;
-		const context: SpatialContext = {
-			area,
-			pos: [round1(pos[0]), round1(pos[1])],
-			nearbyAvatars,
-			nearbyLandmarks,
-		};
-		if (m.coins !== undefined) context.coins = m.coins;
-		if (m.job) context.job = m.job.kind;
-		const canJob = (["work", "study"] as const).filter((k) => this.jobZoneAt(m, k, now));
-		if (canJob.length > 0) context.canJob = canJob;
-		// free play: the area's own builds; elsewhere: what was published, part of the city
-		const builds = this.canBuild ? [...this.builds.values()] : (this.world.fixedBuilds ?? []);
-		if (builds.length > 0)
-			context.nearbyBuilds = builds
-				.map((b) => {
-					const item = { id: b.id, model: b.model, byName: b.byName, distance: round1(dist(pos, b.pos)) };
-					return b.label ? { ...item, label: b.label } : item;
-				})
-				.filter((b) => b.distance <= CONTEXT_LANDMARK_RADIUS)
-				.sort((a, b) => a.distance - b.distance)
-				.slice(0, CONTEXT_MAX_ITEMS);
-		return context;
-	}
-
-	/** Near the spawn point, or a step away from the landmark or portal someone arrives at. */
-	private spawnPoint(arrive?: string): Vec2 {
-		const at = arrive ? this.world.landmarks.find((l) => l.id === arrive) : undefined;
-		const [cx, cz] = at?.pos ?? this.world.spawn;
-		// not on the portal itself: arriving there should not look like leaving again
-		const [r0, r1] = at ? [1.5, 3] : [0, 2.5];
-		for (let i = 0; i < 16; i++) {
-			const a = Math.random() * Math.PI * 2;
-			const r = r0 + Math.random() * (r1 - r0);
-			// rounded first: at the water's edge the rounded point can be off the walkable area
-			const p: Vec2 = [round1(cx + Math.cos(a) * r), round1(cz + Math.sin(a) * r)];
-			if (this.walk.isWalkable(p)) return p;
-		}
-		return at && this.walk.isWalkable(at.pos) ? at.pos : this.world.spawn;
 	}
 
 	/**
