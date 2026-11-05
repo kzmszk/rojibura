@@ -29,7 +29,6 @@ import {
 	CONTEXT_AVATAR_RADIUS,
 	CONTEXT_LANDMARK_RADIUS,
 	CONTEXT_MAX_ITEMS,
-	CONV_TIMEOUT_MS,
 	cannotJob,
 	cannotStart,
 	canRun,
@@ -102,6 +101,8 @@ import {
 	withCompany,
 } from "@rojibura/protocol";
 import { findBuildPlacement } from "./build-placement.ts";
+import { RoomConversations } from "./room-conversations.ts";
+import { type Bucket, takeToken, within } from "./room-rate.ts";
 import { PRODUCTION_RULES, type RoomRules } from "./rules.ts";
 
 /** What the area needs to know about the walkable ground (implemented with @rojibura/nav). */
@@ -289,8 +290,6 @@ export interface ChatLine {
 	text: string;
 }
 
-const CHAT_LOG_MAX = 2000;
-
 /** An AI walking with its owner sits down on a seat within this far of the owner's (m). */
 const SEAT_COMPANY_NEAR = 3;
 /** It stands this far in front of the seat to sit on it (as a person does, apps/city-client). */
@@ -300,11 +299,6 @@ const SEAT_FRONT = 0.5;
 const STEP_BACK_GRACE_MS = 3000;
 
 const BLOCK_DEFAULT_SIZE: [number, number, number] = [1, 1, 1];
-
-interface Bucket {
-	tokens: number;
-	at: number;
-}
 
 interface Volatile {
 	moveBucket: Bucket;
@@ -357,29 +351,17 @@ export const CLOSE_KICKED = 4003;
 export const CLOSE_TIMEOUT = 4008;
 export const CLOSE_CLOSING = 4010;
 
-function takeToken(b: Bucket, rate: number, burst: number, now: number): boolean {
-	b.tokens = Math.min(burst, b.tokens + ((now - b.at) / 1000) * rate);
-	b.at = now;
-	if (b.tokens < 1) return false;
-	b.tokens -= 1;
-	return true;
-}
-
-function within(times: number[], windowMs: number, now: number): number[] {
-	return times.filter((t) => now - t < windowMs);
-}
-
 export class RoomCore<C> {
 	private readonly participants = new Map<AvatarId, Participant<C>>();
 	private readonly connectionToId = new Map<C, AvatarId>();
 	private nextDropOrder = 0;
-	private readonly convs = new Map<string, Conv>();
-	private readonly pairCooldown = new Map<string, number>();
-	private readonly humanToAi = new Map<string, number[]>();
+	private readonly conversations: RoomConversations<C>;
 	readonly stats: RoomStats = { inbound: 0, connects: 0, rejectedMoves: 0, says: 0 };
 	private readonly relations = new Map<AvatarId, MemberRelations>();
 	/** Recent chat for reports; the adapter persists it (docs/prd.md 3.3). */
-	readonly chatLog: ChatLine[] = [];
+	get chatLog(): ChatLine[] {
+		return this.conversations.chatLog;
+	}
 
 	private readonly transport: Transport<C>;
 	private readonly world: World;
@@ -441,6 +423,19 @@ export class RoomCore<C> {
 			persist: (c, member) =>
 				this.participantFor(c)?.connection.kind !== "away" && transport.persist(c, member),
 		};
+		this.conversations = new RoomConversations({
+			rules: options.rules ?? PRODUCTION_RULES,
+			stats: this.stats,
+			transport: this.transport,
+			clock,
+			newId,
+			memberById: (id) => this.memberById(id),
+			connectionFor: (id) => this.connectionFor(id),
+			blockedBetween: (a, b) => this.blockedBetween(a, b),
+			broadcastAbout: (m, msg, except, target, speech) => this.broadcastAbout(m, msg, except, target, speech),
+			contextFor: (m, now) => this.contextFor(m, now),
+			notice: (conn, kind, message) => this.notice(conn, kind, message),
+		});
 		this.world = world;
 		this.clock = clock;
 		this.newId = newId;
@@ -496,33 +491,10 @@ export class RoomCore<C> {
 			connection: { kind: "active", conn },
 		});
 		this.connectionToId.set(conn, member.id);
-		for (const c of member.convs ?? []) if (!this.convs.has(c.id)) this.convs.set(c.id, { ...c });
-		for (const [other, until] of Object.entries(member.cooldowns ?? {}))
-			this.pairCooldown.set(
-				pairKey(member.id, other),
-				Math.max(until, this.pairCooldown.get(pairKey(member.id, other)) ?? 0),
-			);
+		this.conversations.restore(member);
 	}
 
 	/** Copies the conversation state of `ids` into their persisted member state. */
-	private syncConvs(...ids: AvatarId[]): void {
-		const now = this.clock();
-		for (const id of ids) {
-			const conn = this.connectionFor(id);
-			const m = conn === undefined ? undefined : this.memberFor(conn);
-			if (conn === undefined || !m) continue;
-			m.convs = [...this.convs.values()].filter((c) => c.a === id || c.b === id).map((c) => ({ ...c }));
-			const cooldowns: Record<AvatarId, number> = {};
-			for (const [key, until] of this.pairCooldown) {
-				if (until <= now) continue;
-				const [x, y] = key.split("|");
-				if (x === id && y) cooldowns[y] = until;
-				else if (y === id && x) cooldowns[x] = until;
-			}
-			m.cooldowns = cooldowns;
-			this.transport.persist(conn, m);
-		}
-	}
 
 	/** Returns a reason when the area cannot take this avatar (docs/prd.md 3.3 item 7). */
 	admissionError(info: JoinInfo): string | null {
@@ -718,12 +690,10 @@ export class RoomCore<C> {
 			}
 			void m;
 		}
-		for (const c of [...this.convs.values()]) {
-			if (now - c.lastAt > CONV_TIMEOUT_MS) this.endConv(c, "timeout");
-		}
+		this.conversations.expireConversations(now);
 		this.settleSeatPlans(now);
 		this.lifeTick(now);
-		for (const [k, until] of this.pairCooldown) if (until <= now) this.pairCooldown.delete(k);
+		this.conversations.expireCooldowns(now);
 	}
 
 	/** Closes every connection (closing time). */
@@ -759,10 +729,7 @@ export class RoomCore<C> {
 		if (mine) (kind === "mute" ? mine.mutes : mine.blocks)[on ? "add" : "delete"](targetId);
 		const theirs = this.relations.get(targetId);
 		if (theirs && kind === "block") theirs.blockedBy[on ? "add" : "delete"](accountId);
-		if (on && kind === "block")
-			for (const c of [...this.convs.values()])
-				if ((c.a === accountId && c.b === targetId) || (c.a === targetId && c.b === accountId))
-					this.endConv(c, "left");
+		if (on && kind === "block") this.conversations.closeBetween(accountId, targetId);
 	}
 
 	/** True if `viewer` does not want to hear from `speaker`. */
@@ -801,8 +768,7 @@ export class RoomCore<C> {
 
 	/** Chat lines spoken by or to `id` in the last `ms`. */
 	excerpt(id: AvatarId, ms: number): ChatLine[] {
-		const since = this.clock() - ms;
-		return this.chatLog.filter((l) => l.at >= since && (l.id === id || l.to === id));
+		return this.conversations.excerpt(id, ms);
 	}
 
 	// ---- messages -----------------------------------------------------------
@@ -928,7 +894,10 @@ export class RoomCore<C> {
 				return;
 			}
 			case "SAY":
-				this.say(conn, m, v, msg, now);
+				{
+					const result = this.conversations.say(conn, m, v, msg, now);
+					if (result === "violation") this.violation(conn, v, now);
+				}
 				return;
 			case "STATUS":
 				if (m.status === msg.status) return;
@@ -2130,172 +2099,6 @@ export class RoomCore<C> {
 		this.broadcastAbout(m, { t: "MOVED", id: m.id, move: m.move }, conn);
 	}
 
-	private say(conn: C, m: Member, v: Volatile, msg: Extract<ClientToHost, { t: "SAY" }>, now: number): void {
-		if (m.mutedUntil && m.mutedUntil > now) {
-			this.transport.send(conn, { t: "NOTICE", kind: "muted_by_moderator", message: "いまは発言できません" });
-			return;
-		}
-		// rate limits (the host's own guide answers everyone, so it has none)
-		const { rateSayHuman, sayAiPerMin } = this.rules;
-		if (m.system) {
-			// no limit
-		} else if (m.kind === "human") {
-			if (rateSayHuman && !takeToken(v.sayBucket, rateSayHuman.rate, rateSayHuman.burst, now)) {
-				this.violation(conn, v, now);
-				return;
-			}
-		} else if (sayAiPerMin !== null) {
-			const limit = m.trust === "provisional" ? Math.floor(sayAiPerMin / 2) : sayAiPerMin;
-			v.aiSays = within(v.aiSays, 60_000, now);
-			if (v.aiSays.length >= limit) {
-				this.violation(conn, v, now);
-				return;
-			}
-		}
-
-		let conv: Conv | undefined;
-		let target: Member | undefined;
-		if (msg.convId) {
-			const c = this.convs.get(msg.convId);
-			if (c && (c.a === m.id || c.b === m.id)) {
-				conv = c;
-				const otherId = c.a === m.id ? c.b : c.a;
-				if (msg.to && msg.to !== otherId) {
-					this.notice(conn, "rejected", "会話の相手が違います");
-					return;
-				}
-				target = this.memberById(otherId);
-				if (target && this.blockedBetween(m.id, target.id)) target = undefined;
-				if (!target) {
-					this.endConv(c, "left");
-					return;
-				}
-			}
-		}
-		if (!conv && msg.to) {
-			target = this.memberById(msg.to);
-			if (target && this.blockedBetween(m.id, target.id)) target = undefined;
-			if (!target || target.id === m.id) {
-				this.notice(conn, "rejected", "相手が見つかりません");
-				return;
-			}
-			// both sides may start at the same moment: join the open conversation instead of making a second one
-			const tid = target.id;
-			conv = [...this.convs.values()].find(
-				(c) => (c.a === m.id && c.b === tid) || (c.a === tid && c.b === m.id),
-			);
-		}
-		if (!conv && msg.to && target) {
-			const err = this.canStartConv(m, target, now);
-			if (err) {
-				this.notice(conn, "rejected", err);
-				return;
-			}
-			const aiPair = m.kind === "ai" && target.kind === "ai";
-			conv = {
-				id: `c_${this.newId()}`,
-				a: m.id,
-				b: target.id,
-				turn: 0,
-				maxTurns: aiPair ? this.rules.aiConvMaxTurns : null,
-				lastAt: now,
-			};
-			this.convs.set(conv.id, conv);
-		}
-
-		if (conv && target) {
-			if (
-				m.kind === "ai" &&
-				target.kind === "ai" &&
-				now - v.lastAiReplyAt < this.rules.aiReplyMinIntervalMs
-			) {
-				this.notice(conn, "rate_limited", "返答の間隔が短すぎます");
-				return;
-			}
-			if (m.kind === "human" && target.kind === "ai" && !this.countHumanToAi(m.id, target.id, now)) {
-				this.notice(conn, "rate_limited", "同じAIへの話しかけが多すぎます");
-				return;
-			}
-			conv.turn++;
-			conv.lastAt = now;
-			this.syncConvs(conv.a, conv.b);
-		}
-		if (m.kind === "ai") {
-			v.aiSays.push(now);
-			v.lastAiReplyAt = now;
-		}
-		this.stats.says++;
-
-		const said: HostToClient = { t: "SAID", id: m.id, text: msg.text, at: now };
-		if (target) said.to = target.id;
-		if (conv) said.convId = conv.id;
-		this.broadcastAbout(m, said, undefined, target?.id, true);
-		this.chatLog.push({ at: now, id: m.id, name: m.name, to: target?.id, text: msg.text });
-		if (this.chatLog.length > CHAT_LOG_MAX) this.chatLog.splice(0, this.chatLog.length - CHAT_LOG_MAX);
-
-		if (conv && target) {
-			if (target.kind === "ai") {
-				const targetConn = this.connectionFor(target.id);
-				if (targetConn !== undefined)
-					this.transport.send(targetConn, {
-						t: "ADDRESSED",
-						from: m.id,
-						text: msg.text,
-						convId: conv.id,
-						turn: conv.turn,
-						maxTurns: conv.maxTurns,
-						context: this.contextFor(target, now),
-					});
-			}
-			if (conv.maxTurns !== null && conv.turn >= conv.maxTurns) this.endConv(conv, "max_turns");
-		}
-	}
-
-	private canStartConv(from: Member, to: Member, now: number): string | null {
-		if (from.kind === "ai" && to.kind === "human") {
-			if (from.trust !== "approved" && !this.rules.provisionalMayApproachHumans)
-				return "仮承認のAIは人間に話しかけられません";
-			if (to.allowAiApproach === false) return "この人はAIからの話しかけを受け付けていません";
-		}
-		if (from.kind === "ai" && to.kind === "ai") {
-			const until = this.pairCooldown.get(pairKey(from.id, to.id));
-			if (until !== undefined && until > now) return "この相手とはしばらく会話できません";
-			const active = [...this.convs.values()].filter(
-				(c) => c.a === from.id || c.b === from.id || c.a === to.id || c.b === to.id,
-			);
-			const most = this.rules.aiConcurrentConvs;
-			if (most !== null && active.length >= most) return "会話が多すぎます";
-		}
-		return null;
-	}
-
-	private countHumanToAi(human: AvatarId, ai: AvatarId, now: number): boolean {
-		const limit = this.rules.humanToSameAiPerMin;
-		if (limit === null) return true;
-		const key = `${human}>${ai}`;
-		const times = within(this.humanToAi.get(key) ?? [], 60_000, now);
-		if (times.length >= limit) {
-			this.humanToAi.set(key, times);
-			return false;
-		}
-		times.push(now);
-		this.humanToAi.set(key, times);
-		return true;
-	}
-
-	private endConv(c: Conv, reason: "max_turns" | "timeout" | "left" | "budget"): void {
-		this.convs.delete(c.id);
-		const a = this.memberById(c.a);
-		const b = this.memberById(c.b);
-		if (a?.kind === "ai" && b?.kind === "ai" && this.rules.aiPairCooldownMs > 0)
-			this.pairCooldown.set(pairKey(c.a, c.b), this.clock() + this.rules.aiPairCooldownMs);
-		for (const id of [c.a, c.b]) {
-			const conn = this.connectionFor(id);
-			if (conn !== undefined) this.transport.send(conn, { t: "CONV_END", convId: c.id, reason });
-		}
-		this.syncConvs(c.a, c.b);
-	}
-
 	private violation(conn: C, v: Volatile, now: number): void {
 		v.violations = within(v.violations, 60_000, now);
 		v.violations.push(now);
@@ -2585,7 +2388,7 @@ export class RoomCore<C> {
 		this.participants.delete(m.id);
 		this.connectionToId.delete(conn);
 		this.relations.delete(m.id);
-		for (const c of [...this.convs.values()]) if (c.a === m.id || c.b === m.id) this.endConv(c, "left");
+		this.conversations.leave(m.id);
 		this.leads.delete(m.id);
 		// what they were doing ends with what they did of it; their life is saved as it is
 		const now = this.clock();
@@ -2664,10 +2467,6 @@ export class RoomCore<C> {
 			lastBodyAt: 0,
 		};
 	}
-}
-
-function pairKey(a: AvatarId, b: AvatarId): string {
-	return a < b ? `${a}|${b}` : `${b}|${a}`;
 }
 
 function round1(n: number): number {
