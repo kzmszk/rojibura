@@ -1,6 +1,6 @@
 import { claimed, type ModelNav, occupied, overlaps, type PlacedModel } from "@rojibura/nav";
 import { dist, facing, type Vec2 } from "@rojibura/protocol";
-import type { BuildWorld, Walkable, World } from "./room-core.ts";
+import type { BuildWorld, Walkable, World } from "./room-types.ts";
 
 type PlacementWorld = Pick<World, "walk" | "spawn" | "landmarks">;
 type PlacementBuildWorld = Pick<BuildWorld, "groundHeight" | "walkWith">;
