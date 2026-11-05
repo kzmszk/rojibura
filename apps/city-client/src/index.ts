@@ -59,10 +59,13 @@ import { AgentPanel } from "./agent-panel.ts";
 import { api, onApiUsage } from "./api.ts";
 import { AreaNature, SEASON_LABEL } from "./area-nature.ts";
 import { currentArea, DETAIL_KEY, savedDetail, sceneFiles, touchFirst, travelUrl } from "./areas.ts";
+import { avatarPicker, saveAvatar, savedAvatar, startingAvatar } from "./avatar-picker.ts";
 import { AvatarView, setSeats, TRAVEL } from "./avatars.ts";
 import { BuildPanel } from "./build-ui.ts";
 import { BuildsView, makeObject, modelsFromHost } from "./builds.ts";
 import { VIEW_LABEL, VIEWS, type View, ViewController } from "./camera.ts";
+import { el } from "./dom.ts";
+import { type Me, patchMe, showLogin, showWelcome } from "./entry.ts";
 import { Following } from "./following.ts";
 import { Going } from "./going.ts";
 import { ItemsView } from "./items.ts";
@@ -71,7 +74,6 @@ import { actionBar, Relations, showAdmin } from "./moderation.ts";
 import { SEASONS, type Season } from "./nature/season.ts";
 import { CityConnection, type ConnState } from "./net.ts";
 import { rememberFirstVisit, reportFirstVisit } from "./onboarding.ts";
-import { outfitsOf, type PresetInfo } from "./outfits.ts";
 import { PortalsView } from "./portals.ts";
 import { reconcileAvatars } from "./reconcile-avatars.ts";
 import { CityScene } from "./scene.ts";
@@ -226,17 +228,6 @@ const ACTIONS: [Motion, string, string][] = [
 	["backflip", "バク転", "0"],
 ];
 
-function el<K extends keyof HTMLElementTagNameMap>(
-	tag: K,
-	cls: string,
-	text?: string,
-): HTMLElementTagNameMap[K] {
-	const e = document.createElement(tag);
-	e.className = cls;
-	if (text !== undefined) e.textContent = text;
-	return e;
-}
-
 /**
  * The area's navmesh: with the published builds baked in, or where free play builds the city alone (the
  * area's own builds, which include the published ones, are applied on top).
@@ -315,209 +306,6 @@ export async function mountApp(root: HTMLElement): Promise<void> {
 	const openAi = location.pathname === "/agent";
 	if (openAi) history.replaceState(null, "", `/${location.search}`);
 	await startCity(root, me, health.dev, health.freePlay === true, openAi);
-}
-
-interface Me {
-	id: string;
-	name: string;
-	role: string;
-	allowAiApproach: boolean;
-	relations?: { mutes: string[]; blocks: string[] };
-}
-
-function patchMe(body: { name?: string; allowAiApproach?: boolean }): Promise<Response> {
-	return api("/api/me", {
-		method: "PATCH",
-		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify(body),
-	});
-}
-
-const AVATAR = "rj.avatar";
-
-/** The preset avatar picked last time (an unknown one is Saki on the host). */
-function savedAvatar(): string | null {
-	try {
-		return localStorage.getItem(AVATAR);
-	} catch {
-		return null;
-	}
-}
-
-function saveAvatar(id: string): void {
-	try {
-		localStorage.setItem(AVATAR, id);
-	} catch {
-		// private mode: the choice lasts as long as the URL
-	}
-}
-
-let presetCache: Promise<PresetInfo[]> | null = null;
-/** The host's preset looks (cached: the picker and the "auto" outfit both ask). */
-function presets(): Promise<PresetInfo[]> {
-	presetCache ??= api("/api/presets")
-		.then((r) => (r.ok ? (r.json() as Promise<PresetInfo[]>) : []))
-		.catch(() => []);
-	return presetCache;
-}
-
-/** What a character's outfit setting is: one outfit (a preset id), or "auto" (a different one each time). */
-const OUTFIT_MODE = "rj.outfit";
-const AUTO = "auto";
-
-function outfitMode(): string | null {
-	try {
-		return localStorage.getItem(OUTFIT_MODE);
-	} catch {
-		return null;
-	}
-}
-
-function saveOutfitMode(mode: string): void {
-	try {
-		localStorage.setItem(OUTFIT_MODE, mode);
-	} catch {
-		// private mode: the choice lasts as long as the URL
-	}
-}
-
-/**
- * The look to enter with when none is in the URL: the saved one, or, if its outfit is set to "auto", one of the
- * character's outfits at random (so the same person turns up in different clothes now and then).
- */
-async function startingAvatar(saved: string): Promise<string> {
-	if (outfitMode() !== AUTO) return saved;
-	const outfits = outfitsOf(await presets(), saved);
-	return outfits[Math.floor(Math.random() * outfits.length)]?.id ?? saved;
-}
-
-/**
- * Picks a preset avatar (T1) and, for a character with more than one, its outfit (settings: 👤 見た目 and
- * 👔 服装). The host takes the look when connecting, so picking one enters the area again.
- */
-function avatarPicker(
-	current: string,
-	showOutfits: (shown: boolean) => void,
-): { who: HTMLSelectElement; outfit: HTMLSelectElement } {
-	const who = el("select", "rj-select");
-	who.title = "見た目を選ぶ（選ぶと入り直します）";
-	const outfit = el("select", "rj-select");
-	outfit.title = "服装を選ぶ（選ぶと入り直します）";
-	const enter = (id: string) => {
-		saveAvatar(id);
-		const url = new URL(location.href);
-		url.searchParams.set("avatar", id);
-		url.searchParams.delete("at");
-		location.href = url.toString();
-	};
-	/** Fills the outfit list for a character, and hides it when there is only one. */
-	const fillOutfits = (all: PresetInfo[], id: string) => {
-		const outfits = outfitsOf(all, id);
-		outfit.replaceChildren();
-		for (const p of outfits) {
-			const o = el("option", "", p.outfit ?? "ふだん");
-			o.value = p.id;
-			outfit.append(o);
-		}
-		const auto = el("option", "", "🎲 おまかせ（入るたびに変わる）");
-		auto.value = AUTO;
-		outfit.append(auto);
-		outfit.value = outfitMode() === AUTO ? AUTO : id;
-		showOutfits(outfits.length > 1);
-	};
-	void presets().then((all) => {
-		for (const p of all.filter((p) => !p.base)) {
-			const o = el("option", "", `👤 ${p.name}`);
-			o.value = p.id;
-			who.append(o);
-		}
-		who.value = outfitsOf(all, current)[0]?.id ?? current;
-		fillOutfits(all, current);
-		who.onchange = async () => {
-			// another character: its first outfit (or, if the setting is "auto", a random one)
-			saveOutfitMode(outfitMode() === AUTO ? AUTO : who.value);
-			enter(await startingAvatar(who.value));
-		};
-		outfit.onchange = () => {
-			if (outfit.value === AUTO) {
-				saveOutfitMode(AUTO);
-				const outfits = outfitsOf(all, who.value);
-				enter(outfits[Math.floor(Math.random() * outfits.length)]?.id ?? who.value);
-			} else {
-				saveOutfitMode(outfit.value);
-				enter(outfit.value);
-			}
-		};
-	});
-	return { who, outfit };
-}
-
-/** First Google login: Google gives no name (scope is openid only), so the person picks one. */
-function showWelcome(root: HTMLElement, me: Me, redirect: string): void {
-	const box = el("form", "rj-login");
-	const name = el("input", "");
-	name.value = me.name;
-	name.maxLength = 24;
-	name.required = true;
-	const go = el("button", "", "この名前で入る");
-	go.type = "submit";
-	box.append(el("h1", "", "ようこそ"), el("p", "", "街で表示される名前を決めてください。"), name, go);
-	box.onsubmit = async (e) => {
-		e.preventDefault();
-		const r = await patchMe({ name: name.value });
-		if (r.ok) location.replace(redirect.startsWith("/") ? redirect : "/");
-	};
-	root.append(box);
-	name.select();
-}
-
-function showLogin(root: HTMLElement, health: { dev: boolean; google: boolean }): void {
-	const box = el("form", "rj-login");
-	box.append(el("h1", "", "rojibura"), el("p", "", "人間とAIが暮らす街"));
-	if (health.google) {
-		const google = el("a", "rj-google", "Google でログイン");
-		// come back to the page they opened (the city, or /agent: the city with your AI's panel open)
-		google.href = `/auth/google/login?redirect=${encodeURIComponent(location.pathname)}`;
-		box.append(google);
-	}
-	if (!health.dev) {
-		if (!health.google) box.append(el("p", "rj-note", "ログインは準備中です。"));
-		root.append(box);
-		return;
-	}
-	const name = el("input", "");
-	name.placeholder = "表示名（開発用ログイン）";
-	name.maxLength = 24;
-	name.required = true;
-	const avatar = el("select", "");
-	for (const [v, label] of [
-		["saki", "サキ"],
-		["shibu", "シブ"],
-		["shino", "シノ"],
-		["fumiriya", "フミリヤ"],
-		["rei", "レイ"],
-		["capsule", "カプセル"],
-	]) {
-		const o = el("option", "", label);
-		o.value = v ?? "";
-		avatar.append(o);
-	}
-	const go = el("button", "", "街に入る");
-	go.type = "submit";
-	box.append(
-		name,
-		avatar,
-		go,
-		el("p", "rj-note", "開発用のダミーログインです（cf dev とステージングだけ）。"),
-	);
-	box.onsubmit = (e) => {
-		e.preventDefault();
-		const redirect =
-			location.pathname === "/agent" ? "/agent" : `/?avatar=${encodeURIComponent(avatar.value)}`;
-		location.href = `/auth/dev/login?name=${encodeURIComponent(name.value)}&redirect=${encodeURIComponent(redirect)}`;
-	};
-	root.append(box);
-	name.focus();
 }
 
 async function startCity(
