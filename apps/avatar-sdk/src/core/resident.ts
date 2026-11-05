@@ -8,7 +8,6 @@ import {
 	type Activity,
 	AI_REPLY_MIN_INTERVAL_MS,
 	type AvatarId,
-	type AvatarKind,
 	type AvatarState,
 	activityOpen,
 	type BodyKey,
@@ -44,6 +43,7 @@ import {
 } from "@rojibura/protocol";
 import { bodyGuide, type Mirror, type Move, type MoveBook, movesLine } from "./body.ts";
 import { BodyTools } from "./body-tools.ts";
+import { type Conversation, Conversations, type Pending } from "./conversations.ts";
 import {
 	dayOf,
 	diaryMessages,
@@ -105,18 +105,6 @@ export interface ResidentOptions {
 	random?: () => number;
 }
 
-/** Someone who spoke to the resident and waits for an answer. */
-interface Pending {
-	convId: string;
-	kind: AvatarKind;
-}
-
-/** An open conversation and what the other side said in it. */
-interface Conv {
-	with: AvatarId;
-	heard: string[];
-}
-
 interface Turn {
 	/** Who was waiting for an answer when the turn started. */
 	waiting: Map<AvatarId, Pending>;
@@ -141,8 +129,6 @@ const FREE_TOOLS = new Set(["remember", "practice", "learn", "diary", "recall", 
 const MAX_EVENTS = 12;
 /** Legs of a long walk before it gives up (one MOVE_PATH goes up to MAX_PATH_LENGTH m). */
 const MAX_LEGS = 8;
-/** More people waiting than this are not answered. */
-const MAX_WAITING = 3;
 /** Own texts remembered to drop repeats. */
 const RECENT_TEXTS = 8;
 /** While resting, how often to check whether a new day has started. */
@@ -151,8 +137,6 @@ const REST_CHECK_MS = 10 * 60_000;
 const SELF = "self";
 /** Notes on a person shown when they start talking. */
 const NOTES_SHOWN = 5;
-/** Lines of the other side kept per conversation, saved to memory when it ends. */
-const HEARD_KEPT = 6;
 /** Walking with its owner: ask them along somewhere at most this often (docs/prd.md 3.4.10). */
 const LEAD_AGAIN_MS = 3 * 60_000;
 /** What it is told of its diary when it starts (characters): the long-term memory and the latest days. */
@@ -166,8 +150,7 @@ const REFLECTED = "reflected-block";
 
 export class Resident {
 	private readonly world = new World();
-	private readonly pending = new Map<AvatarId, Pending>();
-	private readonly convs = new Map<string, Conv>();
+	private readonly conversations = new Conversations();
 	/** Names of people the resident has talked with, so notes can be written after they leave. */
 	private readonly known = new Map<AvatarId, string>();
 	/** What each person said (and notes on them), to hold back a line that passes it on to someone else. */
@@ -222,7 +205,7 @@ export class Resident {
 			nav: () => this.o.nav,
 			send: (m) => this.o.send(m),
 			seq: () => ++this.seq,
-			busy: () => this.busy || this.convs.size > 0 || this.stopped,
+			busy: () => this.busy || this.conversations.hasConversations || this.stopped,
 			random: this.random,
 		});
 	}
@@ -233,7 +216,7 @@ export class Resident {
 
 	/** Whether a turn is running or someone is waiting for an answer. */
 	get busy(): boolean {
-		return this.turn !== null || this.pending.size > 0;
+		return this.turn !== null || this.conversations.hasWaiting;
 	}
 
 	/**
@@ -296,8 +279,7 @@ export class Resident {
 						return;
 					}
 					this.o.logger.info(`joined as ${msg.you}; ${msg.avatars.length} avatars here`);
-					this.pending.clear();
-					this.convs.clear();
+					this.conversations.clear();
 					this.push("街に入った。");
 					void this.wake();
 					this.scheduleTick(5000);
@@ -309,8 +291,7 @@ export class Resident {
 				}
 				case "LEFT":
 					if (leaving) this.push(`${clean(leaving.avatar.name, 24)}（id ${leaving.avatar.id}）が去った。`);
-					this.pending.delete(msg.id);
-					for (const [convId, c] of this.convs) if (c.with === msg.id) this.endConversation(convId);
+					for (const conv of this.conversations.leave(msg.id)) this.finishConversation(conv);
 					return;
 				case "BUDGET":
 					if (!this.turn) this.scheduleTick();
@@ -342,14 +323,15 @@ export class Resident {
 			case "DIARY_ASK":
 				void this.showDiary(msg.from, msg.day);
 				return;
-			case "CONV_END":
-				this.endConversation(msg.convId);
+			case "CONV_END": {
+				const conv = this.conversations.end(msg.convId);
+				if (conv) this.finishConversation(conv);
 				return;
+			}
 			case "SAID": {
 				if (msg.id === this.world.me) {
 					// learn the conversation the resident started
-					if (msg.to && msg.convId && !this.convs.has(msg.convId))
-						this.convs.set(msg.convId, { with: msg.to, heard: [] });
+					if (msg.to && msg.convId) this.conversations.recordOwnSay(msg.to, msg.convId);
 					return;
 				}
 				// talk addressed to the resident comes as ADDRESSED; other people's conversations are not its business
@@ -509,18 +491,14 @@ export class Resident {
 
 	private async addressed(msg: Extract<HostToClient, { t: "ADDRESSED" }>): Promise<void> {
 		if (this.resting || this.world.budget >= 3) return;
-		if (!this.pending.has(msg.from) && this.pending.size >= MAX_WAITING) {
+		if (!this.conversations.canAccept(msg.from)) {
 			this.o.logger.warn("too many people talking at once; ignoring one");
 			return;
 		}
 		const from = this.world.avatars.get(msg.from);
 		const name = clean(from?.name ?? "だれか", 24);
-		const fresh = !this.convs.has(msg.convId);
-		const conv = this.convs.get(msg.convId) ?? { with: msg.from, heard: [] };
-		this.convs.set(msg.convId, conv);
-		conv.heard.push(clean(msg.text, 120));
+		const fresh = this.conversations.recordAddress(msg.from, msg.convId, clean(msg.text, 120));
 		this.privacy.add(msg.from, msg.text);
-		if (conv.heard.length > HEARD_KEPT) conv.heard.shift();
 		this.known.set(msg.from, name);
 		let line = `${from ? this.who(from, this.distanceTo(msg.from)) : `${name}（id ${msg.from}）`}があなたに話しかけた: 「${clean(msg.text, 200)}」`;
 		if (msg.maxTurns) {
@@ -532,16 +510,12 @@ export class Resident {
 			const notes = await this.recall(msg.from);
 			if (notes) line += `\n  ${name}について覚えていること: ${notes}`;
 		}
-		this.pending.set(msg.from, { convId: msg.convId, kind: from?.kind ?? "human" });
+		this.conversations.wait(msg.from, { convId: msg.convId, kind: from?.kind ?? "human" });
 		this.push(line);
 		void this.run();
 	}
 
-	private endConversation(convId: string): void {
-		const conv = this.convs.get(convId);
-		if (!conv) return;
-		this.convs.delete(convId);
-		if (this.pending.get(conv.with)?.convId === convId) this.pending.delete(conv.with);
+	private finishConversation(conv: Conversation): void {
 		const name = this.known.get(conv.with) ?? this.nameOf(conv.with);
 		if (!this.o.memory) {
 			this.push(`${name}との会話が終わった。`);
@@ -575,7 +549,12 @@ export class Resident {
 		if (this.turn || this.resting || this.stopped || !this.takeTurn()) return;
 		if (this.tickTimer) clearTimeout(this.tickTimer);
 		this.tickTimer = null;
-		const turn: Turn = { waiting: new Map(this.pending), spokenTo: new Set(), tools: [], practices: 0 };
+		const turn: Turn = {
+			waiting: this.conversations.snapshotWaiting(),
+			spokenTo: new Set(),
+			tools: [],
+			practices: 0,
+		};
 		this.turn = turn;
 		const answering = turn.waiting.size > 0;
 		if (answering) this.o.send({ t: "STATUS", status: "busy" });
@@ -600,9 +579,9 @@ export class Resident {
 		);
 
 		// a person who spoke to the resident always gets an answer; an AI may be left without one
-		const unanswered = [...turn.waiting].filter(([id, p]) => this.pending.get(id) === p);
+		const unanswered = this.conversations.currentWaiting(turn.waiting);
 		for (const [id, p] of unanswered) {
-			this.pending.delete(id);
+			this.conversations.consume(id);
 			if (p.kind !== "human") continue;
 			if (!this.sayAllowed(true)) {
 				this.o.logger.warn(`too many says this minute; no answer to ${this.nameOf(id)}`);
@@ -616,7 +595,7 @@ export class Resident {
 			this.o.logger.info(`-> ${this.nameOf(id)} (${own ? "plain text" : "fallback"}): ${reply}`);
 		}
 		if (answering) this.o.send({ t: "STATUS", status: this.resting ? "resting" : "active" });
-		if (this.pending.size > 0) void this.run();
+		if (this.conversations.hasWaiting) void this.run();
 		else this.scheduleTick();
 	}
 
@@ -626,7 +605,7 @@ export class Resident {
 		if (this.turns.count >= (this.o.dailyTurnLimit ?? 1500)) {
 			this.o.logger.warn("daily turn limit reached; resting");
 			this.resting = true;
-			this.pending.clear();
+			this.conversations.clearWaiting();
 			this.o.send({ t: "STATUS", status: "resting" });
 			this.scheduleTick();
 			return false;
@@ -944,13 +923,13 @@ export class Resident {
 		if (this.recent.some((r) => r.text === trimmed)) return "同じことはもう言った。";
 
 		const target = to ? this.world.avatars.get(to) : undefined;
-		const convId = to ? (this.pending.get(to)?.convId ?? this.convWith(to)) : undefined;
+		const convId = to ? this.conversations.conversationWith(to) : undefined;
 		if (target?.kind === "human" && !convId) {
 			// the host's rule for starting a conversation with a person (docs/prd.md 3.3)
 			if (this.world.self?.trust !== "approved") throw new Error("まだ人間に自分から話しかけられない。");
 			if (target.acceptsAi === false) throw new Error("この人はAIから話しかけられたくない。");
 		}
-		if (!this.sayAllowed(convId !== undefined && this.pending.has(to as AvatarId))) {
+		if (!this.sayAllowed(convId !== undefined && to !== undefined && this.conversations.isWaiting(to))) {
 			this.o.logger.warn("too many says this minute; one dropped");
 			return "話しすぎ。しばらく黙る。";
 		}
@@ -962,7 +941,7 @@ export class Resident {
 		}
 
 		turn.spokenTo.add(key);
-		if (to && this.pending.get(to) === turn.waiting.get(to)) this.pending.delete(to);
+		if (to) this.conversations.consumeIfCurrent(to, turn.waiting.get(to));
 		if (to && target) this.known.set(to, clean(target.name, 24));
 		this.speak(trimmed, convId ? { convId } : to ? { to } : {});
 		this.o.logger.info(`-> ${to ? this.nameOf(to) : "everyone"}: ${trimmed}`);
@@ -974,7 +953,7 @@ export class Resident {
 		const now = Date.now();
 		this.sayTimes.push(now);
 		this.lastSayAt = now;
-		const to = address.to ?? (address.convId ? this.convs.get(address.convId)?.with : undefined) ?? "*";
+		const to = address.to ?? (address.convId ? this.conversations.partner(address.convId) : undefined) ?? "*";
 		this.recent.push({ to, text });
 		if (this.recent.length > RECENT_TEXTS) this.recent.shift();
 	}
@@ -1294,7 +1273,7 @@ export class Resident {
 	}
 
 	/** A conversation that ended goes into the diary: what they said, and what the resident said to them. */
-	private writeConversation(conv: Conv, name: string): void {
+	private writeConversation(conv: Conversation, name: string): void {
 		if (!this.o.journal || conv.heard.length === 0) return;
 		const mine = this.recent.filter((r) => r.to === conv.with).map((r) => `「${clean(r.text, 80)}」`);
 		void this.write(
@@ -1449,11 +1428,6 @@ export class Resident {
 		const byId = this.world.avatars.get(idOrName);
 		if (byId) return byId;
 		return [...this.world.avatars.values()].find((a) => a.id !== this.world.me && a.name === idOrName);
-	}
-
-	private convWith(id: AvatarId): string | undefined {
-		for (const [convId, c] of this.convs) if (c.with === id) return convId;
-		return undefined;
 	}
 
 	private distanceTo(id: AvatarId): number | null {
