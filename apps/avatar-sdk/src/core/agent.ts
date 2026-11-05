@@ -20,8 +20,6 @@ import {
 	HUNGRY,
 	ITEM_REACH,
 	type ItemId,
-	insidePolygon,
-	type JobKind,
 	type JobZone,
 	LEAD_MIN_DISTANCE,
 	LEAD_PLACE_MAX,
@@ -35,6 +33,7 @@ import {
 	type Vec2,
 	WALK_SPEED,
 } from "@rojibura/protocol";
+import { Errands } from "./errand.ts";
 import { type DiaryPage, diaryMessages, jstDate } from "./journal.ts";
 import {
 	decisionSchema,
@@ -119,14 +118,6 @@ function wantsExercise(life: LifeState): boolean {
 	return exerciseDue(life) && life.energy >= EXERCISE_ENERGY;
 }
 
-/** Where it is walking to (`to`, a leg at a time: `legs` so far), and what for. */
-type Errand = (
-	| { kind: "act"; id: string }
-	| { kind: "buy"; shop: string; goods: string }
-	| { kind: "job"; job: JobKind; zone: string }
-) & { to?: Vec2; legs?: number };
-/** Legs of a long way before it gives up (one leg is up to MAX_PATH_LENGTH m). */
-const MAX_LEGS = 8;
 /**
  * Playing with a ball or a box (docs/prd.md 3.4.7): one this close may catch its eye (now and then, PLAY_CHANCE
  * of its idle moments); it throws it to someone within THROW_TO, or puts it down after a while.
@@ -160,7 +151,7 @@ export class Agent {
 	private seq = 0;
 	/** What it did today ("07:30 原っぱで体操"), and where it is walking to. */
 	private doneToday: string[] = [];
-	private going: Errand | null = null;
+	private readonly errands: Errands;
 	/** The thing it walks to, to pick it up there. */
 	private fetching: { id: ItemId; timer: ReturnType<typeof setTimeout> } | null = null;
 	private readonly o: AgentOptions;
@@ -173,7 +164,7 @@ export class Agent {
 		this.o.shops = life.shops ?? [];
 		this.o.foods = life.foods ?? {};
 		this.o.jobZones = life.jobZones ?? [];
-		this.going = null;
+		this.errands.cancel();
 	}
 	private readonly random: () => number;
 
@@ -183,12 +174,19 @@ export class Agent {
 	constructor(opts: AgentOptions) {
 		this.o = opts;
 		this.random = opts.random ?? Math.random;
+		this.errands = new Errands(
+			opts,
+			this.world,
+			(to) => this.walkTo(to),
+			(ms) => this.scheduleWander(ms),
+			this.random,
+		);
 		this.stroll = new Stroll({
 			world: this.world,
 			nav: () => this.o.nav,
 			send: (m) => this.o.send(m),
 			seq: () => ++this.seq,
-			busy: () => this.busy || this.convs.size > 0 || this.going !== null,
+			busy: () => this.busy || this.convs.size > 0 || this.errands.busy,
 			random: this.random,
 		});
 	}
@@ -216,7 +214,7 @@ export class Agent {
 	handle(msg: HostToClient): void {
 		const applied = this.world.apply(msg);
 		// walking with its owner the host moves it: an errand it was on is over
-		if (msg.t === "COMPANY" && msg.on) this.going = null;
+		if (msg.t === "COMPANY" && msg.on) this.errands.cancel();
 		this.stroll.sync();
 		if (applied) {
 			if (msg.t === "WELCOME") {
@@ -271,7 +269,7 @@ export class Agent {
 			case "NOTICE":
 				this.o.logger.warn(`notice ${msg.kind}: ${msg.message}`);
 				// refused (closed, full, too far...): it thinks again; a reply sent too soon is nothing to do with it
-				if (msg.kind === "rejected") this.going = null;
+				if (msg.kind === "rejected") this.errands.cancel();
 				return;
 			case "ITEM": {
 				// what it bought to eat: it eats it
@@ -338,18 +336,7 @@ export class Agent {
 		if (!life) return false;
 		const t = cityTime(this.hostNow());
 		const coins = this.world.coins;
-		// arrived where it was going
-		const going = this.going;
-		this.going = null;
-		if (going && this.arrive(going, here)) return true;
-		// a long way: on with the next leg
-		if (
-			going?.to &&
-			(going.legs ?? 0) < MAX_LEGS &&
-			dist(here, going.to) > 1.5 &&
-			this.goFor(going, going.to, "on")
-		)
-			return true;
+		if (this.errands.continue(here)) return true;
 		// working or studying: on until the day's work is done and the wallet is fine, or it gets hungry
 		const job = this.world.self?.job;
 		if (job) {
@@ -379,7 +366,7 @@ export class Agent {
 		let a: Activity | undefined;
 		if (wantsExercise(life)) a = one("exercise");
 		if (!a && this.random() < 0.25) a = one("play", "rest");
-		return a ? this.goDo(a, here) : false;
+		return a ? this.errands.activity(a, here) : false;
 	}
 
 	private placeOf(a: Activity): Landmark | undefined {
@@ -388,52 +375,6 @@ export class Agent {
 
 	private canDo(a: Activity, life: LifeState, minutes: number, coins: number | null): boolean {
 		return activityOpen(a, minutes) && !cannotStart(life, a) && (coins === null || (a.cost ?? 0) <= coins);
-	}
-
-	/** There: does what it went for. False if it is not there after all. */
-	private arrive(e: Errand, here: Vec2): boolean {
-		if (e.kind === "act") {
-			const a = this.o.activities?.find((x) => x.id === e.id);
-			const place = a ? this.placeOf(a) : undefined;
-			if (!a || !place || dist(here, place.pos) > ACTIVITY_REACH - 0.5) return false;
-			this.o.send({ t: "ACT", activity: a.id });
-			this.o.logger.info(`doing ${a.id}`);
-			return true;
-		}
-		if (e.kind === "buy") {
-			const shop = this.o.shops?.find((s) => s.id === e.shop);
-			if (!shop || dist(here, shop.counter) > SHOP_REACH - 0.5) return false;
-			this.o.send({ t: "BUY", shop: shop.id, goods: e.goods });
-			this.o.logger.info(`buying ${e.goods} at ${shop.name}`);
-			return true;
-		}
-		const zone = this.o.jobZones?.find((z) => z.id === e.zone);
-		if (!zone || !insidePolygon(here, zone.poly)) return false;
-		this.o.send({ t: "JOB", kind: e.job });
-		this.o.logger.info(`${e.job === "work" ? "working" : "studying"} at ${zone.name}`);
-		return true;
-	}
-
-	/** Walks to `to` for an errand, and looks again about when it is there. */
-	private goFor(e: Errand, to: Vec2, what: string): boolean {
-		const from = this.world.me ? this.positionOf(this.world.me) : null;
-		if (!this.walkTo(to)) return false;
-		this.going = { ...e, to, legs: (e.legs ?? 0) + 1 };
-		this.o.logger.info(`going ${what}`);
-		const eta = from ? (dist(from, to) / WALK_SPEED) * 1000 : 10_000;
-		this.scheduleWander(eta * 1.4 + 2000);
-		return true;
-	}
-
-	private goDo(a: Activity, here: Vec2): boolean {
-		const place = this.placeOf(a);
-		if (!place) return false;
-		const e: Errand = { kind: "act", id: a.id };
-		if (dist(here, place.pos) <= ACTIVITY_REACH - 0.5) return this.arrive(e, here);
-		const angle = this.random() * Math.PI * 2;
-		const near: Vec2 = [place.pos[0] + Math.cos(angle) * 1.2, place.pos[1] + Math.sin(angle) * 1.2];
-		const what = `to ${place.name} for ${a.name}`;
-		return this.goFor(e, near, what) || this.goFor(e, place.pos, what);
 	}
 
 	/** Whether it would eat now: hungry, or a mealtime it has not eaten at. */
@@ -463,9 +404,7 @@ export class Agent {
 		const choice = this.foodChoice(anything);
 		const pick = choice[Math.floor(this.random() * choice.length)];
 		if (!pick) return false;
-		const e: Errand = { kind: "buy", shop: pick.s.id, goods: pick.g.id };
-		if (dist(here, pick.s.counter) <= SHOP_REACH - 0.5) return this.arrive(e, here);
-		return this.goFor(e, pick.s.counter, `to ${pick.s.name} for ${pick.g.name}`);
+		return this.errands.buy(pick.s, pick.g, here);
 	}
 
 	/**
@@ -478,7 +417,7 @@ export class Agent {
 		const choice = this.foodChoice(want.anything);
 		const at = choice.filter((f) => dist(here, f.s.counter) <= SHOP_REACH - 0.5);
 		const pick = at[Math.floor(this.random() * at.length)];
-		if (pick) return this.arrive({ kind: "buy", shop: pick.s.id, goods: pick.g.id }, here);
+		if (pick) return this.errands.buy(pick.s, pick.g, here);
 		const near = choice
 			.map((f) => ({ ...f, d: dist(here, f.s.counter) }))
 			.filter((f) => f.d >= LEAD_MIN_DISTANCE)
@@ -495,14 +434,7 @@ export class Agent {
 		const zones = this.o.jobZones ?? [];
 		const zone = zones[Math.floor(this.random() * zones.length)];
 		if (!zone) return false;
-		const e: Errand = { kind: "job", job: zone.kind, zone: zone.id };
-		if (insidePolygon(here, zone.poly)) return this.arrive(e, here);
-		const n = zone.poly.length;
-		const mid: Vec2 = [
-			zone.poly.reduce((s, p) => s + p[0], 0) / n,
-			zone.poly.reduce((s, p) => s + p[1], 0) / n,
-		];
-		return this.goFor(e, mid, `to ${zone.name} to ${zone.kind}`);
+		return this.errands.work(zone, here);
 	}
 
 	/**
@@ -523,7 +455,7 @@ export class Agent {
 			.sort((x, y) => x.d - y.d);
 		const at = can.find((c) => c.d <= ACTIVITY_REACH - 0.5);
 		if (at) {
-			if (!this.arrive({ kind: "act", id: at.a.id }, here)) return false;
+			if (!this.errands.activity(at.a, here)) return false;
 			const owner = this.world.company;
 			if (owner)
 				this.o.send({ t: "SAY", text: `${at.a.name}をするね。終わるまで、ここで待っててね。`, to: owner });
