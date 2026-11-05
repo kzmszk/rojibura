@@ -1,16 +1,7 @@
 // Area logic of CityRoomDO, independent of the Workers runtime so it can be tested in Node
 // (docs/prd.md 3.2, 3.3). The Durable Object adapter (room.ts) owns sockets, hibernation and auth.
 
-import {
-	boxNav,
-	claimed,
-	type KeepOut,
-	keepingOut,
-	type ModelNav,
-	occupied,
-	overlaps,
-	type PlacedModel,
-} from "@rojibura/nav";
+import { boxNav, type KeepOut, keepingOut, type ModelNav, type PlacedModel } from "@rojibura/nav";
 import {
 	ACTIVITY_REACH,
 	type Activity,
@@ -55,7 +46,6 @@ import {
 	FLY_REACH,
 	FLY_RUN_SPEED,
 	type Food,
-	facing,
 	finishActivity,
 	finishJob,
 	type HostToClient,
@@ -111,6 +101,7 @@ import {
 	WARP_INTERVAL_MS,
 	withCompany,
 } from "@rojibura/protocol";
+import { findBuildPlacement } from "./build-placement.ts";
 import { PRODUCTION_RULES, type RoomRules } from "./rules.ts";
 
 /** What the area needs to know about the walkable ground (implemented with @rojibura/nav). */
@@ -308,15 +299,6 @@ const SEAT_FRONT = 0.5;
 /** After something done together, the two may still step back this long (ms): the host leaves them be. */
 const STEP_BACK_GRACE_MS = 3000;
 
-/** Building: keep this clear around the spawn point and landmarks (m). */
-const SPAWN_CLEAR = 3.5;
-const LANDMARK_CLEAR = 1.5;
-/** Searching for a free spot: rings this far apart, this many directions, this many rings. */
-const SPOT_STEP = 1;
-const SPOT_DIRECTIONS = 16;
-const SPOT_RINGS = 12;
-/** Spots whose cheap checks pass and whose walkable area is then computed, at most. */
-const SPOT_FULL_CHECKS = 4;
 const BLOCK_DEFAULT_SIZE: [number, number, number] = [1, 1, 1];
 
 interface Bucket {
@@ -2388,43 +2370,38 @@ export class RoomCore<C> {
 		const anchor = this.anchor(msg.at, now);
 		if (typeof anchor === "string") return anchor;
 
-		const existing = this.placedAll();
-		let firstError: string | null = null;
-		let fullChecks = 0;
-		for (const pos of anchor.exact ? [anchor.point] : this.spotsAround(anchor.point, nav, scale)) {
-			const rot = msg.rot ?? (anchor.face ? facing(pos, anchor.face) : 0);
-			const placed: PlacedModel = { nav, pos, y: bw.groundHeight(pos) ?? 0, rot, scale };
-			let err = this.placementError(placed, existing, now);
-			if (!err) {
-				if (fullChecks++ >= SPOT_FULL_CHECKS) break;
-				const walk = bw.walkWith([...existing, placed]);
-				err = this.reachError(walk, now);
-				if (!err) {
-					const b: Build = {
-						id: `b_${this.newId()}`,
-						model: msg.model,
-						pos: [round2(pos[0]), round2(pos[1])],
-						y: round2(placed.y),
-						rot,
-						scale,
-						by: m.id,
-						byName: m.name,
-						at: now,
-					};
-					if (size) b.size = size;
-					if (msg.color) b.color = msg.color;
-					if (msg.label) b.label = msg.label;
-					this.builds.set(b.id, b);
-					this.store?.save(b);
-					this.walk = walk;
-					this.broadcastAll({ t: "BUILT", build: b, ref: msg.ref });
-					this.stopThoseCrossing(now);
-					return null;
-				}
-			}
-			firstError ??= err;
-		}
-		return firstError ?? "置ける場所が見つかりません";
+		const result = findBuildPlacement({
+			anchor,
+			nav,
+			scale,
+			rotation: msg.rot,
+			existing: this.placedAll(),
+			world: this.world,
+			buildWorld: bw,
+			people: [...this.memberValues()].map((o) => ({ name: o.name, pos: this.positionOf(o, now) })),
+		});
+		if (result.kind === "rejected") return result.error;
+		const { placed, walk } = result;
+		const b: Build = {
+			id: `b_${this.newId()}`,
+			model: msg.model,
+			pos: [round2(placed.pos[0]), round2(placed.pos[1])],
+			y: round2(placed.y),
+			rot: placed.rot,
+			scale,
+			by: m.id,
+			byName: m.name,
+			at: now,
+		};
+		if (size) b.size = size;
+		if (msg.color) b.color = msg.color;
+		if (msg.label) b.label = msg.label;
+		this.builds.set(b.id, b);
+		this.store?.save(b);
+		this.walk = walk;
+		this.broadcastAll({ t: "BUILT", build: b, ref: msg.ref });
+		this.stopThoseCrossing(now);
+		return null;
 	}
 
 	private unbuild(m: Member, msg: Extract<ClientToHost, { t: "UNBUILD" }>): string | null {
@@ -2457,55 +2434,6 @@ export class RoomCore<C> {
 		return at.offset
 			? { point: [point[0] + at.offset[0], point[1] + at.offset[1]], exact: true, face: point }
 			: { point, exact: false, face: point };
-	}
-
-	/** Candidate centres in rings around `center`, starting just clear of the model's own size. */
-	private *spotsAround(center: Vec2, nav: ModelNav, scale: number): Generator<Vec2> {
-		const reach = Math.max(
-			...nav.footprint.flat().map((p) => Math.hypot(p[0], p[1]) * scale),
-			...(nav.walk ? [Math.hypot(nav.max[0] - nav.min[0], nav.max[2] - nav.min[2]) / 2 + 1] : [0]),
-		);
-		for (let ring = 0; ring < SPOT_RINGS; ring++) {
-			const r = reach + 1 + ring * SPOT_STEP;
-			for (let k = 0; k < SPOT_DIRECTIONS; k++) {
-				const a = ((k + (ring % 2) * 0.5) / SPOT_DIRECTIONS) * Math.PI * 2;
-				yield [center[0] + Math.sin(a) * r, center[1] + Math.cos(a) * r];
-			}
-		}
-	}
-
-	/** The cheap checks: on the ground, clear of other builds, the spawn point, landmarks and people. */
-	private placementError(p: PlacedModel, existing: PlacedModel[], now: number): string | null {
-		const city = this.world.walk;
-		const parts = occupied(p);
-		const onGround = parts.every((part) => sampleOutline(part, 0.5).every((q) => city.isWalkable(q)));
-		if (!onGround || !city.isWalkable(p.pos))
-			return "そこには建てられません（地面の外か、街の建物と重なります）";
-		const mine = claimed(p);
-		if (existing.some((o) => claimed(o).some((c) => mine.some((d) => overlaps(c, d, 1e-4)))))
-			return "ほかの建物と重なります";
-		const blocking = occupied(p, 0.3);
-		const near = (q: Vec2, d: number) => blocking.some((part) => distanceToConvex(q, part) <= d);
-		if (near(this.world.spawn, SPAWN_CLEAR)) return "スポーン地点のそばには建てられません";
-		const landmark = this.world.landmarks.find((l) => near(l.pos, LANDMARK_CLEAR));
-		if (landmark) return `${landmark.name}の上には建てられません`;
-		for (const o of this.memberValues())
-			if (near(this.positionOf(o, now), 0.2)) return `そこに${o.name}がいます`;
-		return null;
-	}
-
-	/** With `walk`, everyone can still get to the spawn point, and from there to every landmark. */
-	private reachError(walk: Walkable, now: number): string | null {
-		const find = walk.findPath?.bind(walk);
-		if (!find) return null;
-		const spawn = walk.closestPoint(this.world.spawn);
-		for (const l of this.world.landmarks)
-			if (!find(spawn, walk.closestPoint(l.pos)))
-				return `道をふさいでしまいます（${l.name}へ行けなくなります）`;
-		for (const o of this.memberValues())
-			if (!find(walk.closestPoint(this.positionOf(o, now)), spawn))
-				return `道をふさいでしまいます（${o.name}が出られなくなります）`;
-		return null;
 	}
 
 	/** A path from here to (near) `to` on the walkable area with builds, within the protocol's limits. */
@@ -2748,35 +2676,6 @@ function round1(n: number): number {
 
 function round2(n: number): number {
 	return Math.round(n * 100) / 100;
-}
-
-/** Points along a convex polygon's outline at most `step` apart (its corners included). */
-function sampleOutline(poly: Vec2[], step: number): Vec2[] {
-	const out: Vec2[] = [];
-	for (let i = 0; i < poly.length; i++) {
-		const a = poly[i] as Vec2;
-		const b = poly[(i + 1) % poly.length] as Vec2;
-		const n = Math.max(1, Math.ceil(dist(a, b) / step));
-		for (let k = 0; k < n; k++) out.push([a[0] + ((b[0] - a[0]) * k) / n, a[1] + ((b[1] - a[1]) * k) / n]);
-	}
-	return out;
-}
-
-/** Distance from `p` to a convex polygon (counter-clockwise): 0 inside. */
-function distanceToConvex(p: Vec2, poly: Vec2[]): number {
-	let inside = true;
-	let best = Number.POSITIVE_INFINITY;
-	for (let i = 0; i < poly.length; i++) {
-		const a = poly[i] as Vec2;
-		const b = poly[(i + 1) % poly.length] as Vec2;
-		const dx = b[0] - a[0];
-		const dz = b[1] - a[1];
-		if (dx * (p[1] - a[1]) - dz * (p[0] - a[0]) < 0) inside = false;
-		const len2 = dx * dx + dz * dz;
-		const t = len2 > 0 ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dz) / len2)) : 0;
-		best = Math.min(best, Math.hypot(p[0] - (a[0] + dx * t), p[1] - (a[1] + dz * t)));
-	}
-	return inside ? 0 : best;
 }
 
 /** The part of a path move still ahead at `now`, starting where the avatar is. */

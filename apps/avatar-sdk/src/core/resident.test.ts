@@ -1,8 +1,9 @@
 import type { AvatarState, ClientToHost, HostToClient } from "@rojibura/protocol";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { Mirror, Move, MoveBook, RehearseRequest } from "./body.ts";
+import { parseKeysText } from "./body-tools.ts";
 import { FALLBACK_REPLIES } from "./prompt.ts";
-import { type Mind, parseKeysText, Resident, type ResidentOptions, touchedParts } from "./resident.ts";
+import { type Mind, Resident, type ResidentOptions, touchedParts } from "./resident.ts";
 import type { Memory } from "./types.ts";
 
 type Call = [tool: string, args: Record<string, unknown>];
@@ -581,6 +582,23 @@ describe("its own body", () => {
 		expect(s.sent.find((m) => m.t === "BODY")).toEqual({ t: "BODY", keys: pat, to: "h_saki" });
 		expect(moves.moves[0]?.uses).toBe(1);
 	}, 5000);
+
+	test("stopping cancels a body script waiting for its approach", async () => {
+		vi.useFakeTimers();
+		try {
+			const s = setup([{ calls: [["move_body", { keys: pat, to: "h_saki" }]] }], {
+				body: { mirror: fakeMirror(), moves: fakeBook() },
+			});
+			current = s.resident;
+			await s.resident.turnNow();
+			expect(s.sent.some((m) => m.t === "MOVE_PATH")).toBe(true);
+			s.resident.stop();
+			await vi.advanceTimersByTimeAsync(5000);
+			expect(s.sent.some((m) => m.t === "BODY")).toBe(false);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 
 	test("touches nobody but its owner, says what is wrong with a script, and can only rehearse so often", async () => {
 		const mirror = fakeMirror();
