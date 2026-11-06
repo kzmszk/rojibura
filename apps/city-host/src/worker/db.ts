@@ -126,7 +126,14 @@ export async function listAgents(db: D1Database, ownerId: string): Promise<Agent
 export async function registerAgent(
 	db: D1Database,
 	ownerId: string,
-	input: { name: string; publicKey: string; runtime: string; preset?: string | null },
+	input: {
+		name: string;
+		publicKey: string;
+		runtime: string;
+		preset?: string | null;
+		/** Provisional unless said otherwise. */
+		trust?: "provisional" | "approved";
+	},
 	/** Agents one account may register; null for no limit (free play, docs/prd.md 3.7). */
 	limit: number | null = AGENTS_PER_OWNER,
 ): Promise<Agent | string> {
@@ -138,9 +145,18 @@ export async function registerAgent(
 	const id = `a_${randomToken(9)}`;
 	await db
 		.prepare(
-			"INSERT INTO agents (id, owner_id, name, runtime, public_key, trust, preset_id, created_at) VALUES (?, ?, ?, ?, ?, 'provisional', ?, ?)",
+			"INSERT INTO agents (id, owner_id, name, runtime, public_key, trust, preset_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
 		)
-		.bind(id, ownerId, input.name, input.runtime, input.publicKey, input.preset ?? null, Date.now())
+		.bind(
+			id,
+			ownerId,
+			input.name,
+			input.runtime,
+			input.publicKey,
+			input.trust ?? "provisional",
+			input.preset ?? null,
+			Date.now(),
+		)
 		.run();
 	const agent = await db.prepare("SELECT * FROM agents WHERE id = ?").bind(id).first<Agent>();
 	return agent ?? "登録に失敗しました";
@@ -218,6 +234,27 @@ export function pcOf(
 		.prepare("SELECT public_key, paired_at FROM agent_pc WHERE agent_id = ? AND public_key IS NOT NULL")
 		.bind(agentId)
 		.first<{ public_key: string; paired_at: number }>();
+}
+
+/** AIs waiting for an admin's approval, oldest first (docs/prd.md 2.2.4). */
+export async function listProvisionalAgents(
+	db: D1Database,
+): Promise<
+	{ id: string; name: string; runtime: string; owner_id: string; owner_name: string; created_at: number }[]
+> {
+	const r = await db
+		.prepare(
+			"SELECT a.id, a.name, a.runtime, a.owner_id, o.display_name AS owner_name, a.created_at FROM agents a JOIN accounts o ON o.id = a.owner_id WHERE a.trust = 'provisional' ORDER BY a.created_at LIMIT 200",
+		)
+		.all<{
+			id: string;
+			name: string;
+			runtime: string;
+			owner_id: string;
+			owner_name: string;
+			created_at: number;
+		}>();
+	return r.results;
 }
 
 /** Which of an owner's AIs are paired with a PC, and since when. */

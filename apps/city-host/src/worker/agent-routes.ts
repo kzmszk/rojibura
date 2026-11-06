@@ -63,7 +63,8 @@ export async function agentRoutes(
 		const r = await registerAgent(
 			deps.db,
 			account.id,
-			{ name, publicKey, runtime, preset },
+			// admins are the ones who approve: theirs need no one's approval (docs/prd.md 2.2.2)
+			{ name, publicKey, runtime, preset, trust: account.role === "admin" ? "approved" : "provisional" },
 			deps.freePlay ? null : undefined,
 		);
 		if (typeof r === "string") return error(409, r);

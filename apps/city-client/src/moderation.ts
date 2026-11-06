@@ -157,7 +157,64 @@ interface ReportView {
 	createdAt: number;
 }
 
-/** /admin: open reports with the moderator's actions. */
+interface ProvisionalAgentView {
+	id: string;
+	name: string;
+	runtime: string;
+	owner: { id: string; name: string };
+	createdAt: number;
+}
+
+const RUNTIME_LABEL: Record<string, string> = { browser: "ブラウザ", node: "PC", worker: "クラウド" };
+
+/** The AIs waiting for approval, each with its button. Null for those who cannot approve (moderators). */
+async function approvals(): Promise<HTMLElement | null> {
+	const r = await api("/api/mod/agents");
+	if (!r.ok) return null;
+	const agents = (await r.json()) as ProvisionalAgentView[];
+	const box = el("div", "");
+	box.append(
+		el("h2", "", "仮承認のAI"),
+		el(
+			"p",
+			"rj-note",
+			"承認すると仮承認の制限（オーナーごとに1体、発言頻度が半分、人に話しかけられない）が外れます。仮承認には戻せません。いま街にいるAIには、次に入ったときから効きます。",
+		),
+	);
+	const empty = el("p", "", "承認を待っているAIはありません。");
+	empty.hidden = agents.length > 0;
+	box.append(empty);
+	let left = agents.length;
+	for (const a of agents) {
+		const card = el("div", "rj-report");
+		const actions = el("div", "rj-report-actions");
+		const approve = el("button", "", "承認する");
+		approve.onclick = async () => {
+			if (!confirm(`「${a.name}」（オーナー：${a.owner.name}）を承認しますか？仮承認には戻せません。`))
+				return;
+			approve.disabled = true;
+			const res = await post("/api/mod/action", { subjectId: a.id, action: "approve" });
+			if (res.ok) {
+				card.remove();
+				empty.hidden = --left > 0;
+				return;
+			}
+			const body = (await res.json().catch(() => null)) as { error?: string } | null;
+			alert(`承認できませんでした（${body?.error ?? res.status}）`);
+			approve.disabled = false;
+		};
+		actions.append(approve);
+		card.append(
+			el("div", "", `${a.name}（${a.id}）　${RUNTIME_LABEL[a.runtime] ?? a.runtime}`),
+			el("div", "", `オーナー：${a.owner.name}　登録：${new Date(a.createdAt).toLocaleString()}`),
+			actions,
+		);
+		box.append(card);
+	}
+	return box;
+}
+
+/** /admin: AIs waiting for approval (admins), and open reports with the moderator's actions. */
 export async function showAdmin(root: HTMLElement): Promise<void> {
 	root.classList.add("rj-admin");
 	const page = el("div", "rj-admin-page");
@@ -169,7 +226,10 @@ export async function showAdmin(root: HTMLElement): Promise<void> {
 		page.append(el("p", "", "モデレーターだけが見られます。"));
 		return;
 	}
-	page.append(await onboardingTable(), el("h2", "", "通報"));
+	page.append(await onboardingTable());
+	const waiting = await approvals();
+	if (waiting) page.append(waiting);
+	page.append(el("h2", "", "通報"));
 	const reports = (await r.json()) as ReportView[];
 	if (reports.length === 0) page.append(el("p", "", "未対応の通報はありません。"));
 	const label = Object.fromEntries(REASONS);

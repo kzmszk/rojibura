@@ -430,6 +430,49 @@ describe("moderation route contract", () => {
 		expect(sqlite.prepare("SELECT status FROM reports").get()).toMatchObject({ status: "resolved" });
 		expect(sqlite.prepare("SELECT * FROM mod_actions").all()).toHaveLength(0);
 	});
+	test("only admins see the AIs waiting for approval, and an approved one leaves the list", async () => {
+		sqlite.exec(
+			"INSERT INTO agents (id, owner_id, name, runtime, public_key, trust, created_at) VALUES ('a_ok','h_owner','Ok','browser','key','approved',1), ('a_off','h_owner','Off','browser','key','suspended',2)",
+		);
+		current = account;
+		expect(await result("/api/mod/agents", "GET")).toMatchObject({ status: 403 });
+		current = moderator;
+		expect(await result("/api/mod/agents", "GET")).toMatchObject({ status: 403 });
+		current = { ...moderator, role: "admin" };
+		expect(await result("/api/mod/agents", "GET")).toEqual({
+			status: 200,
+			body: [
+				{
+					id: "a_owned",
+					name: "Agent",
+					runtime: "node",
+					owner: { id: "h_owner", name: "Owner" },
+					createdAt: 0,
+				},
+			],
+		});
+		await result("/api/mod/action", "POST", { action: "approve", subjectId: "a_owned" });
+		expect(await result("/api/mod/agents", "GET")).toEqual({ status: 200, body: [] });
+	});
+
+	test("approving neither lifts a suspension nor passes for an AI that is not there", async () => {
+		sqlite.exec(
+			"INSERT INTO agents (id, owner_id, name, runtime, public_key, trust, created_at) VALUES ('a_off','h_owner','Off','browser','key','suspended',2)",
+		);
+		current = { ...moderator, role: "admin" };
+		expect(await result("/api/mod/action", "POST", { action: "approve", subjectId: "a_off" })).toMatchObject({
+			status: 409,
+		});
+		expect(sqlite.prepare("SELECT trust FROM agents WHERE id='a_off'").get()).toMatchObject({
+			trust: "suspended",
+		});
+		expect(await result("/api/mod/action", "POST", { action: "approve", subjectId: "a_none" })).toMatchObject(
+			{
+				status: 404,
+			},
+		);
+	});
+
 	test("approval and development role authorization retain their distinct gates", async () => {
 		current = moderator;
 		expect(await result("/api/mod/action", "POST", { action: "approve", subjectId: "a_owned" })).toEqual({

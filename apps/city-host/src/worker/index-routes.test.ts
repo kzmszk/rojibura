@@ -111,6 +111,22 @@ describe("an owner's AIs", () => {
 		);
 	});
 
+	test("an admin's new AI is approved from the start; anyone else's is provisional", async () => {
+		fakes.rawDb.exec(
+			"INSERT INTO accounts (id, provider, subject, display_name, role, created_at) VALUES ('h_admin', 'dev', 'admin', 'Admin', 'admin', 0)",
+		);
+		const kp = await generateAgentKeyPair(true);
+		const publicKey = await exportPublicKey(kp.publicKey);
+		const register = (account: string) =>
+			request("/api/agents", "POST", { name: "New", publicKey, runtime: "browser" }, account);
+		expect(await register("h_admin")).toMatchObject({ status: 201, body: { trust: "approved" } });
+		expect(await register("h_mod")).toMatchObject({ status: 201, body: { trust: "provisional" } });
+		expect(await register("h_other")).toMatchObject({ status: 201, body: { trust: "provisional" } });
+		expect(fakes.rawDb.prepare("SELECT trust FROM agents WHERE owner_id = 'h_admin'").get()).toMatchObject({
+			trust: "approved",
+		});
+	});
+
 	test("/api/me lists them all with the limits; the guide and others' AIs are not among them", async () => {
 		const me = await request("/api/me", "GET", undefined, "h_owner");
 		expect(me.body).toMatchObject({
