@@ -27,6 +27,29 @@ export async function currentArea(
 	return { area: { ...info, id, assetBase: withSlash(override ?? info.assets ?? info.dir) }, all };
 }
 
+/**
+ * Where you were in this area, kept by this tab: loaded again, it draws what is round you first. Only that: where you
+ * really are is the host's to say.
+ */
+const placeKey = (area: AreaId) => `rj.place.${area}`;
+
+export function keepPlace(area: AreaId, at: Vec2): void {
+	try {
+		sessionStorage.setItem(placeKey(area), JSON.stringify(at));
+	} catch {
+		// private mode: the 3D round where everyone arrives comes first, then
+	}
+}
+
+export function keptPlace(area: AreaId): Vec2 | null {
+	try {
+		const v = JSON.parse(sessionStorage.getItem(placeKey(area)) ?? "null") as unknown;
+		return Array.isArray(v) && v.length === 2 && v.every((n) => typeof n === "number") ? (v as Vec2) : null;
+	} catch {
+		return null;
+	}
+}
+
 /** How much 3D detail to draw: the area's lighter files (`sceneLite`) on phones and tablets, or as chosen. */
 export type Detail = "auto" | "full" | "lite";
 export const DETAIL_KEY = "rj.detail";

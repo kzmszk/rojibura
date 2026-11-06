@@ -52,6 +52,18 @@ export interface BuildStore {
 }
 
 /** Saves the area's small things whenever one changes (DO key-value storage). */
+/** Where someone was when they left, and when. */
+export interface KeptPlace {
+	pos: Vec2;
+	at: number;
+}
+
+/** Where members were when they left: the adapter keeps it, so it lasts while the room sleeps (docs/prd.md 3.3). */
+export interface PlaceStore {
+	load(id: AvatarId): KeptPlace | undefined;
+	save(id: AvatarId, place: KeptPlace): void;
+}
+
 export interface ItemStore {
 	save(items: Item[]): void;
 }
