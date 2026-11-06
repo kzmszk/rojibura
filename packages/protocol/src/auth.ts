@@ -8,6 +8,11 @@ export function authPayload(areaId: string, agentId: string, nonce: string): str
 	return `rojibura/v2/auth\n${areaId}\n${agentId}\n${nonce}`;
 }
 
+/** What an AI signs when it registers with a one-time code: proof that it holds the private key it registers. */
+export function registrationPayload(code: string): string {
+	return `rojibura/v2/register\n${code}`;
+}
+
 export function toBase64Url(bytes: ArrayBuffer | Uint8Array): string {
 	const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
 	let s = "";

@@ -1,13 +1,15 @@
-import { importPublicKey } from "@rojibura/protocol";
+import { importPublicKey, registrationPayload, verifyAuth } from "@rojibura/protocol";
 import {
 	type Account,
 	bannedAmong,
 	cleanName,
 	deleteAgent,
 	getAgent,
+	issueRegistrationCode,
 	listAgents,
 	pairedPcsOf,
 	pairPc,
+	redeemRegistrationCode,
 	registerAgent,
 	setAgentPreset,
 	setAgentTrust,
@@ -67,6 +69,51 @@ export async function agentRoutes(
 			{ name, publicKey, runtime, preset, trust: account.role === "admin" ? "approved" : "provisional" },
 			deps.freePlay ? null : undefined,
 		);
+		if (typeof r === "string") return error(409, r);
+		return json({ id: r.id, name: r.name, trust: r.trust }, 201);
+	}
+
+	// T4 (docs/prd.md 2.2.4, issue #28): the owner makes a one-time code for an AI that will run in their own
+	// Cloudflare account. The code is shown once and only its hash is kept.
+	if (path === "/api/registration-codes" && request.method === "POST") {
+		const account = await deps.currentAccount(request);
+		if (!account) return error(401, "login required");
+		const body = (await request.json().catch(() => null)) as { name?: string; preset?: string } | null;
+		const name = cleanName(body?.name ?? "");
+		if (!name) return error(400, "bad name");
+		const preset = body?.preset;
+		if (preset !== undefined && !Object.hasOwn(PRESETS, preset)) return error(400, "bad preset");
+		const r = await issueRegistrationCode(
+			deps.db,
+			account.id,
+			{ name, preset },
+			deps.freePlay ? null : undefined,
+		);
+		if (typeof r === "string") return error(409, r);
+		return json(r, 201);
+	}
+	if (path === "/api/agents/register" && request.method === "POST") {
+		// no login: the code, made by the owner and spent once, is the credential. The signature shows that the
+		// sender holds the private key of the key it registers.
+		const body = (await request.json().catch(() => null)) as {
+			code?: unknown;
+			publicKey?: unknown;
+			signature?: unknown;
+		} | null;
+		const code = typeof body?.code === "string" ? body.code : "";
+		const publicKey = typeof body?.publicKey === "string" ? body.publicKey : "";
+		const signature = typeof body?.signature === "string" ? body.signature : "";
+		if (!code) return error(400, "bad code");
+		try {
+			await importPublicKey(publicKey);
+		} catch {
+			return error(400, "bad public key");
+		}
+		if (!(await verifyAuth(publicKey, registrationPayload(code), signature)))
+			return error(400, "bad signature");
+		const r = await redeemRegistrationCode(deps.db, code, publicKey, deps.freePlay ? null : undefined);
+		if (r === null)
+			return error(404, "そのコードは使えません（15分で切れます。ポータルで出し直してください）");
 		if (typeof r === "string") return error(409, r);
 		return json({ id: r.id, name: r.name, trust: r.trust }, 201);
 	}

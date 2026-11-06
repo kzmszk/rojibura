@@ -1,6 +1,6 @@
 /// <reference types="node" />
 import { DatabaseSync } from "node:sqlite";
-import { exportPublicKey, generateAgentKeyPair } from "@rojibura/protocol";
+import { exportPublicKey, generateAgentKeyPair, registrationPayload, signAuth } from "@rojibura/protocol";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import init from "../../migrations/0001_init.sql?raw";
 import moderation from "../../migrations/0002_moderation.sql?raw";
@@ -8,6 +8,7 @@ import onboarding from "../../migrations/0003_onboarding.sql?raw";
 import pc from "../../migrations/0004_pc.sql?raw";
 import wallets from "../../migrations/0005_wallets.sql?raw";
 import life from "../../migrations/0006_life.sql?raw";
+import registrationCodes from "../../migrations/0007_registration_codes.sql?raw";
 import { createSessionToken } from "./session.ts";
 
 const fakes = vi.hoisted(() => ({
@@ -69,7 +70,7 @@ async function request(path: string, method = "GET", body?: unknown, account?: s
 
 beforeEach(() => {
 	const db = new DatabaseSync(":memory:");
-	for (const sql of [init, moderation, onboarding, pc, wallets, life]) db.exec(sql);
+	for (const sql of [init, moderation, onboarding, pc, wallets, life, registrationCodes]) db.exec(sql);
 	const prepare = (sql: string, values: unknown[] = []) => ({
 		bind: (...args: unknown[]) => prepare(sql, args),
 		all: async () => {
@@ -301,5 +302,87 @@ describe("gateway feature routes", () => {
 			status: 201,
 			body: { id: "a_owned", name: "AI" },
 		});
+	});
+});
+
+describe("registering an AI that runs in the owner's own Cloudflare account (T4, #28)", () => {
+	async function key() {
+		const kp = await generateAgentKeyPair(true);
+		return { kp, publicKey: await exportPublicKey(kp.publicKey) };
+	}
+	async function register(code: string, k?: Awaited<ReturnType<typeof key>>, signedCode = code) {
+		const { kp, publicKey } = k ?? (await key());
+		const signature = await signAuth(kp.privateKey, registrationPayload(signedCode));
+		return request("/api/agents/register", "POST", { code, publicKey, signature });
+	}
+	async function issue(account = "h_owner", name = "Worker AI") {
+		return request("/api/registration-codes", "POST", { name }, account);
+	}
+
+	test("the owner makes a code; it needs a login and a name, and only its hash is kept", async () => {
+		expect(await request("/api/registration-codes", "POST", { name: "x" })).toMatchObject({ status: 401 });
+		expect(await issue("h_owner", "")).toMatchObject({ status: 400 });
+		const r = await issue();
+		expect(r.status).toBe(201);
+		const { code, expiresAt } = r.body as { code: string; expiresAt: number };
+		expect(expiresAt).toBeGreaterThan(Date.now());
+		const rows = fakes.rawDb.prepare("SELECT * FROM registration_codes").all() as { code_hash: string }[];
+		expect(rows).toHaveLength(1);
+		expect(JSON.stringify(rows)).not.toContain(code);
+	});
+
+	test("the code registers the AI once: provisional, as a worker, with the name the owner gave", async () => {
+		const { code } = (await issue()).body as { code: string };
+		const k = await key();
+		const r = await register(code, k);
+		expect(r).toMatchObject({ status: 201, body: { name: "Worker AI", trust: "provisional" } });
+		expect(
+			fakes.rawDb.prepare("SELECT owner_id, runtime, public_key FROM agents WHERE name = 'Worker AI'").get(),
+		).toMatchObject({ owner_id: "h_owner", runtime: "worker", public_key: k.publicKey });
+		// spent: the same code again is refused
+		expect(await register(code)).toMatchObject({ status: 404 });
+	});
+
+	test("an admin's AI is approved from the start", async () => {
+		fakes.rawDb.exec(
+			"INSERT INTO accounts (id, provider, subject, display_name, role, created_at) VALUES ('h_admin', 'dev', 'admin', 'Admin', 'admin', 0)",
+		);
+		const { code } = (await issue("h_admin")).body as { code: string };
+		expect(await register(code)).toMatchObject({ status: 201, body: { trust: "approved" } });
+	});
+
+	test("a wrong code, a bad key or a signature of someone else's code is refused and spends nothing", async () => {
+		const { code } = (await issue()).body as { code: string };
+		expect(await register("rjreg_nope")).toMatchObject({ status: 404 });
+		expect(
+			await request("/api/agents/register", "POST", { code, publicKey: "x", signature: "x" }),
+		).toMatchObject({ status: 400 });
+		expect(await register(code, undefined, "another")).toMatchObject({ status: 400 });
+		expect(await register(code)).toMatchObject({ status: 201 });
+	});
+
+	test("a late code is refused", async () => {
+		const { code } = (await issue()).body as { code: string };
+		fakes.rawDb.exec("UPDATE registration_codes SET expires_at = 1");
+		expect(await register(code)).toMatchObject({ status: 404 });
+		expect(
+			fakes.rawDb.prepare("SELECT COUNT(*) AS n FROM agents WHERE name = 'Worker AI'").get(),
+		).toMatchObject({
+			n: 0,
+		});
+	});
+
+	test("the AIs and the codes still open together stay within the limit", async () => {
+		// h_owner already has two AIs (a_owned, plus a_second where that beforeEach ran), so fill up to five
+		fakes.rawDb.exec("DELETE FROM agents WHERE owner_id = 'h_owner'");
+		for (let i = 0; i < 4; i++)
+			fakes.rawDb.exec(
+				`INSERT INTO agents (id, owner_id, name, runtime, public_key, created_at) VALUES ('a_fill${i}', 'h_owner', 'Fill${i}', 'browser', 'key', ${i})`,
+			);
+		expect((await issue()).status).toBe(201);
+		const over = await issue();
+		expect(over.status).toBe(409);
+		// a spent code is an AI now, not a code: the count is the same
+		expect(fakes.rawDb.prepare("SELECT COUNT(*) AS n FROM registration_codes").get()).toMatchObject({ n: 1 });
 	});
 });
