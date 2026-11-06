@@ -40,6 +40,7 @@ body {
 }
 a { color: var(--accent); }
 a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+li + li { margin-top: 4px; }
 code, pre { font-family: var(--mono); }
 code { background: var(--code-bg); border-radius: 4px; font-size: .86em; padding: .08em .35em; overflow-wrap: anywhere; }
 
@@ -71,7 +72,6 @@ h2.t { font-family: var(--display); font-size: clamp(1.4rem, 3.4vw, 1.9rem); fon
 h3 { font-size: 1.12rem; font-weight: 700; margin: 12px 0 -8px; text-wrap: balance; }
 p { margin: 0; max-width: 44em; }
 ul, ol.steps { margin: 0; max-width: 44em; padding-left: 1.3em; }
-li + li { margin-top: 4px; }
 
 .fig { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; margin: 0; padding: 16px; }
 .fig figcaption { color: var(--muted); font-size: .88rem; font-weight: 500; line-height: 1.6; margin-bottom: 12px; }
@@ -1176,12 +1176,12 @@ flowchart TB
 
 <script>
 // Opened as a local file or from localhost, the page draws its own diagrams. On claude.ai the viewer draws them.
-(function () {
+(() => {
 	var host = location.hostname;
 	if (location.protocol !== "file:" && host !== "localhost" && host !== "127.0.0.1") return;
 	var s = document.createElement("script");
 	s.src = "https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js";
-	s.onload = function () {
+	s.onload = () => {
 		var dark = window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches;
 		window.mermaid.initialize({ startOnLoad: false, theme: dark ? "dark" : "neutral" });
 		window.mermaid.run({ querySelector: "pre.mermaid" });
