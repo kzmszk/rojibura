@@ -6,7 +6,7 @@ export {
 } from "./adapters/workers-ai.ts";
 export { Agent, type AgentOptions } from "./core/agent.ts";
 export { type City, loadCity, navigatorFor, straightLine } from "./core/city.ts";
-export { AgentConnection, CLOSE_REPLACED, type ConnectionOptions } from "./core/connection.ts";
+export { AgentConnection, CLOSE_CLOSING, CLOSE_REPLACED, type ConnectionOptions } from "./core/connection.ts";
 export {
 	cleanNote,
 	decisionSchema,
