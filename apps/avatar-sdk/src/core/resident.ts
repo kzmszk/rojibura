@@ -14,6 +14,7 @@ import {
 	type BodyPart,
 	type BudgetLevel,
 	COMPANION_FREE,
+	COMPANY_GAP,
 	cannotStart,
 	cityTime,
 	clockText,
@@ -1354,11 +1355,11 @@ export class Resident {
 		if (company && to.id !== company) return `いまは${this.nameOf(company)}のそばを歩いている。`;
 		if (company && distance > COMPANION_FREE)
 			return `${this.nameOf(company)}から${COMPANION_FREE}mより離れては立てない。`;
-		const ms = this.approach(to, distance);
+		// (closer than this only to touch them, with move_body: the bodies would overlap)
+		const apart = Math.max(COMPANY_GAP, distance);
+		const ms = this.approach(to, apart);
 		if (typeof ms === "string") return ms;
-		return ms === 0
-			? "もうその距離にいる。"
-			: `${clean(to.name, 24)}から${Math.max(0.3, distance)}mのところへ歩いた。`;
+		return ms === 0 ? "もうその距離にいる。" : `${clean(to.name, 24)}から${apart}mのところへ歩いた。`;
 	}
 
 	// ---- helpers --------------------------------------------------------------

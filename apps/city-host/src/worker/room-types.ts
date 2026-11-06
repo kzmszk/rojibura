@@ -147,6 +147,11 @@ export interface Member extends JoinInfo {
 	warpedAt?: number;
 	/** Which way the avatar last walked (the host knows no facing): companions keep to its front. */
 	heading?: Vec2;
+	/**
+	 * Humans walking on with keys and company: nothing is heard of them while the keys stay as they are, so at this
+	 * host time their AIs are told how to go on (docs/prd.md 3.4.9).
+	 */
+	companyAgainAt?: number;
 	/** AIs: taking the owner to a place (docs/prd.md 3.4.10); walking with them again after `until` at last. */
 	lead?: { to: Vec2; place: string; until: number };
 	/** AIs: when it last asked its owner to come along (one ask per LEAD_INTERVAL_MS). */

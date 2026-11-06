@@ -1,5 +1,12 @@
-import type { ClientToHost, HostToClient, Item, Vec2 } from "@rojibura/protocol";
-import { AI_CONV_MAX_TURNS, PRESENCE_TIMEOUT_MS } from "@rojibura/protocol";
+import type { ClientToHost, HostToClient, Item, MoveState, Vec2 } from "@rojibura/protocol";
+import {
+	AI_CONV_MAX_TURNS,
+	COMPANY_GAP,
+	dist,
+	PRESENCE_TIMEOUT_MS,
+	polylineLength,
+	poseAt,
+} from "@rojibura/protocol";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { AWAY_GRACE_MS, RoomCore } from "./room-core.ts";
 import type { JoinInfo, Member, Walkable, WalletStore, World } from "./room-types.ts";
@@ -1195,6 +1202,181 @@ describe("walking with your AIs", () => {
 		const at = ctx.room.positionOf(ctx.room.memberFor(bot) as never);
 		ctx.room.handle(bot, { t: "MOVE_PATH", path: [at, [-15, 15]], speed: 1.4, seq: 2 });
 		expect(last(a)).toMatchObject({ t: "MOVED", id: "a_bot", move: { kind: "path" } });
+	});
+
+	const moveOf = (c: Conn) => (ctx.room.memberFor(c) as Member).move;
+	const posOf = (c: Conn, t = ctx.clock.now()) => poseAt(moveOf(c), t).pos;
+	/** How close two come to each other in the next `ms`, as they are moving now (from `skip` ms on). */
+	function leastApart(a: Conn, b: Conn, ms: number, skip = 0): number {
+		const t0 = ctx.clock.now();
+		let least = Number.POSITIVE_INFINITY;
+		for (let t = skip; t <= ms; t += 100) least = Math.min(least, dist(posOf(a, t0 + t), posOf(b, t0 + t)));
+		return least;
+	}
+	/** Sideways (x) from `b`, of `a`, when both walk along z. */
+	const sideways = (a: Conn, b: Conn, t = ctx.clock.now()) => Math.abs(posOf(a, t)[0] - posOf(b, t)[0]);
+	function company(...at: Vec2[]) {
+		const a = conn("a");
+		place(a, human("alice"), [-10, -10]);
+		const bots = at.map((pos, i) => {
+			const bot = conn(`bot${i}`);
+			place(bot, ai(`bot${i}`, "alice", { ownerAgentLimit: 5 }), pos);
+			return bot;
+		});
+		return { a, bots };
+	}
+
+	test("three AIs each have a place of their own, walking and standing, and nobody overlaps", () => {
+		const { a, bots } = company([-11, -10], [-9, -10], [-11, -11]);
+		ctx.room.handle(a, { t: "COMPANION", on: true });
+		const pairs: [Conn, Conn][] = [
+			[a, bots[0] as Conn],
+			[a, bots[1] as Conn],
+			[a, bots[2] as Conn],
+			[bots[0] as Conn, bots[1] as Conn],
+			[bots[0] as Conn, bots[2] as Conn],
+			[bots[1] as Conn, bots[2] as Conn],
+		];
+		ctx.clock.advance(5000);
+		for (const [x, y] of pairs) expect(dist(posOf(x), posOf(y))).toBeGreaterThanOrEqual(COMPANY_GAP);
+		const here = posOf(a);
+		ctx.room.handle(a, { t: "MOVE_PATH", path: [here, [here[0], 15]], speed: 1.4, seq: 1 });
+		for (const [x, y] of pairs) expect(leastApart(x, y, 17_000)).toBeGreaterThanOrEqual(COMPANY_GAP);
+		ctx.clock.advance(18_000);
+		ctx.room.handle(a, { t: "MOVE_VEL", pos: posOf(a), dir: [0, 0], speed: 0, seq: 2 });
+		for (const [x, y] of pairs) expect(leastApart(x, y, 3000)).toBeGreaterThanOrEqual(COMPANY_GAP);
+	});
+
+	test("walking towards where the AI stands, it gets out to the side at once, not in line with its owner", () => {
+		// the AI stands straight ahead of alice, on the way she is about to walk
+		const { a, bots } = company([-10, -8.5]);
+		const bot = bots[0] as Conn;
+		ctx.room.handle(a, { t: "COMPANION", on: true });
+		ctx.clock.advance(4000);
+		(ctx.room.memberFor(bot) as Member).move = { kind: "idle", pos: [-10, -8.5], at: ctx.clock.now() };
+		ctx.room.handle(a, {
+			t: "MOVE_PATH",
+			path: [
+				[-10, -10],
+				[-10, 15],
+			],
+			speed: 1.4,
+			seq: 1,
+		});
+		expect(leastApart(a, bot, 17_000)).toBeGreaterThanOrEqual(COMPANY_GAP);
+		const t0 = ctx.clock.now();
+		// out at its side within two seconds, and there the whole way
+		for (const t of [2000, 5000, 9000, 15_000]) expect(sideways(bot, a, t0 + t)).toBeGreaterThan(0.75);
+	});
+
+	test("the same with keys", () => {
+		const { a, bots } = company([-10, -8.5]);
+		const bot = bots[0] as Conn;
+		ctx.room.handle(a, { t: "COMPANION", on: true });
+		ctx.clock.advance(4000);
+		(ctx.room.memberFor(bot) as Member).move = { kind: "idle", pos: [-10, -8.5], at: ctx.clock.now() };
+		ctx.room.handle(a, { t: "MOVE_VEL", pos: [-10, -10], dir: [0, 1], speed: 1.4, seq: 1 });
+		const t0 = ctx.clock.now();
+		expect(leastApart(a, bot, 6000)).toBeGreaterThanOrEqual(COMPANY_GAP);
+		expect(sideways(bot, a, t0 + 2000)).toBeGreaterThan(0.75);
+	});
+
+	test("the owner turning back: the AI keeps to the side it is on and does not cross through them", () => {
+		const { a, bots } = company([-11, -10]);
+		const bot = bots[0] as Conn;
+		ctx.room.handle(a, { t: "COMPANION", on: true });
+		ctx.clock.advance(3000);
+		ctx.room.handle(a, { t: "MOVE_VEL", pos: [-10, -10], dir: [0, 1], speed: 1.4, seq: 1 });
+		ctx.clock.advance(4000);
+		// back the way she came
+		ctx.room.handle(a, { t: "MOVE_VEL", pos: posOf(a), dir: [0, -1], speed: 1.4, seq: 2 });
+		expect(leastApart(a, bot, 3000)).toBeGreaterThanOrEqual(COMPANY_GAP);
+		const t0 = ctx.clock.now();
+		// (it was on her right, -x; going back, that is her left)
+		expect(posOf(bot, t0 + 2500)[0]).toBeLessThan(posOf(a, t0 + 2500)[0] - 0.5);
+	});
+
+	test("with a wall on its side it walks on the other side; in a passage too narrow it comes behind", () => {
+		// a passage along z: wide at first (x in [-3, 3]), then only 0.4 m wide further on (z > 0)
+		const passage: Walkable = {
+			isWalkable: (p) => Math.abs(p[1]) <= 20 && (p[1] <= 0 ? Math.abs(p[0]) <= 3 : Math.abs(p[0]) <= 0.2),
+			validatePath: (path) =>
+				path.every((p, i) => {
+					if (!passage.isWalkable(p)) return false;
+					const prev = path[i - 1];
+					if (!prev) return true;
+					for (let f = 0.1; f < 1; f += 0.1)
+						if (!passage.isWalkable([prev[0] + (p[0] - prev[0]) * f, prev[1] + (p[1] - prev[1]) * f]))
+							return false;
+					return true;
+				}),
+			closestPoint: (p) => [Math.max(-0.2, Math.min(0.2, p[0])), p[1]],
+		};
+		ctx = setup({ walk: passage, spawn: [0, -15] });
+		const a = conn("a");
+		const bot = conn("bot");
+		place(a, human("alice"), [2.5, -15]);
+		place(bot, ai("bot", "alice"), [1.5, -15]);
+		ctx.room.handle(a, { t: "COMPANION", on: true });
+		ctx.clock.advance(3000);
+		// along the wall on her left (+x): it is on her left... so it has to be on her right
+		const start = posOf(a);
+		ctx.room.handle(a, { t: "MOVE_PATH", path: [start, [2.5, -5]], speed: 1.4, seq: 1 });
+		const t0 = ctx.clock.now();
+		expect(posOf(bot, t0 + 5000)[0]).toBeLessThan(2);
+		expect(leastApart(a, bot, 7000)).toBeGreaterThanOrEqual(COMPANY_GAP);
+		ctx.clock.advance(8000);
+		// now into the narrow part
+		ctx.room.handle(a, { t: "MOVE_VEL", pos: posOf(a), dir: [0, 0], speed: 0, seq: 2 });
+		ctx.clock.advance(3000);
+		ctx.room.handle(a, {
+			t: "MOVE_PATH",
+			path: [posOf(a), [0, -1], [0, 15]],
+			speed: 1.4,
+			seq: 3,
+		});
+		const t1 = ctx.clock.now();
+		const walked = polylineLength(
+			moveOf(a).kind === "path" ? (moveOf(a) as Extract<MoveState, { kind: "path" }>).path : [],
+		);
+		const ends = (walked / 1.4) * 1000;
+		// it does not overlap her anywhere, and in the passage it is behind her
+		expect(leastApart(a, bot, ends, 500)).toBeGreaterThanOrEqual(COMPANY_GAP);
+		expect(posOf(bot, t1 + ends - 500)[1]).toBeLessThan(posOf(a, t1 + ends - 500)[1]);
+	});
+
+	test("walking on with keys the AI keeps walking beside them, however long the keys stay as they are", () => {
+		const { a, bots } = company([-11, -10]);
+		const bot = bots[0] as Conn;
+		ctx.room.handle(a, { t: "COMPANION", on: true });
+		ctx.clock.advance(3000);
+		ctx.room.handle(a, { t: "MOVE_VEL", pos: [-10, -10], dir: [0, 1], speed: 1.4, seq: 1 });
+		// (the way ahead is clear for 25 m: it is told how to go on from there before it stops)
+		let now = ctx.clock.now();
+		const end = now + 17_000;
+		while (now < end) {
+			const wake = ctx.room.wakeAt as number;
+			expect(wake).toBeGreaterThan(now);
+			const next = Math.min(wake, end);
+			ctx.clock.advance(next - now);
+			ctx.room.sweep(() => ctx.clock.now());
+			now = next;
+			expect(dist(posOf(a), posOf(bot))).toBeLessThan(1.5);
+		}
+		expect(dist(posOf(a), posOf(bot))).toBeGreaterThanOrEqual(COMPANY_GAP);
+		// stopped: nothing more to wake up for
+		ctx.room.handle(a, { t: "MOVE_VEL", pos: posOf(a), dir: [0, 0], speed: 0, seq: 2 });
+		expect(ctx.room.wakeAt).toBeUndefined();
+	});
+
+	test("a step of its own is refused if another of the owner's AIs is right there", () => {
+		const { a, bots } = company([-11, -10], [-9, -10]);
+		ctx.room.handle(a, { t: "COMPANION", on: true });
+		ctx.clock.advance(6000);
+		const [one, two] = bots as [Conn, Conn];
+		two.inbox.length = 0;
+		ctx.room.handle(two, { t: "MOVE_PATH", path: [posOf(two), posOf(one)], speed: 1, seq: 1 });
+		expect(two.inbox.map((m) => m.t)).toEqual(["CORRECT"]);
 	});
 });
 

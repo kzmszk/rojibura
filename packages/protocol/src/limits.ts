@@ -153,3 +153,5 @@ export const BODY_INTERVAL_MS = 1000;
 export const COMPANION_FREE = 2.5;
 /** ...walking at most this far at a time (m). */
 export const COMPANION_FREE_STEP = 5;
+/** People walking together keep this far apart, centre to centre (m), so their bodies do not overlap. */
+export const COMPANY_GAP = 0.6;

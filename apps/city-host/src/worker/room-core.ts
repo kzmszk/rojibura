@@ -425,6 +425,7 @@ export class RoomCore<C> {
 		}
 		this.conversations.expireConversations(now);
 		this.interactions.settleSeatPlans(now);
+		this.interactions.keepCompany(now);
 		this.life.lifeTick(now);
 		this.conversations.expireCooldowns(now);
 	}

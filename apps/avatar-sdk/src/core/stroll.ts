@@ -6,6 +6,7 @@ import {
 	type ClientToHost,
 	COMPANION_FREE,
 	COMPANION_FREE_STEP,
+	COMPANY_GAP,
 	dist,
 	polylineLength,
 	poseAt,
@@ -84,6 +85,9 @@ export class Stroll {
 		const end = path[path.length - 1] as Vec2;
 		const length = polylineLength(path);
 		if (length < 0.3 || length > COMPANION_FREE_STEP || dist(end, o) > COMPANION_FREE - 0.1) return null;
+		// not onto anyone standing or walking about there
+		for (const a of w.avatars.values())
+			if (a.id !== me.id && dist(end, poseAt(a.move, now).pos) < COMPANY_GAP) return null;
 		return path;
 	}
 
