@@ -155,5 +155,7 @@ export const COMPANION_FREE = 2.5;
 export const COMPANION_FREE_STEP = 5;
 /** A person speaking to everyone (みんなへ) is heard as speaking to them by their own AIs this close (m). */
 export const OWN_AIS_HEAR = 12;
+/** At most this many AIs stay by one person at a time (more than one owner may have in an area). */
+export const COMPANY_MAX = 8;
 /** People walking together keep this far apart, centre to centre (m), so their bodies do not overlap. */
 export const COMPANY_GAP = 0.6;

@@ -139,8 +139,8 @@ export interface Member extends JoinInfo {
 	cooldowns?: Record<AvatarId, number>;
 	/** Watching the usage dashboard: the adapter pushes USAGE to them. */
 	watchUsage?: boolean;
-	/** Humans: their own AIs walk with them (docs/prd.md 3.4.9). */
-	companion?: boolean;
+	/** Humans: those of their AIs that stay by them, whether here or not (docs/prd.md 3.4.9). The others are free. */
+	company?: AvatarId[];
 	/** Humans floating in the air (docs/prd.md 3.4.13): at this height (world Y); they move over everything. */
 	fly?: number;
 	/** Host time of their last WARP (docs/prd.md 3.4.14). */

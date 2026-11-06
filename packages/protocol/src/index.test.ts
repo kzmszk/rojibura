@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import {
 	authPayload,
 	bodyDuration,
+	COMPANY_MAX,
 	exportPrivateKey,
 	exportPublicKey,
 	facing,
@@ -89,6 +90,23 @@ describe("parseClientMessage", () => {
 			JSON.stringify({ t: "MOVE_VEL", pos: [1, 2], dir: [3, 4], speed: 2, seq: 5 }),
 		);
 		expect(r.ok && r.msg.t === "MOVE_VEL" && r.msg.dir).toEqual([0.6, 0.8]);
+	});
+
+	test("COMPANION lists the AIs that stay, each once", () => {
+		expect(
+			parseClientMessage(JSON.stringify({ t: "COMPANION", ids: ["a_bot1", "a_bot2", "a_bot1"] })),
+		).toEqual({
+			ok: true,
+			msg: { t: "COMPANION", ids: ["a_bot1", "a_bot2"] },
+		});
+		expect(parseClientMessage(JSON.stringify({ t: "COMPANION", ids: [] }))).toEqual({
+			ok: true,
+			msg: { t: "COMPANION", ids: [] },
+		});
+		expect(parseClientMessage(JSON.stringify({ t: "COMPANION", on: true })).ok).toBe(false);
+		expect(parseClientMessage(JSON.stringify({ t: "COMPANION", ids: ["x"] })).ok).toBe(false);
+		const many = Array.from({ length: COMPANY_MAX + 1 }, (_, i) => `a_bot${i}`);
+		expect(parseClientMessage(JSON.stringify({ t: "COMPANION", ids: many })).ok).toBe(false);
 	});
 
 	test("SAY strips control characters and enforces length", () => {

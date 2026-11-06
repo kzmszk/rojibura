@@ -11,6 +11,7 @@ import {
 	BUILD_OFFSET_MAX,
 	BUILD_SCALE_MAX,
 	BUILD_SCALE_MIN,
+	COMPANY_MAX,
 	DIARY_DAYS_MAX,
 	DIARY_PART_MAX,
 	DIARY_PARTS_MAX,
@@ -206,8 +207,9 @@ export function parseClientMessage(raw: string | ArrayBuffer): Parsed<ClientToHo
 			if (typeof v.to !== "string" || !NAME_ID_RE.test(v.to)) return fail("bad to");
 			return { ok: true, msg: { t: "WARP", to: v.to } };
 		case "COMPANION":
-			if (typeof v.on !== "boolean") return fail("bad on");
-			return { ok: true, msg: { t: "COMPANION", on: v.on } };
+			if (!Array.isArray(v.ids) || v.ids.length > COMPANY_MAX || !v.ids.every(isAvatarId))
+				return fail("bad ids");
+			return { ok: true, msg: { t: "COMPANION", ids: [...new Set(v.ids as string[])] } };
 		case "LEAD":
 			return parseLead(v);
 		case "BODY":

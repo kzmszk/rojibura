@@ -16,13 +16,16 @@ import type { FromPage, FromWorker } from "./agent.worker.ts";
 import {
 	type AgentPresence,
 	carryOverWanted,
+	companyOf,
 	describeAi,
 	keepSelected,
 	type OwnedAgent,
 	type Run,
 	selectedAgent,
+	setCompany,
 	setWanted,
 	staysOutAfter,
+	syncCompany,
 	wantedAgents,
 } from "./agent-roster.ts";
 import { DiaryView } from "./diary-view.ts";
@@ -119,6 +122,9 @@ export class AgentPanel {
 	private agentLimit: number | null = null;
 	private agentsAtOnce: number | null = null;
 	private readonly onRunning: (running: number) => void;
+	/** Those of the AIs that stay by the owner (the others are free), each set here. */
+	private company = new Set<string>();
+	private readonly onCompany: (ids: string[]) => void;
 
 	private readonly problem = el("div", "rj-agent-reason");
 	private readonly summary = el("span", "rj-note");
@@ -176,10 +182,18 @@ export class AgentPanel {
 	/** The area this page is in, and where it arrived (a tab's AI is where its owner's page is). */
 	private readonly where: { area: string; at?: string };
 
-	/** `onRunning`: how many AIs are running in this tab, for the HUD button. */
-	constructor(where: { area: string; at?: string }, onRunning: (running: number) => void) {
+	/**
+	 * `onRunning`: how many AIs are running in this tab, for the HUD button. `onCompany`: which of the AIs stay by the
+	 * owner now, when that changes.
+	 */
+	constructor(
+		where: { area: string; at?: string },
+		onRunning: (running: number) => void,
+		onCompany: (ids: string[]) => void,
+	) {
 		this.where = where;
 		this.onRunning = onRunning;
+		this.onCompany = onCompany;
 		this.el = el("div", "rj-agent");
 		this.el.hidden = true;
 		const head = el("div", "rj-agent-head");
@@ -418,12 +432,19 @@ export class AgentPanel {
 			agentsAtOnce: number | null;
 		};
 		// another account logged in meanwhile: nothing of the last one's stays
-		if (this.owner !== me.id) this.logOut("");
+		if (this.owner !== me.id) {
+			this.logOut("");
+			this.company = new Set(companyOf(me.id));
+		}
 		this.owner = me.id;
 		this.agentLimit = me.agentLimit;
 		this.agentsAtOnce = me.agentsAtOnce;
 		this.problem.textContent = "";
 		const ids = me.agents.map((a) => a.id);
+		if (syncCompany(me.id, ids)) {
+			this.company = new Set(companyOf(me.id));
+			this.onCompany([...this.company]);
+		}
 		const moved = await migrateLegacyBrowserIdentity(me.id, ids);
 		if (moved) carryOverWanted(me.id, moved.agentId);
 		const keys = new Map((await listBrowserIdentities(me.id)).map((i) => [i.agentId, i]));
@@ -821,10 +842,30 @@ export class AgentPanel {
 					el("span", `rj-agent-item-state${live ? " live" : ""}`, v.state),
 					el("span", "rj-agent-item-place", v.place),
 				);
-				return row;
+				const item = el("div", "rj-agent-entry");
+				item.append(row, this.stayChoice(entry));
+				return item;
 			}),
 		);
 		this.list.hidden = entries.length === 0;
+	}
+
+	/** Whether this AI stays by the owner or is free (docs/prd.md 3.4.9). */
+	private stayChoice(entry: AiEntry): HTMLElement {
+		const id = entry.agent.id;
+		const box = el("input", "");
+		box.type = "checkbox";
+		box.checked = this.company.has(id);
+		box.onchange = () => {
+			if (box.checked) this.company.add(id);
+			else this.company.delete(id);
+			if (this.owner) setCompany(this.owner, id, box.checked);
+			this.onCompany([...this.company]);
+		};
+		const label = el("label", "rj-agent-stay");
+		label.title = "チェックすると、このAIはあなたのそばを歩きます。外すと、自由に過ごします。";
+		label.append(box, ` ${entry.agent.name}をそばにいさせる（外すと自由に過ごす）`);
+		return label;
 	}
 
 	private renderSelected(entry: AiEntry): void {

@@ -346,7 +346,8 @@ export type ClientToHost =
 	/** Starts working or studying where you stand (a work or study zone), or stops (null). */
 	| { t: "JOB"; kind: JobKind | null }
 	/** Humans: your own AIs here walk with you, just ahead to one side (docs/prd.md 3.4.9). */
-	| { t: "COMPANION"; on: boolean }
+	/** Which of the person's AIs stay by them now (docs/prd.md 3.4.9); the others are free. */
+	| { t: "COMPANION"; ids: AvatarId[] }
 	/**
 	 * An AI walking with its owner asks them to come along to `to` (`place`: what it calls it; `text`: a line
 	 * of its own, shown only to the owner). The owner answers with ANSWER (docs/prd.md 3.4.10).

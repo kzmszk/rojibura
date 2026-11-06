@@ -106,14 +106,27 @@ export class RoomInteractions<C> {
 	leave(id: AvatarId): void {
 		this.leads.delete(id);
 	}
+	/** Which of their AIs stay by them from now on; the others are free. */
 	companion(conn: C, m: Member, msg: Extract<ClientToHost, { t: "COMPANION" }>, now: number): void {
 		if (m.kind !== "human") return;
 		// also how the owner's page says a walk to a place is over (arrived, or they went their own way)
 		this.endLeads(m);
-		if (m.companion !== msg.on) this.tellCompany(m, msg.on);
-		m.companion = msg.on;
+		const had = m.company ?? [];
+		this.tellCompany(
+			m,
+			msg.ids.filter((id) => !had.includes(id)),
+			true,
+		);
+		this.tellCompany(
+			m,
+			had.filter((id) => !msg.ids.includes(id)),
+			false,
+		);
+		if (msg.ids.length > 0) m.company = msg.ids;
+		else delete m.company;
 		this.transport.persist(conn, m);
-		if (msg.on) this.accompany(m, now);
+		if (m.company) this.accompany(m, now);
+		else this.goOnAt(m, undefined);
 	}
 	action(conn: C, m: Member, msg: Extract<ClientToHost, { t: "ACTION" }>, now: number): void {
 		if (msg.target && !this.port.has(msg.target)) return;
@@ -140,7 +153,7 @@ export class RoomInteractions<C> {
 				...(face ? { face } : {}),
 				...(seat !== undefined ? { seat } : {}),
 			});
-			if (seat !== undefined && m.kind === "human" && m.companion) this.seatCompany(m, seat, now);
+			if (seat !== undefined && m.kind === "human" && m.company) this.seatCompany(m, seat, now);
 		}
 		this.port.broadcastAbout(
 			m,
@@ -215,7 +228,7 @@ export class RoomInteractions<C> {
 	}
 
 	/**
-	 * The owner sat on a seat while walking with company: each of their AIs close by walks to the nearest free seat
+	 * The owner sat on a seat: each of their AIs that stay by them walks to the nearest free seat
 	 * next to it and sits there when it arrives (`settleSeatPlans`); with no free seat it just stays beside them.
 	 */
 	private seatCompany(owner: Member, ownerSeat: number, now: number): void {
@@ -228,7 +241,7 @@ export class RoomInteractions<C> {
 			if (o.seatPlan) taken.add(o.seatPlan.seat);
 		}
 		for (const [conn, ai] of this.port.memberEntries()) {
-			if (ai.kind !== "ai" || ai.ownerId !== owner.id || this.togetherNow(ai, now)) continue;
+			if (!this.accompanying(ai) || ai.ownerId !== owner.id || this.togetherNow(ai, now)) continue;
 			const from = this.space.positionOf(ai, now);
 			let best: { i: number; d: number } | undefined;
 			seats.forEach((s, i) => {
@@ -411,10 +424,10 @@ export class RoomInteractions<C> {
 	 * Someone goes through a portal to area `to`, arriving at `at` (docs/prd.md 3.8.2): their AIs walking with
 	 * them come along (FOLLOW). `who` may be what a closed connection last persisted (its close says where to).
 	 */
-	travel(who: Pick<Member, "id" | "kind" | "companion">, to: AreaId, at: string): void {
-		if (who.kind !== "human" || !who.companion) return;
+	travel(who: Pick<Member, "id" | "kind" | "company">, to: AreaId, at: string): void {
+		if (who.kind !== "human") return;
 		for (const [ac, ai] of this.port.memberEntries())
-			if (ai.kind === "ai" && ai.ownerId === who.id)
+			if (ai.kind === "ai" && ai.ownerId === who.id && who.company?.includes(ai.id))
 				this.transport.send(ac, { t: "FOLLOW", owner: who.id, to, at });
 	}
 
@@ -498,9 +511,9 @@ export class RoomInteractions<C> {
 
 	// ---- walking with your AIs (docs/prd.md 3.4.9) ----------------------------
 
-	/** True if `m` is an AI whose owner is here and walking with company. */
+	/** True if `m` is an AI whose owner is here, and it stays by them. */
 	accompanying(m: Member): boolean {
-		return m.kind === "ai" && !!this.port.memberById(m.ownerId)?.companion;
+		return m.kind === "ai" && !!this.port.memberById(m.ownerId)?.company?.includes(m.id);
 	}
 
 	/**
@@ -521,7 +534,7 @@ export class RoomInteractions<C> {
 		const ahead = owner.heading ?? [0, 1];
 		const walkers: [C, Member][] = [];
 		for (const [conn, ai] of this.port.memberEntries()) {
-			if (ai.kind !== "ai" || ai.ownerId !== owner.id) continue;
+			if (ai.ownerId !== owner.id || !this.accompanying(ai)) continue;
 			delete ai.seatPlan;
 			// taking the owner somewhere: it leads, the owner follows (until it is over, or long past)
 			if (ai.lead && now < ai.lead.until) continue;
@@ -565,18 +578,18 @@ export class RoomInteractions<C> {
 		for (const owner of [...this.port.memberValues()])
 			if (owner.companyAgainAt !== undefined && owner.companyAgainAt <= now) {
 				this.goOnAt(owner, undefined);
-				if (owner.companion) this.accompany(owner, now);
+				if (owner.company) this.accompany(owner, now);
 			}
 	}
 
 	/** The owner went somewhere at once (WARP): the AIs walking with them are there beside them too. */
 	bringCompany(owner: Member, now: number): void {
-		if (!owner.companion) return;
+		if (!owner.company) return;
 		this.endLeads(owner);
 		const at = this.space.positionOf(owner, now);
 		const heading = owner.heading ?? [0, 1];
 		const company = [...this.port.memberEntries()].filter(
-			([, ai]) => ai.kind === "ai" && ai.ownerId === owner.id,
+			([, ai]) => ai.ownerId === owner.id && this.accompanying(ai),
 		);
 		const places = placesFor(company.length, "standing");
 		for (const [i, [conn, ai]] of company.entries()) {
@@ -590,11 +603,11 @@ export class RoomInteractions<C> {
 		}
 	}
 
-	/** Tells the owner's AIs here that they walk with the owner now, or no longer. */
-	tellCompany(owner: Member, on: boolean): void {
+	/** Tells these of the owner's AIs, those here, that they stay by the owner now, or no longer. */
+	tellCompany(owner: Member, ids: readonly AvatarId[], on: boolean): void {
 		const now = this.port.clock();
 		for (const [conn, ai] of this.port.memberEntries())
-			if (ai.kind === "ai" && ai.ownerId === owner.id) {
+			if (ai.kind === "ai" && ai.ownerId === owner.id && ids.includes(ai.id)) {
 				this.transport.send(conn, { t: "COMPANY", owner: owner.id, on });
 				// its mood goes up from now on (or no more)
 				if (on && ai.life) ai.companyAt = now;
@@ -617,7 +630,7 @@ export class RoomInteractions<C> {
 	askLead(conn: C, m: Member, msg: Extract<ClientToHost, { t: "LEAD" }>, now: number): string | null {
 		const owner = m.kind === "ai" ? this.port.memberById(m.ownerId) : undefined;
 		const oc = owner ? this.port.connectionFor(owner.id) : undefined;
-		if (!owner || oc === undefined || !owner.companion) return "オーナーと歩いているときだけ誘えます";
+		if (!owner || oc === undefined || !this.accompanying(m)) return "オーナーと歩いているときだけ誘えます";
 		if (m.leadAskedAt !== undefined && now - m.leadAskedAt < LEAD_INTERVAL_MS)
 			return "さっき誘ったばかりです";
 		const here = this.space.positionOf(m, now);

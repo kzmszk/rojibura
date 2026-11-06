@@ -51,6 +51,7 @@ import {
 } from "@rojibura/protocol";
 import * as THREE from "three";
 import { AgentPanel } from "./agent-panel.ts";
+import { companyOf } from "./agent-roster.ts";
 import { api, onApiUsage } from "./api.ts";
 import { AreaNature, SEASON_LABEL } from "./area-nature.ts";
 import { currentArea, DETAIL_KEY, savedDetail, sceneFiles, touchFirst, travelUrl } from "./areas.ts";
@@ -379,10 +380,21 @@ async function startCity(
 	// your own AI (T3): it runs in this tab while it is open, unless it is on your PC (docs/prd.md 3.5.1)
 	const myAi = el("button", "rj-secondary", "パネルを開く");
 	myAi.type = "button";
-	const agentPanel = new AgentPanel({ area: area.id, at: params.get("at") ?? undefined }, (running) => {
-		myAi.textContent = running > 0 ? `${running}体がこのタブで街にいます` : "パネルを開く";
-		myAi.classList.toggle("on", running > 0);
-	});
+	/** Those of your AIs that stay by you (docs/prd.md 3.4.9), each chosen in the panel; the others are free. */
+	let company = companyOf(me.id);
+	const agentPanel = new AgentPanel(
+		{ area: area.id, at: params.get("at") ?? undefined },
+		(running) => {
+			myAi.textContent = running > 0 ? `${running}体がこのタブで街にいます` : "パネルを開く";
+			myAi.classList.toggle("on", running > 0);
+		},
+		(ids) => {
+			company = ids;
+			// following your AI somewhere ends too (the host hears it from COMPANION)
+			if (follow.current?.lead) follow.current = null;
+			conn.send({ t: "COMPANION", ids });
+		},
+	);
 	myAi.onclick = fromSettings(() => agentPanel.show());
 	if (openAi) agentPanel.show();
 	settings.row("🤖 自分のAI", myAi);
@@ -425,31 +437,6 @@ async function startCity(
 		};
 		settings.row("🖼️ 3Dの細かさ", detailSelect);
 	}
-	// your own AIs walk with you (docs/prd.md 3.4.9); shown while one of them is here
-	const companionBox = el("input", "");
-	companionBox.type = "checkbox";
-	let companion = false;
-	try {
-		companion = localStorage.getItem("rj.companion") === "1";
-	} catch {
-		// private mode
-	}
-	companionBox.checked = companion;
-	companionBox.onchange = () => {
-		companion = companionBox.checked;
-		// following your AI somewhere ends too (the host hears it from COMPANION)
-		if (follow.current?.lead) follow.current = null;
-		try {
-			localStorage.setItem("rj.companion", companion ? "1" : "0");
-		} catch {
-			// private mode
-		}
-		conn.send({ t: "COMPANION", on: companion });
-	};
-	const companionLabel = el("label", "rj-settings-check");
-	companionLabel.append(companionBox, document.createTextNode(" 自分のAIをそばにいさせる"));
-	const companionRow = settings.row("", companionLabel);
-	companionRow.hidden = true;
 	const box = el("input", "");
 	box.type = "checkbox";
 	box.checked = me.allowAiApproach;
@@ -831,7 +818,7 @@ async function startCity(
 					if (m.resumed) break;
 					// the host forgets on a new connection; tell it again (a walk behind your AI is over then)
 					if (follow.current?.lead) follow.current = null;
-					if (companion) conn.send({ t: "COMPANION", on: true });
+					if (company.length > 0) conn.send({ t: "COMPANION", ids: company });
 					break;
 				}
 				case "ITEM": {
@@ -1382,7 +1369,7 @@ async function startCity(
 		toast: showToast,
 		arrived: (name, place) => addLog("", `${name}と${place}に着きました`, "sys"),
 		resumeCompanion: () => {
-			if (companion) conn.send({ t: "COMPANION", on: true });
+			if (company.length > 0) conn.send({ t: "COMPANION", ids: company });
 		},
 	});
 	function startFollow(id: AvatarId): void {
@@ -1928,8 +1915,6 @@ async function startCity(
 		seatButton.hidden = !seated && (seatAfter !== null || nearestSeat() === null);
 		seatButton.textContent = seated ? "🧍 立つ" : "🪑 腰かける";
 		patButton.hidden = myAiToPat() === null;
-		const withAi = [...avatars.values()].some((a) => a.state.kind === "ai" && a.state.ownerId === myId);
-		companionRow.hidden = !withAi;
 		const mine = myId ? avatars.get(myId) : undefined;
 		// indoors the camera looks from your eyes (from behind it would be above the ceiling)
 		const indoors = mine ? zones.at(poseAt(mine.state.move, now).pos, "indoor") !== null : false;
@@ -1956,7 +1941,7 @@ async function startCity(
 			);
 		if (keys.size > 0) steer(t);
 		follow.step(t);
-		if (companion && withAi) stopStep();
+		if (company.some((id) => avatars.has(id))) stopStep();
 		pickStep();
 		seatStep();
 		route.step(t);
