@@ -101,7 +101,8 @@ const CHAT_KEEP_MS = 24 * 60 * 60 * 1000;
 /** Internal requests from the gateway (moderation and relations, docs/prd.md 4.2). */
 export type RoomCommand =
 	| { op: "relation"; accountId: string; targetId: string; kind: "mute" | "block"; on: boolean }
-	| { op: "kick"; id: string }
+	/** `message`: what the one leaving is told, when it is not the moderators' doing. */
+	| { op: "kick"; id: string; message?: string }
 	| { op: "mute"; id: string; until: number }
 	| { op: "excerpt"; id: string; minutes: number }
 	/** Free play, development: take down everything built. */
@@ -276,9 +277,13 @@ export class CityRoomDO extends DurableObject<Env> {
 		}
 		if (url.pathname === "/command" && request.method === "POST")
 			return Response.json(await this.command((await request.json()) as RoomCommand));
-		// whether an AI is in this area now, from wherever it runs (its owner's tab or PC, docs/prd.md 3.5.1)
-		if (url.pathname === "/present")
-			return Response.json({ here: this.core.has(url.searchParams.get("id") ?? "") });
+		// which of these AIs are in this area now, and where each runs (its owner's tab or PC, docs/prd.md 3.5.1)
+		if (url.pathname === "/present") {
+			const present: Record<string, string | null> = {};
+			for (const id of (url.searchParams.get("ids") ?? "").split(","))
+				if (this.core.has(id)) present[id] = this.core.memberById(id)?.runsOn ?? null;
+			return Response.json({ present });
+		}
 		if (url.pathname === "/models" || url.pathname.startsWith("/models/"))
 			return this.freePlay
 				? this.models.request(request, url)
@@ -334,16 +339,16 @@ export class CityRoomDO extends DurableObject<Env> {
 			const p = att.pending;
 			const payload = authPayload(p.areaId, p.info.id, p.nonce);
 			// the key it was registered with (the browser's), or its owner's PC's
-			const ok =
-				parsed.ok &&
-				parsed.msg.t === "AUTH" &&
-				Date.now() - p.at <= AUTH_TIMEOUT_MS &&
-				((await verifyAuth(p.publicKey, payload, parsed.msg.sig)) ||
-					(p.pcKey !== undefined && (await verifyAuth(p.pcKey, payload, parsed.msg.sig))));
-			if (!ok) {
+			const sig =
+				parsed.ok && parsed.msg.t === "AUTH" && Date.now() - p.at <= AUTH_TIMEOUT_MS ? parsed.msg.sig : null;
+			const byOwnKey = sig !== null && (await verifyAuth(p.publicKey, payload, sig));
+			const byPc =
+				!byOwnKey && sig !== null && p.pcKey !== undefined && (await verifyAuth(p.pcKey, payload, sig));
+			if (!byOwnKey && !byPc) {
 				safeClose(ws, CLOSE_POLICY, "authentication failed");
 				return;
 			}
+			if (byPc) p.info.runsOn = "pc";
 			// the nonce is consumed: the attachment is replaced by the member state
 			await this.loadRelations(p.info.id);
 			await this.loadWallet(p.info);
@@ -499,7 +504,7 @@ export class CityRoomDO extends DurableObject<Env> {
 				this.core.updateRelation(c.accountId, c.targetId, c.kind, c.on);
 				return { ok: true };
 			case "kick":
-				return { ok: this.core.kick(c.id) };
+				return { ok: this.core.kick(c.id, "kicked", c.message) };
 			case "mute":
 				return { ok: this.core.muteFor(c.id, c.until) };
 			case "excerpt":

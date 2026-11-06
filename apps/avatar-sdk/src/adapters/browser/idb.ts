@@ -29,9 +29,16 @@ function run<T>(store: Store, mode: IDBTransactionMode, op: (s: IDBObjectStore) 
 	);
 }
 
+/** Every key starting with `prefix`. */
+const withPrefix = (prefix: string) => IDBKeyRange.bound(prefix, `${prefix}\uffff`);
+
 export const idbGet = <T>(store: Store, key: string) =>
 	run<T | undefined>(store, "readonly", (s) => s.get(key));
 export const idbPut = (store: Store, key: string, value: unknown) =>
 	run<IDBValidKey>(store, "readwrite", (s) => s.put(value, key)).then(() => {});
 export const idbDelete = (store: Store, key: string) =>
 	run<undefined>(store, "readwrite", (s) => s.delete(key)).then(() => {});
+export const idbList = <T>(store: Store, prefix: string) =>
+	run<T[]>(store, "readonly", (s) => s.getAll(withPrefix(prefix)));
+export const idbDeletePrefix = (store: Store, prefix: string) =>
+	run<undefined>(store, "readwrite", (s) => s.delete(withPrefix(prefix))).then(() => {});

@@ -9,30 +9,18 @@ import {
 	type Logger,
 	loadCity,
 } from "@rojibura/avatar-sdk";
-import {
-	type BrowserIdentity,
-	forgetBrowserIdentity,
-	HostTrialLLM,
-	IdbMemory,
-	loadBrowserIdentity,
-	registerBrowserAgent,
-	saveBrowserIdentity,
-	trialRemaining,
-} from "@rojibura/avatar-sdk/browser";
+import { HostTrialLLM, IdbMemory, loadBrowserIdentity, trialRemaining } from "@rojibura/avatar-sdk/browser";
+import { closeMessage } from "./agent-roster.ts";
 
 export type FromPage =
-	| { cmd: "load" }
-	/** `preset`: the look of a new AI (kept once it is registered). */
-	| { cmd: "start"; name: string; personality: string; preset?: string; area?: string; at?: string }
-	| { cmd: "stop" }
-	| { cmd: "forget" };
+	/** `area`, `at`: where the page is, and the portal it came through (docs/prd.md 3.8.2). */
+	{ cmd: "start"; ownerId: string; agentId: string; area: string; at?: string } | { cmd: "stop" };
 
 export type FromWorker =
-	| { t: "identity"; agentId: string | null; name: string | null; personality: string }
-	/** The AI is registered (also right after the first start): it can be paired with a PC. */
-	| { t: "agent"; agentId: string }
 	/** replaced: the same AI came in from its owner's PC (docs/prd.md 3.5.1), and this tab's stepped out. */
-	| { t: "state"; state: "starting" | "running" | "stopped" | "replaced" | "error"; message?: string }
+	| { t: "state"; state: "starting" | "running" | "stopped" | "replaced" }
+	/** It is not running. `code`: the host closed its connection, for good. */
+	| { t: "state"; state: "error"; message: string; code?: number }
 	| { t: "log"; at: number; line: string }
 	| { t: "remaining"; remaining: number; limit?: number };
 
@@ -58,29 +46,16 @@ function stop(): void {
 	conn = null;
 }
 
-/** `area`, `at`: where the page is, and the portal it came through (docs/prd.md 3.8.2). */
-async function start(
-	name: string,
-	personality: string,
-	preset?: string,
-	area = "main",
-	at?: string,
-): Promise<void> {
-	stop();
+/** This worker runs one AI, the one it is told to start, until the page lets it go. */
+async function start(ownerId: string, agentId: string, area: string, at?: string): Promise<void> {
 	post({ t: "state", state: "starting" });
-	let id: BrowserIdentity | undefined = await loadBrowserIdentity();
-	if (!id) {
-		id = await registerBrowserAgent(base, name, personality, preset);
-		log.info(`「${id.name}」を登録しました（${id.agentId}）`);
-	} else if (id.personality !== personality) {
-		id = { ...id, personality };
-		await saveBrowserIdentity(id);
-	}
-	post({ t: "agent", agentId: id.agentId });
+	const identity = await loadBrowserIdentity(ownerId, agentId);
+	if (!identity) throw new Error("このブラウザにこのAIの鍵がありません");
+	const { personality } = identity;
 	const city = await loadCity(base, area);
 	const quota = await trialRemaining(base);
 	if (quota) post({ t: "remaining", remaining: quota.remaining, limit: quota.limit });
-	const trial = new HostTrialLLM({ baseUrl: base, agentId: id.agentId, personality });
+	const trial = new HostTrialLLM({ baseUrl: base, agentId: identity.agentId, personality });
 	const llm: LLM = {
 		name: trial.name,
 		complete: async (req) => {
@@ -91,7 +66,8 @@ async function start(
 			}
 		},
 	};
-	const identity = id;
+	/** What the host last refused: the reason, when it closes the connection right after. */
+	let refused: string | null = null;
 	conn = new AgentConnection({
 		baseUrl: base.replace(/^http/, "ws"),
 		areaId: area,
@@ -99,12 +75,15 @@ async function start(
 		agentId: identity.agentId,
 		privateKey: identity.privateKey,
 		logger: log,
-		onMessage: (m) => agent?.handle(m),
+		onMessage: (m) => {
+			if (m.t === "NOTICE" && m.kind === "rejected") refused = m.message;
+			agent?.handle(m);
+		},
 		onWelcome: () => post({ t: "state", state: "running" }),
-		onClosed: (code) => {
-			if (code !== CLOSE_REPLACED) return;
+		onClosed: (code, reason) => {
 			stop();
-			post({ t: "state", state: "replaced" });
+			if (code === CLOSE_REPLACED) post({ t: "state", state: "replaced" });
+			else post({ t: "state", state: "error", message: closeMessage(code, reason, refused), code });
 		},
 	});
 	agent = new Agent({
@@ -128,26 +107,14 @@ async function start(
 scope.onmessage = async (e) => {
 	const m = e.data;
 	try {
-		if (m.cmd === "load") {
-			const id = await loadBrowserIdentity();
-			post({
-				t: "identity",
-				agentId: id?.agentId ?? null,
-				name: id?.name ?? null,
-				personality: id?.personality ?? "",
-			});
-		} else if (m.cmd === "start") {
-			await start(m.name, m.personality, m.preset, m.area, m.at);
+		if (m.cmd === "start") {
+			await start(m.ownerId, m.agentId, m.area, m.at);
 		} else if (m.cmd === "stop") {
 			stop();
 			post({ t: "state", state: "stopped" });
-		} else if (m.cmd === "forget") {
-			stop();
-			await forgetBrowserIdentity();
-			post({ t: "identity", agentId: null, name: null, personality: "" });
-			post({ t: "state", state: "stopped" });
 		}
 	} catch (err) {
+		stop();
 		post({ t: "state", state: "error", message: (err as Error).message });
 	}
 };

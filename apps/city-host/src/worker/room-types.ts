@@ -115,6 +115,8 @@ export interface JoinInfo {
 	allowAiApproach?: boolean;
 	/** Max agents of this owner in the area at once (accounts.agent_concurrency). */
 	ownerAgentLimit?: number;
+	/** AIs: where it runs now: the runtime it registered with, or "pc" if it came in with its owner's PC's key. */
+	runsOn?: string;
 	/** Run by the host itself (the guide): exempt from capacity and AI rate limits. */
 	system?: boolean;
 	/** Admins, moderators and development: may watch the area's free-tier usage (docs/prd.md 2.5). */

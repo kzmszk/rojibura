@@ -2,8 +2,10 @@
 
 export {
 	type BrowserIdentity,
-	forgetBrowserIdentity,
+	deleteBrowserIdentity,
+	listBrowserIdentities,
 	loadBrowserIdentity,
+	migrateLegacyBrowserIdentity,
 	registerBrowserAgent,
 	saveBrowserIdentity,
 } from "./identity.ts";
