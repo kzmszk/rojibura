@@ -33,6 +33,8 @@ export interface ClaudeMindOptions {
 	life?: boolean;
 	/** The body tools (docs/prd.md 3.4.11). Claude sees the mirror's pictures. */
 	body?: boolean;
+	/** Claude Code's own WebSearch tool (the only built-in tool allowed). Results are untrusted text. */
+	web?: boolean;
 	logger: Logger;
 	/** Path to the claude executable. */
 	bin?: string;
@@ -187,16 +189,17 @@ export async function createClaudeMind(opts: ClaudeMindOptions): Promise<Mind> {
 			model,
 			"--system-prompt",
 			opts.system,
-			// none of Claude Code's own tools, settings (hooks, plugins, CLAUDE.md) or other MCP servers
+			// none of Claude Code's own tools (except WebSearch on request), settings (hooks, plugins, CLAUDE.md)
+			// or other MCP servers
 			"--tools",
-			"",
+			opts.web ? "WebSearch" : "",
 			"--setting-sources",
 			"",
 			"--strict-mcp-config",
 			"--mcp-config",
 			JSON.stringify(mcp),
 			"--allowedTools",
-			`mcp__${SERVER}`,
+			opts.web ? `mcp__${SERVER},WebSearch` : `mcp__${SERVER}`,
 			"--no-chrome",
 			...(started ? ["--resume", sessionId as string] : ["--session-id", sessionId as string]),
 		];

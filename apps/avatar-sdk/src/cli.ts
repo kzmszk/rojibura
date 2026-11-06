@@ -63,6 +63,8 @@ const { values: args } = parseArgs({
 		body: { type: "boolean" },
 		// ...and sees the mirror's pictures (llama-server started with the model's --mmproj)
 		vision: { type: "boolean", default: false },
+		// --mind claude: may search the web with Claude Code's WebSearch (results are untrusted text)
+		web: { type: "boolean", default: false },
 		identity: { type: "string" },
 		// a one-time code from /agent: this PC runs that AI (its name and look come from the host)
 		pair: { type: "string" },
@@ -169,12 +171,15 @@ if (args.mind === "pi" || args.mind === "claude") {
 	const life = city.activities.length > 0;
 	const journal = life ? new FileJournal(join(dir, `${encodeURIComponent(name)}.life`)) : undefined;
 	if (journal) log.info(`日記: ${shortPath(journal.dir, homedir())}`);
-	const system = residentSystemPrompt(persona, city.landmarks, body, city.shops, city.activities, city.foods);
+	const web = !!args.web && !!claude;
+	if (args.web && !claude) log.warn("--web は --mind claude のときだけ使える（pi には検索ツールがない）。");
+	const system = residentSystemPrompt(persona, city.landmarks, body, city.shops, city.activities, city.foods, web);
 	const mind = claude
 		? await createClaudeMind({
 				model: args.model,
 				system,
 				body,
+				web,
 				sessionDir: join(dir, `${encodeURIComponent(name)}.claude`),
 				fresh: args.fresh,
 				act,
