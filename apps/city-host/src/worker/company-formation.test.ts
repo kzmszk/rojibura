@@ -64,15 +64,19 @@ describe("who goes where", () => {
 });
 
 describe("when the place itself cannot be", () => {
-	test("narrower first, then the other side; straight behind only last", () => {
+	test("narrower first, then the other side, then behind or ahead; in line with the owner only last", () => {
 		const place = placesFor(1, "walking")[0] as Place;
 		const tries = placesToTry(place);
 		expect(tries[0]).toEqual(place);
 		expect(tries[1]?.aside).toBeLessThan(place.aside);
 		expect(tries[2]?.side).toBe(-place.side);
-		expect(tries.at(-1)).toMatchObject({ aside: 0 });
-		expect(tries.at(-1)?.front).toBeLessThan(-COMPANY_GAP);
-		for (const p of tries.slice(0, -1)) expect(p.aside).toBeGreaterThan(0);
+		const inLine = tries.filter((p) => p.aside === 0);
+		expect(tries.slice(-inLine.length)).toEqual(inLine);
+		// (never where the owner is, and first of all behind them, out to the side as far as the way allows)
+		for (const p of inLine) expect(Math.abs(p.front)).toBeGreaterThan(COMPANY_GAP);
+		expect(inLine[0]?.front).toBeLessThan(0);
+		const behind = tries.find((p) => p.front < -COMPANY_GAP);
+		expect(behind?.aside).toBe(place.aside);
 	});
 });
 
@@ -82,12 +86,12 @@ describe("getting out to its side", () => {
 	test("from straight ahead of the owner it is out there within a couple of metres, not at the end of the way", () => {
 		const join = joinPoint([0, 1], [0, 0], ahead, 30, place) as Vec2;
 		expect(join[0]).toBeCloseTo(-0.9);
-		expect(join[1]).toBeCloseTo(3);
+		expect(join[1]).toBeCloseTo(2.5);
 	});
 
 	test("already out there, or the leg ends first: no such point", () => {
 		expect(joinPoint([-0.9, 0.3], [0, 0], ahead, 30, place)).toBeNull();
-		expect(joinPoint([0, 1], [0, 0], ahead, 2.5, place)).toBeNull();
+		expect(joinPoint([0, 1], [0, 0], ahead, 2, place)).toBeNull();
 	});
 });
 

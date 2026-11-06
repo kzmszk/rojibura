@@ -18,12 +18,17 @@ const FIRST_PAIR = {
 /** Each further pair is this much further back, and further out, than the one before (m): clear of it. */
 const NEXT_BACK = 0.85;
 const NEXT_OUT = 0.35;
-/** Where the way is too narrow for a place: this much of the way out, then behind the owner, a little aside or not. */
+/**
+ * Where the way is too narrow for a place: this much of the way out. Or behind the owner, this far, so that it passes a
+ * narrow place after them and not through them, still out to the side wherever the way is wide, or a little aside; or
+ * this far ahead, if it is in front of them already and they would walk through it.
+ */
 const NARROW = 0.65;
-const BEHIND = 1.2;
-const BEHIND_ASIDE = 0.35;
+const BEHIND: readonly number[] = [1.2, 2.2];
+const AHEAD = 1.2;
+const LITTLE_ASIDE = 0.35;
 /** It gets out to its side within this much of the way (m), so it does not walk in line with the owner for long. */
-const JOIN_M = 2;
+const JOIN_M = 1.5;
 /** Already this close to how far out it should be (m): no need to get there first. */
 const JOINED_M = 0.15;
 /** A way is looked over this often (ms), up to so many times. */
@@ -74,17 +79,20 @@ export function assignPlaces(froms: Vec2[], at: Vec2, ahead: Vec2, places: Place
 	return froms.map((_, who) => given.get(who) as Place);
 }
 
-/** The place itself, then what else will do where it cannot be: straight behind only when nothing else fits. */
+/** The place itself, then what else will do where it cannot be: in line with the owner only when nothing else fits. */
 export function placesToTry(place: Place): Place[] {
 	const narrow = place.aside * NARROW;
-	const behind = place.front - BEHIND;
+	const shifted = [...BEHIND.map((back) => place.front - back), place.front + AHEAD];
 	return [
 		place,
 		{ ...place, aside: narrow },
 		{ ...place, side: -place.side },
 		{ ...place, aside: narrow, side: -place.side },
-		{ front: behind, aside: BEHIND_ASIDE, side: place.side },
-		{ front: behind, aside: 0, side: place.side },
+		...shifted.flatMap((front) => [
+			{ ...place, front },
+			{ ...place, front, aside: LITTLE_ASIDE },
+		]),
+		...shifted.map((front) => ({ ...place, front, aside: 0 })),
 	];
 }
 

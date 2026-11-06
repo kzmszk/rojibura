@@ -71,9 +71,15 @@ interface InteractionPort<C> {
 }
 /** Walking on with keys: how far on their AI goes at once (seconds), less if the way is not clear that far. */
 const COMPANY_HORIZONS = [30, 12, 6, 4, 2, 1];
-/** Told how to go on this long before it gets there, so it does not stop (ms); no way found: asked again after this. */
+/**
+ * Told how to go on this long before it gets there, so it does not stop (ms); and not sooner than this, each time being
+ * an alarm (with a wall close ahead the owner is about to stop anyway).
+ */
 const COMPANY_AGAIN_EARLY_MS = 300;
 const COMPANY_AGAIN_MS = 2000;
+/** Going beside the owner's way, a leg with something in the way is cut in two up to so many times, down to this (m). */
+const COMPANY_CUTS = 4;
+const COMPANY_PIECE_M = 2;
 const LEAD_GRACE_MS = 2 * 60_000;
 const SEAT_COMPANY_NEAR = 3;
 const SEAT_FRONT = 0.5;
@@ -559,7 +565,7 @@ export class RoomInteractions<C> {
 		for (const [i, [conn, ai]] of walkers.entries()) {
 			const ms = this.companionStep(conn, ai, owner, places[i] as Place, ahead, now, others);
 			others.push(ai.move);
-			soonest = Math.min(soonest, ms > 0 ? ms - COMPANY_AGAIN_EARLY_MS : COMPANY_AGAIN_MS);
+			soonest = Math.min(soonest, Math.max(ms - COMPANY_AGAIN_EARLY_MS, COMPANY_AGAIN_MS));
 		}
 		this.goOnAt(owner, move.kind === "vel" && pose.moving && walkers.length > 0 ? now + soonest : undefined);
 	}
@@ -756,8 +762,8 @@ export class RoomInteractions<C> {
 	): { path: Vec2[]; ms: number } | null {
 		const om = owner.move;
 		const here = this.space.positionOf(owner, now);
-		if (om.kind === "path" && poseAt(om, now).moving) {
-			const rest = remainingPath(om, now);
+		const rest = om.kind === "path" && poseAt(om, now).moving ? remainingPath(om, now) : [];
+		if (om.kind === "path" && rest.length >= 2) {
 			const path = this.shiftedWay(from, rest, place, ahead, walk);
 			return path && { path, ms: (polylineLength(rest) / om.speed) * 1000 };
 		}
@@ -783,36 +789,47 @@ export class RoomInteractions<C> {
 	}
 
 	/**
-	 * The owner's way shifted to a place beside it: soon out to that side, then past each of its corners where there
-	 * is ground for it. Null if the end of it has none, or a wall is in the way and there is no way round.
+	 * The owner's way shifted to a place beside it: soon out to that side, and beside each of its legs as far as there
+	 * is ground for it. Something in the way on one leg is gone round or through as closely as it takes, out to the side
+	 * again right after it, so that it does not walk in line with the owner all that leg. Null if the end of the way
+	 * has no ground for the place, or there is no way there.
 	 */
 	private shiftedWay(from: Vec2, rest: Vec2[], place: Place, ahead: Vec2, walk: Walkable): Vec2[] | null {
+		const way: Vec2[] = [from];
+		/** Goes beside the owner's way from `a` to `b`, in pieces if it cannot go straight; whether it got to `b`. */
+		const beside = (a: Vec2, b: Vec2, dir: Vec2, cuts: number): boolean => {
+			const spot = placeAt(b, dir, place);
+			const here = way[way.length - 1] as Vec2;
+			const ground = walk.isWalkable(spot);
+			if (ground && walk.validatePath([here, spot]) && way.length < MAX_PATH_POINTS) {
+				way.push(spot);
+				return true;
+			}
+			if (cuts > 0 && dist(a, b) > COMPANY_PIECE_M) {
+				const mid: Vec2 = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+				beside(a, mid, dir, cuts - 1);
+				return beside(mid, b, dir, cuts - 1);
+			}
+			const round = ground ? this.wayRound(here, spot, walk) : null;
+			if (!round || way.length + round.length - 1 > MAX_PATH_POINTS) return false;
+			way.push(...round.slice(1));
+			return true;
+		};
 		const start = rest[0] as Vec2;
 		const next = rest[1] as Vec2;
-		const leg = dist(start, next);
-		const dir: Vec2 = leg > 1e-3 ? [(next[0] - start[0]) / leg, (next[1] - start[1]) / leg] : ahead;
-		const way: Vec2[] = [from];
-		const join = joinPoint(from, start, dir, leg, place);
-		if (join && walk.isWalkable(join)) way.push(join);
-		const end = rest.length - 1;
-		for (let i = 1; i <= end; i++) {
+		const firstLeg = dist(start, next);
+		const first: Vec2 =
+			firstLeg > 1e-3 ? [(next[0] - start[0]) / firstLeg, (next[1] - start[1]) / firstLeg] : ahead;
+		const join = joinPoint(from, start, first, firstLeg, place);
+		if (join && walk.validatePath([from, join])) way.push(join);
+		let arrived = false;
+		for (let i = 1; i < rest.length; i++) {
 			const a = rest[i - 1] as Vec2;
 			const b = rest[i] as Vec2;
 			const d = dist(a, b);
-			const spot = placeAt(b, d > 1e-3 ? [(b[0] - a[0]) / d, (b[1] - a[1]) / d] : ahead, place);
-			if (i === end) {
-				if (!walk.isWalkable(spot)) return null;
-				if (way.length < MAX_PATH_POINTS && walk.validatePath([way[way.length - 1] as Vec2, spot])) {
-					way.push(spot);
-					return way;
-				}
-				// a fountain or a wall in the way: find a way round it to the same place, there at the same time
-				return this.wayRound(from, spot, walk);
-			}
-			if (way.length < MAX_PATH_POINTS - 1 && walk.validatePath([way[way.length - 1] as Vec2, spot]))
-				way.push(spot);
+			arrived = beside(a, b, d > 1e-3 ? [(b[0] - a[0]) / d, (b[1] - a[1]) / d] : ahead, COMPANY_CUTS);
 		}
-		return null;
+		return arrived && polylineLength(way) <= MAX_PATH_LENGTH ? way : null;
 	}
 
 	/** Straight from `from` to `to`, or round whatever is in the way; null if there is no way. */

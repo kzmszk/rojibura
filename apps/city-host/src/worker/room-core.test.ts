@@ -1387,7 +1387,8 @@ describe("walking with your AIs", () => {
 							return false;
 					return true;
 				}),
-			closestPoint: (p) => [Math.max(-0.2, Math.min(0.2, p[0])), p[1]],
+			closestPoint: (p) => (passage.isWalkable(p) ? p : [Math.max(-0.2, Math.min(0.2, p[0])), p[1]]),
+			findPath: (from, to) => (from[1] * to[1] < 0 ? [from, [0, 0], to] : [from, to]),
 		};
 		ctx = setup({ walk: passage, spawn: [0, -15] });
 		const a = conn("a");
@@ -1417,9 +1418,64 @@ describe("walking with your AIs", () => {
 			moveOf(a).kind === "path" ? (moveOf(a) as Extract<MoveState, { kind: "path" }>).path : [],
 		);
 		const ends = (walked / 1.4) * 1000;
-		// it does not overlap her anywhere, and in the passage it is behind her
-		expect(leastApart(a, bot, ends, 500)).toBeGreaterThanOrEqual(COMPANY_GAP);
-		expect(posOf(bot, t1 + ends - 500)[1]).toBeLessThan(posOf(a, t1 + ends - 500)[1]);
+		// they come closest going for the same way in, and do not overlap anywhere; in the passage it is in line with
+		// her, there being no other way
+		expect(leastApart(a, bot, ends, 500)).toBeGreaterThanOrEqual(0.5);
+		expect(posOf(bot, t1 + ends - 500)[0]).toBeCloseTo(0, 1);
+	});
+
+	test("with something in the way on one long leg, it walks in line with its owner only around that", () => {
+		// open ground, but for a gate 1 m wide half way along (z in [-1, 1], x in [-0.5, 0.5])
+		const gate: Walkable = {
+			isWalkable: (p) =>
+				Math.abs(p[0]) <= 10 && Math.abs(p[1]) <= 20 && (Math.abs(p[1]) > 1 || Math.abs(p[0]) <= 0.5),
+			validatePath: (path) =>
+				path.every((p, i) => {
+					if (!gate.isWalkable(p)) return false;
+					const prev = path[i - 1];
+					if (!prev) return true;
+					for (let f = 0.05; f < 1; f += 0.05)
+						if (!gate.isWalkable([prev[0] + (p[0] - prev[0]) * f, prev[1] + (p[1] - prev[1]) * f]))
+							return false;
+					return true;
+				}),
+			closestPoint: (p) => p,
+			findPath: (from, to) => {
+				if (from[1] * to[1] >= 0) return [from, to];
+				return [
+					from,
+					[Math.max(-0.4, Math.min(0.4, from[0])), Math.sign(from[1])],
+					[Math.max(-0.4, Math.min(0.4, to[0])), Math.sign(to[1])],
+					to,
+				];
+			},
+		};
+		ctx = setup({ walk: gate, spawn: [0, -15] });
+		const a = conn("a");
+		const bot = conn("bot");
+		place(a, human("alice"), [0, -15]);
+		place(bot, ai("bot", "alice"), [-1, -15]);
+		ctx.room.handle(a, { t: "COMPANION", ids: ["a_bot"] });
+		ctx.clock.advance(3000);
+		ctx.room.handle(a, {
+			t: "MOVE_PATH",
+			path: [
+				[0, -15],
+				[0, 15],
+			],
+			speed: 1.4,
+			seq: 1,
+		});
+		const t0 = ctx.clock.now();
+		const ms = (30 / 1.4) * 1000;
+		expect(leastApart(a, bot, ms)).toBeGreaterThanOrEqual(COMPANY_GAP);
+		// out at the side until close to the gate, and again soon after it
+		for (const z of [-12, -6, 6, 12]) {
+			const t = t0 + ((z + 15) / 1.4) * 1000;
+			expect(sideways(bot, a, t)).toBeGreaterThan(0.5);
+		}
+		// through the gate it is in line with her, there being no room
+		expect(sideways(bot, a, t0 + (15 / 1.4) * 1000)).toBeLessThan(0.6);
 	});
 
 	test("walking on with keys the AI keeps walking beside them, however long the keys stay as they are", () => {
@@ -1521,6 +1577,28 @@ describe("walking with your AIs", () => {
 		ctx.room.travel(ctx.room.memberFor(a) as Member, "venezia", "gate");
 		expect(stays.inbox.map((m) => m.t)).toContain("FOLLOW");
 		expect(free.inbox.map((m) => m.t)).not.toContain("FOLLOW");
+	});
+
+	test("the owner's way ending just now is taken as standing", () => {
+		const { a, bots, ids } = company([-11, -10]);
+		ctx.room.handle(a, { t: "COMPANION", ids });
+		ctx.clock.advance(3000);
+		const owner = ctx.room.memberFor(a) as Member;
+		// (a way of no length: it has not ended by the clock, but nothing of it is left)
+		owner.move = {
+			kind: "path",
+			path: [
+				[-10, -10],
+				[-10, -10],
+			],
+			speed: 1.4,
+			at: ctx.clock.now(),
+		};
+		expect(() => ctx.room.handle(bots[0] as Conn, { t: "SAY", text: "x" })).not.toThrow();
+		ctx.room.handle(a, { t: "COMPANION", ids });
+		expect(dist(posOf(bots[0] as Conn, ctx.clock.now() + 3000), [-10, -10])).toBeGreaterThanOrEqual(
+			COMPANY_GAP,
+		);
 	});
 
 	test("a step of its own is refused if another of the owner's AIs is right there", () => {

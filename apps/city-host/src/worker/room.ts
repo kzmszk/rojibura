@@ -115,6 +115,8 @@ export class CityRoomDO extends DurableObject<Env> {
 	private readonly guide: Guide<Conn>;
 	private readonly guideMemory: GuideMemory;
 	private flushed = { inbound: 0, connects: 0, says: 0, rejectedMoves: 0 };
+	/** When the alarm last wrote the stats, the chat and the usage (ms). */
+	private wroteAt = 0;
 	private noticeSentFor = 0;
 	private chatFlushedAt = 0;
 	private readonly hours: Hours;
@@ -437,11 +439,15 @@ export class CityRoomDO extends DurableObject<Env> {
 						});
 			}
 		}
-		this.flushStats();
-		this.flushChat();
-		// today's usage survives eviction (one row a minute while people are here)
-		this.meter.add({ sqlRowsWritten: 1 });
-		this.ctx.storage.kv.put("usage", this.meter.snapshot());
+		// woken early (an AI's next step, or closing time): what is written is still written once a minute
+		if (now - this.wroteAt >= SWEEP_INTERVAL_MS || this.core.size === 0) {
+			this.wroteAt = now;
+			this.flushStats();
+			this.flushChat();
+			// today's usage survives eviction (one row a minute while people are here)
+			this.meter.add({ sqlRowsWritten: 1 });
+			this.ctx.storage.kv.put("usage", this.meter.snapshot());
+		}
 		await this.scheduleAlarm();
 	}
 
