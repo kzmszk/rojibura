@@ -8,8 +8,8 @@ import {
 	poseAt,
 } from "@rojibura/protocol";
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { AWAY_GRACE_MS, RoomCore } from "./room-core.ts";
-import type { JoinInfo, Member, Walkable, WalletStore, World } from "./room-types.ts";
+import { AWAY_GRACE_MS, PLACE_KEPT_MS, RoomCore } from "./room-core.ts";
+import type { JoinInfo, KeptPlace, Member, PlaceStore, Walkable, WalletStore, World } from "./room-types.ts";
 import { PRODUCTION_RULES } from "./rules.ts";
 
 // 40 x 40 m square with a 10 x 10 m building in the middle (x, z in [-5, 5]).
@@ -34,6 +34,7 @@ function setup(
 	wallets?: WalletStore,
 	persisted?: (conn: Conn, member: Member) => void,
 	sent?: (conn: Conn, message: HostToClient) => void,
+	places?: PlaceStore,
 ) {
 	let now = 1_000_000;
 	let n = 0;
@@ -58,7 +59,11 @@ function setup(
 		},
 		clock.now,
 		() => String(++n),
-		{ ...(saved ? { items: { save: saved } } : {}), ...(wallets ? { wallets } : {}) },
+		{
+			...(saved ? { items: { save: saved } } : {}),
+			...(wallets ? { wallets } : {}),
+			...(places ? { places } : {}),
+		},
 	);
 	return { room, clock };
 }
@@ -341,6 +346,199 @@ describe("movement", () => {
 		expect(bot.inbox).toContainEqual(expect.objectContaining({ t: "JOINED" }));
 		ctx.room.leave(a, "quit");
 		expect(last(bot)).toMatchObject({ t: "LEFT", id: "h_alice" });
+	});
+});
+
+describe("loading the page again", () => {
+	const reload = (old: Conn, info: JoinInfo) => {
+		ctx.room.dropped(old, undefined, true);
+		ctx.clock.advance(3000);
+		const back = conn("back");
+		ctx.room.join(back, info);
+		return back;
+	};
+	const welcomeOf = (c: Conn) => c.inbox[0] as Extract<HostToClient, { t: "WELCOME" }>;
+	const moveIn = (c: Conn, id: string) => welcomeOf(c).avatars.find((a) => a.id === id)?.move;
+	const posNow = (c: Conn) => poseAt((ctx.room.memberFor(c) as Member).move, ctx.clock.now()).pos;
+
+	test("a person goes on from where they were: nobody sees them go, and what they were doing goes on", () => {
+		const a = conn("a");
+		const other = conn("other");
+		place(a, human("alice"), [15, 15]);
+		place(other, human("bob"), [-10, -10]);
+		ctx.room.handle(a, { t: "ACTION", motion: "lie" });
+		other.inbox.length = 0;
+		const back = reload(a, human("alice"));
+		expect(welcomeOf(back)).toMatchObject({ t: "WELCOME", resumed: true });
+		expect(moveIn(back, "h_alice")).toMatchObject({ kind: "idle", pos: [15, 15], posture: "lie" });
+		expect(other.inbox.map((m) => m.t)).toEqual([]);
+	});
+
+	test("walking with keys, they stop where they were: nobody holds the keys any more", () => {
+		const a = conn("a");
+		const other = conn("other");
+		place(a, human("alice"), [-10, -10]);
+		place(other, human("bob"), [-12, -10]);
+		ctx.room.handle(a, { t: "MOVE_VEL", pos: [-10, -10], dir: [0, 1], speed: 1.4, seq: 1 });
+		ctx.clock.advance(2000);
+		const back = reload(a, human("alice"));
+		expect(moveIn(back, "h_alice")).toMatchObject({ kind: "idle" });
+		expect((moveIn(back, "h_alice") as Extract<MoveState, { kind: "idle" }>).pos[1]).toBeCloseTo(-7.2);
+		expect(other.inbox).toContainEqual(
+			expect.objectContaining({ t: "MOVED", id: "h_alice", move: expect.objectContaining({ kind: "idle" }) }),
+		);
+	});
+
+	test("a walk of a click goes on to its end, and a connection that only dropped keeps its keys", () => {
+		const a = conn("a");
+		place(a, human("alice"), [-10, -10]);
+		ctx.room.handle(a, {
+			t: "MOVE_PATH",
+			path: [
+				[-10, -10],
+				[-10, 0],
+			],
+			speed: 1.4,
+			seq: 1,
+		});
+		const back = reload(a, human("alice"));
+		expect(moveIn(back, "h_alice")).toMatchObject({ kind: "path" });
+		ctx.room.handle(back, { t: "MOVE_VEL", pos: posNow(back), dir: [0, 1], speed: 1.4, seq: 2 });
+		ctx.room.dropped(back);
+		expect(ctx.room.memberFor(back)?.move.kind).toBe("vel");
+	});
+
+	test("walking with keys and an AI by them, it comes to their side when they stop", () => {
+		const a = conn("a");
+		const bot = conn("bot");
+		place(a, human("alice"), [-10, -10]);
+		place(bot, ai("bot", "alice"), [-11, -10]);
+		ctx.room.handle(a, { t: "COMPANION", ids: ["a_bot"] });
+		ctx.clock.advance(2000);
+		ctx.room.handle(a, { t: "MOVE_VEL", pos: [-10, -10], dir: [0, 1], speed: 1.4, seq: 1 });
+		ctx.clock.advance(3000);
+		const back = reload(a, human("alice"));
+		ctx.clock.advance(5000);
+		const here = poseAt((ctx.room.memberFor(bot) as Member).move, ctx.clock.now()).pos;
+		expect(dist(here, posNow(back))).toBeLessThan(1.5);
+	});
+
+	test("their AIs' life is told to the new page", () => {
+		const a = conn("a");
+		const bot = conn("bot");
+		place(a, human("alice"), [-10, -10]);
+		place(
+			bot,
+			ai("bot", "alice", {
+				life: {
+					days: 1,
+					block: 0,
+					energy: 70,
+					fitness: 50,
+					mood: 60,
+					skills: {},
+					duties: { meals: 0, work: false, exercise: false, worked: 0 },
+					exercisedDay: 0,
+					slack: 0,
+					at: ctx.clock.now(),
+				},
+			}),
+			[-11, -10],
+		);
+		const back = reload(a, human("alice"));
+		expect(back.inbox).toContainEqual(expect.objectContaining({ t: "LIFE", id: "a_bot" }));
+	});
+});
+
+describe("coming back soon", () => {
+	let kept: Map<string, KeptPlace>;
+	beforeEach(() => {
+		kept = new Map();
+		ctx = setup({}, undefined, undefined, undefined, undefined, {
+			load: (id) => kept.get(id),
+			save: (id, place) => kept.set(id, place),
+		});
+	});
+	const startsAt = (c: Conn) => ctx.room.memberFor(c)?.move;
+
+	test("a person or an AI that left comes in again where it was; the first time, where everyone arrives", () => {
+		for (const [name, info] of [
+			["alice", human("alice")],
+			["bot", ai("bot", "bob")],
+		] as const) {
+			const first = conn(name);
+			place(first, info, [15, 15]);
+			ctx.room.leave(first);
+			ctx.clock.advance(PLACE_KEPT_MS - 1000);
+			const back = conn(name);
+			ctx.room.join(back, info);
+			expect(startsAt(back)).toMatchObject({ kind: "idle", pos: [15, 15] });
+			ctx.room.leave(back);
+		}
+		const fresh = conn("fresh");
+		ctx.room.join(fresh, human("carol"));
+		expect(dist((startsAt(fresh) as Extract<MoveState, { kind: "idle" }>).pos, [-10, -10])).toBeLessThan(3);
+	});
+
+	test("where it had walked to by then, even if it was walking", () => {
+		const first = conn("a");
+		place(first, human("alice"), [-10, -10]);
+		ctx.room.handle(first, {
+			t: "MOVE_PATH",
+			path: [
+				[-10, -10],
+				[-10, 0],
+			],
+			speed: 1,
+			seq: 1,
+		});
+		ctx.clock.advance(4000);
+		ctx.room.leave(first);
+		const back = conn("b");
+		ctx.room.join(back, human("alice"));
+		expect((startsAt(back) as Extract<MoveState, { kind: "idle" }>).pos[1]).toBeCloseTo(-6, 0);
+	});
+
+	test("a person who did not come back in time after a reload is kept the same way", () => {
+		const first = conn("a");
+		place(first, human("alice"), [15, 15]);
+		ctx.room.dropped(first, undefined, true);
+		ctx.clock.advance(AWAY_GRACE_MS + 1);
+		ctx.room.expireAway();
+		expect(ctx.room.has("h_alice")).toBe(false);
+		const back = conn("b");
+		ctx.room.join(back, human("alice"));
+		expect(back.inbox[0]).not.toHaveProperty("resumed");
+		expect(startsAt(back)).toMatchObject({ kind: "idle", pos: [15, 15] });
+	});
+
+	test("after a long time, or through a portal, it arrives as usual", () => {
+		const first = conn("a");
+		place(first, human("alice"), [15, 15]);
+		ctx.room.leave(first);
+		ctx.clock.advance(PLACE_KEPT_MS + 1000);
+		const late = conn("b");
+		ctx.room.join(late, human("alice"));
+		expect(dist((startsAt(late) as Extract<MoveState, { kind: "idle" }>).pos, [-10, -10])).toBeLessThan(3);
+		(ctx.room.memberFor(late) as Member).move = { kind: "idle", pos: [15, 15], at: ctx.clock.now() };
+		ctx.room.leave(late);
+		const portal = conn("c");
+		ctx.room.join(portal, human("alice"), "cafe");
+		expect(dist((startsAt(portal) as Extract<MoveState, { kind: "idle" }>).pos, [10, 10])).toBeLessThan(3);
+	});
+
+	test("where there is no ground any more, close by; sent away, it arrives as usual", () => {
+		kept.set("h_alice", { pos: [0, 0], at: ctx.clock.now() });
+		const inside = conn("a");
+		ctx.room.join(inside, human("alice"));
+		const at = (startsAt(inside) as Extract<MoveState, { kind: "idle" }>).pos;
+		expect(Math.max(Math.abs(at[0]), Math.abs(at[1]))).toBeGreaterThanOrEqual(5);
+		ctx.room.leave(inside);
+		kept.clear();
+		const b = conn("b");
+		place(b, human("bob"), [15, 15]);
+		ctx.room.leave(b, "kicked");
+		expect(kept.has("h_bob")).toBe(false);
 	});
 });
 
@@ -1599,6 +1797,21 @@ describe("walking with your AIs", () => {
 		expect(dist(posOf(bots[0] as Conn, ctx.clock.now() + 3000), [-10, -10])).toBeGreaterThanOrEqual(
 			COMPANY_GAP,
 		);
+	});
+
+	test("the owner letting go of the keys, the AI stops by them, however close to its place it is by then", () => {
+		for (const walked of [300, 700, 1000, 1500, 2000, 3000, 3500, 5000, 8000]) {
+			ctx = setup();
+			const { a, bots, ids } = company([-11, -10]);
+			const bot = bots[0] as Conn;
+			ctx.room.handle(a, { t: "COMPANION", ids });
+			ctx.clock.advance(3000);
+			ctx.room.handle(a, { t: "MOVE_VEL", pos: posOf(a), dir: [0, 1], speed: 1.4, seq: 1 });
+			ctx.clock.advance(walked);
+			ctx.room.handle(a, { t: "MOVE_VEL", pos: posOf(a), dir: [0, 0], speed: 0, seq: 2 });
+			ctx.clock.advance(20_000);
+			expect(dist(posOf(bot), posOf(a))).toBeLessThan(1.5);
+		}
 	});
 
 	test("a step of its own is refused if another of the owner's AIs is right there", () => {

@@ -37,6 +37,7 @@ import type {
 	LifeStore,
 	Member,
 	MemberRelations,
+	PlaceStore,
 	RoomStats,
 	Transport,
 	Walkable,
@@ -50,6 +51,8 @@ import { PRODUCTION_RULES, type RoomRules } from "./rules.ts";
  * were; the others see nothing. Covers a few of the clients' reconnect attempts (after 1, 2, 4... s).
  */
 export const AWAY_GRACE_MS = 20_000;
+/** Someone coming in again this soon goes on from where they left: a slow reload, an AI started again (docs/prd.md 3.3). */
+export const PLACE_KEPT_MS = 10 * 60_000;
 /** What someone away is sent meanwhile and gets when back: what was said and asked, not what moved. */
 const KEPT_WHILE_AWAY = new Set<HostToClient["t"]>([
 	"SAID",
@@ -114,6 +117,7 @@ export class RoomCore<C> {
 	private readonly interactions: RoomInteractions<C>;
 	private readonly life: RoomLife<C>;
 	private readonly movement: RoomMovement<C>;
+	private readonly places: PlaceStore | undefined;
 
 	constructor(
 		transport: Transport<C>,
@@ -126,8 +130,10 @@ export class RoomCore<C> {
 			items?: ItemStore;
 			life?: LifeStore;
 			wallets?: WalletStore;
+			places?: PlaceStore;
 		} = {},
 	) {
+		this.places = options.places;
 		// nothing reaches a dropped connection: what matters is kept for when they are back, and their state
 		// is saved on the new connection
 		this.transport = {
@@ -254,6 +260,15 @@ export class RoomCore<C> {
 		return null;
 	}
 
+	/** Through a portal, at the portal; just back, where they left; else where everyone arrives. */
+	private startingPoint(info: JoinInfo, arrive: string | undefined, now: number): Vec2 {
+		if (arrive) return this.space.spawnPoint(arrive);
+		const kept = this.places?.load(info.id);
+		return kept && now - kept.at <= PLACE_KEPT_MS
+			? this.space.landingPoint(info, kept.pos)
+			: this.space.spawnPoint();
+	}
+
 	/** `arrive`: through a portal, the landmark or portal to appear at instead of the spawn point (docs/prd.md 3.8). */
 	join(conn: C, info: JoinInfo, arrive?: string): boolean {
 		const now = this.clock();
@@ -269,7 +284,7 @@ export class RoomCore<C> {
 		const member: Member = {
 			...info,
 			status: "active",
-			move: { kind: "idle", pos: this.space.spawnPoint(arrive), at: now },
+			move: { kind: "idle", pos: this.startingPoint(info, arrive, now), at: now },
 			interest: INTEREST_RADIUS_DEFAULT,
 		};
 		const entered = member.kind === "ai" ? this.life.lifeOnEntry(info.life, now) : null;
@@ -339,6 +354,9 @@ export class RoomCore<C> {
 		this.welcome(conn, member, now, true);
 		if (member.coins !== undefined) this.transport.send(conn, { t: "WALLET", coins: member.coins });
 		for (const msg of away?.missed ?? []) this.transport.send(conn, msg);
+		// a page loaded again knows nothing yet of how their AIs are doing (docs/life.md 8)
+		if (member.kind === "human")
+			for (const ai of this.memberValues()) if (ai.ownerId === member.id) this.life.sendLife(ai, false);
 		const before = this.toState(was);
 		const after = this.toState(member);
 		if (JSON.stringify({ ...before, move: null }) !== JSON.stringify({ ...after, move: null }))
@@ -367,10 +385,10 @@ export class RoomCore<C> {
 	/**
 	 * Called when a connection dropped (closed without a word, or errored): they stay AWAY_GRACE_MS in case they
 	 * come straight back (`join` then resumes them). `member` is what it last persisted, for a connection that
-	 * dropped while the room slept (not restored on waking). Returns until when they wait, or null when there
-	 * is no one to wait for (they are back already, or were let go).
+	 * dropped while the room slept (not restored on waking). `pageGone`: their page went away, likely a reload.
+	 * Returns until when they wait, or null when there is no one to wait for (they are back already, or were let go).
 	 */
-	dropped(conn: C, member?: Member): number | null {
+	dropped(conn: C, member?: Member, pageGone = false): number | null {
 		if (this.participantFor(conn)?.connection.kind === "away") return null;
 		if (!this.connectionToId.has(conn)) {
 			if (!member || this.participants.has(member.id)) return null;
@@ -380,7 +398,16 @@ export class RoomCore<C> {
 		const participant = this.participantFor(conn);
 		if (!participant) return null;
 		participant.connection = { kind: "away", conn, until, order: this.nextDropOrder++, missed: [] };
+		if (pageGone) this.letGoOfKeys(conn, participant.member);
 		return until;
+	}
+
+	/** Nobody holds the keys any more: they stop where they are, and so does anyone walking beside them. */
+	private letGoOfKeys(conn: C, m: Member): void {
+		if (m.move.kind !== "vel" || m.move.speed === 0) return;
+		const now = this.clock();
+		this.movement.commit(conn, m, { kind: "idle", pos: this.positionOf(m, now), at: now });
+		if (m.company) this.interactions.accompany(m, now);
 	}
 
 	/** Those whose connection dropped and who did not come back in time leave now. */
@@ -902,6 +929,8 @@ export class RoomCore<C> {
 		// what they were doing ends with what they did of it; their life is saved as it is
 		const now = this.clock();
 		this.life.leaveActivity(conn, m, now);
+		// coming back soon, they go on from here (not after being sent away, and the host's guide has its own place)
+		if (!m.system && reason !== "kicked") this.places?.save(m.id, { pos: this.positionOf(m, now), at: now });
 		// their AIs no longer walk with them
 		this.interactions.tellCompany(m, m.company ?? [], false);
 		// what they held stays where they were

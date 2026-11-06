@@ -26,7 +26,7 @@ import { CLOSING_NOTICE_MS, closingTime, describeHours, type Hours, isOpen, pars
 import { freePlayOn } from "./modes.ts";
 import { ModelRegistry } from "./registered-models.ts";
 import { CLOSE_CLOSING, CLOSE_POLICY, RoomCore } from "./room-core.ts";
-import type { ChatLine, JoinInfo, Member, World } from "./room-types.ts";
+import type { ChatLine, JoinInfo, KeptPlace, Member, World } from "./room-types.ts";
 import { FREE_PLAY_RULES, PRODUCTION_RULES } from "./rules.ts";
 import { meteredD1, type SavedUsage, UsageMeter } from "./usage.ts";
 import { freePlayWorld, MAIN_AREA, PUBLISHED, worldOf } from "./world.ts";
@@ -174,6 +174,11 @@ export class CityRoomDO extends DurableObject<Env> {
 			{
 				// the small things are saved whenever one changes, so they stay put while the room sleeps
 				items: { save: (items) => kv.put("items", items) },
+				// where someone was when they left, for when they come back soon (docs/prd.md 3.3)
+				places: {
+					load: (id) => kv.get<KeptPlace>(`place:${id}`),
+					save: (id, place) => kv.put(`place:${id}`, place),
+				},
 				// an AI's life goes to D1, so it carries over between areas (docs/life.md 7.1)
 				life: {
 					save: (id, life) =>
@@ -378,10 +383,15 @@ export class CityRoomDO extends DurableObject<Env> {
 		const who = this.core.memberFor(ws) ?? member;
 		if (travel && who) this.core.travel(who, travel.to, travel.at);
 		const name = this.core.memberFor(ws)?.name ?? member?.name ?? "?";
-		const dropped = DROPPED.has(code);
-		this.meter.track(`${name}：${dropped ? "接続切れ" : "退出"}`, () => this.depart(ws, member, dropped), {
-			doRequests: WS_MESSAGE,
-		});
+		// a person's page going away is most likely a reload: they stay a moment, to go on from where they were. An AI
+		// in that page leaves at once and comes in again where it was: its next page may be in another area, by a portal
+		const pageGone = code === GOING_AWAY && who?.kind === "human";
+		const dropped = DROPPED.has(code) || pageGone;
+		this.meter.track(
+			`${name}：${dropped ? "接続切れ" : "退出"}`,
+			() => this.depart(ws, member, dropped, pageGone),
+			{ doRequests: WS_MESSAGE },
+		);
 	}
 
 	async webSocketError(ws: WebSocket): Promise<void> {
@@ -394,9 +404,9 @@ export class CityRoomDO extends DurableObject<Env> {
 	 * Dropped without a word, they stay a little in case they come straight back (docs/prd.md 3.3); the
 	 * timer for letting them go also keeps the room awake until then, so they are not forgotten asleep.
 	 */
-	private depart(ws: WebSocket, member: Member | undefined, dropped: boolean): void {
+	private depart(ws: WebSocket, member: Member | undefined, dropped: boolean, pageGone = false): void {
 		if (dropped) {
-			const until = this.core.dropped(ws, member);
+			const until = this.core.dropped(ws, member, pageGone);
 			if (until !== null)
 				setTimeout(
 					() => this.meter.track("接続が切れたまま", () => this.core.expireAway()),
@@ -643,6 +653,8 @@ function safeSend(ws: WebSocket, msg: HostToClient): void {
  * the server side failing or restarting. A tab closed (1001) or a client stopping (1000, 1005) has left.
  */
 const DROPPED = new Set([1006, 1011, 1012, 1013, 1014]);
+/** The browser closes a page's connections like this when it loads another page, or the same one again. */
+const GOING_AWAY = 1001;
 
 function attachmentOf(ws: WebSocket): Attachment | null {
 	try {

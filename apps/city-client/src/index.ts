@@ -54,7 +54,16 @@ import { AgentPanel } from "./agent-panel.ts";
 import { companyOf } from "./agent-roster.ts";
 import { api, onApiUsage } from "./api.ts";
 import { AreaNature, SEASON_LABEL } from "./area-nature.ts";
-import { currentArea, DETAIL_KEY, savedDetail, sceneFiles, touchFirst, travelUrl } from "./areas.ts";
+import {
+	currentArea,
+	DETAIL_KEY,
+	keepPlace,
+	keptPlace,
+	savedDetail,
+	sceneFiles,
+	touchFirst,
+	travelUrl,
+} from "./areas.ts";
 import { Attention } from "./attention.ts";
 import { avatarPicker, saveAvatar, savedAvatar, startingAvatar } from "./avatar-picker.ts";
 import { type AvatarView, setSeats, TRAVEL } from "./avatars.ts";
@@ -217,6 +226,13 @@ async function startCity(
 	saveAvatar(avatarParam);
 	// the area this page is in (docs/prd.md 3.8): ?area=, and ?at= when arriving through a portal
 	const { area, all: areas } = await currentArea(params, devBuild);
+	// (loading this page again is not arriving again: you go on from where you are, docs/prd.md 3.3)
+	const arrivingAt = params.get("at");
+	if (arrivingAt) {
+		const rest = new URLSearchParams(params);
+		rest.delete("at");
+		history.replaceState(null, "", `${location.pathname}?${rest}${location.hash}`);
+	}
 	/** Free play builds only in areas that allow it (the main one). */
 	const building = freePlay && area.build === true;
 	const scene = new CityScene(root);
@@ -237,7 +253,8 @@ async function startCity(
 		)
 		.catch(() => null);
 	const arriving = area.bounds
-		? ((area.portals ?? []).find((p) => p.id === params.get("at"))?.pos ??
+		? ((area.portals ?? []).find((p) => p.id === arrivingAt)?.pos ??
+			(arrivingAt ? null : keptPlace(area.id)) ??
 			(await landmarksFile)?.spawn?.pos ??
 			null)
 		: null;
@@ -978,6 +995,10 @@ async function startCity(
 	// the owner reads their AI's diary through this connection (docs/life.md 8)
 	agentPanel.connect((m) => conn.send(m));
 	conn.start();
+	addEventListener("pagehide", () => {
+		const mine = myId ? avatars.get(myId) : undefined;
+		if (mine) keepPlace(area.id, poseAt(mine.state.move, conn.hostNow()).pos);
+	});
 	usage?.restore();
 	// debug hook for tools/snap.ts on development builds (cf dev and staging)
 	if (devBuild)

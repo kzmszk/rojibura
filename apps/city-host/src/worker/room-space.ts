@@ -57,7 +57,7 @@ export class RoomSpace {
 		this.port = port;
 		this.walk = world.walk;
 	}
-	landingPoint(m: Member, p: Vec2): Vec2 {
+	landingPoint(m: { assets: AvatarAssets }, p: Vec2): Vec2 {
 		const walk = this.walkOf(m);
 		let at: Vec2 = walk.isWalkable(p) ? p : walk.closestPoint(p);
 		for (let r = 1; r <= 30 && !walk.isWalkable(at); r++)

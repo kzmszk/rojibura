@@ -723,8 +723,12 @@ export class RoomInteractions<C> {
 			const way = this.companionWay(from, owner, tried, ahead, walk, now);
 			if (!way) continue;
 			const length = polylineLength(way.path);
-			// there already, as near as it can be
-			if (length < 0.15) return 0;
+			// there already, as near as it can be: it stops there, if it was on its way further on
+			if (length < 0.15) {
+				if (poseAt(ai.move, now).moving)
+					this.port.movement.commit(conn, ai, { kind: "idle", pos: from, at: now });
+				return 0;
+			}
 			// as long as the owner takes; when the owner has stopped, a walk (a run if far behind)
 			const speed = Math.min(
 				MAX_SPEED,

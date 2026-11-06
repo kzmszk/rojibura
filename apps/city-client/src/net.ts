@@ -44,9 +44,12 @@ export class CityConnection {
 	/** Said while reconnecting: sent once back where we were (WELCOME `resumed`, docs/prd.md 3.3). */
 	private held: ClientToHost[] = [];
 	private readonly o: CityConnectionOptions;
+	/** Arriving through a portal: the first connection only (coming back later, you go on from where you were). */
+	private at: string | undefined;
 
 	constructor(o: CityConnectionOptions) {
 		this.o = o;
+		this.at = o.at;
 	}
 
 	hostNow(): number {
@@ -103,7 +106,7 @@ export class CityConnection {
 
 	private open(): void {
 		const proto = location.protocol === "https:" ? "wss" : "ws";
-		const q = new URLSearchParams({ avatar: this.o.avatar, ...(this.o.at ? { at: this.o.at } : {}) });
+		const q = new URLSearchParams({ avatar: this.o.avatar, ...(this.at ? { at: this.at } : {}) });
 		const ws = new WebSocket(`${proto}://${location.host}/ws/area/${this.o.areaId}?${q}`);
 		this.ws = ws;
 		this.o.onState("connecting");
@@ -114,6 +117,7 @@ export class CityConnection {
 			if (msg.t === "WELCOME") {
 				this.offset = msg.serverTime - Date.now();
 				this.retryMs = 1000;
+				this.at = undefined;
 				this.o.onState("open");
 				if (this.timer) clearInterval(this.timer);
 				this.timer = setInterval(
