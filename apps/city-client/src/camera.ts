@@ -1,11 +1,12 @@
 // Where the camera looks from (docs/prd.md 3.4.8): orbiting the avatar (drag to turn, wheel to zoom), a drone
 // just behind it, its own eyes, or a film of it and its AI with the eyes of both in frames (docs/cinema.md). Dragging
 // turns the drone and the eyes; while the avatar walks they come round behind it again, unless one turned them while
-// it walks: then they look that way until it stops.
+// it walks: then they look that way until it stops. Lying on your back, your own eyes look at the sky (lying-view.ts).
 
 import * as THREE from "three";
 import type { AvatarView } from "./avatars.ts";
 import { Cinema, type CinemaOptions, type Company, MY_LAYERS, seeHeads } from "./cinema.ts";
+import { LIE_NOD_DOWN, LIE_NOD_UP, LIE_TURN, lyingSight, sightBetween } from "./lying-view.ts";
 import type { CityScene } from "./scene.ts";
 
 export type View = "orbit" | "drone" | "eyes" | "cinema";
@@ -42,6 +43,10 @@ export class ViewController {
 	/** Turned by hand while walking: the view stays where it was put until the avatar stops. */
 	private held = false;
 	private orbiting = false;
+	/** Lying on your back, how your head is turned (lying-view.ts): from looking straight up, until you get up. */
+	private lieTurn = 0;
+	private lieNod = 0;
+	private wasLying = false;
 	private readonly scene: CityScene;
 	private me: AvatarView | null = null;
 	readonly cinema: Cinema;
@@ -59,12 +64,14 @@ export class ViewController {
 		});
 		const turn = (e: PointerEvent) => {
 			if (!this.drag || this.view === "orbit") return;
-			this.yaw -= (e.clientX - this.drag.x) * 0.005;
-			this.held = true;
-			this.pitch = Math.max(
-				-PITCH_LIMIT,
-				Math.min(PITCH_LIMIT, this.pitch - (e.clientY - this.drag.y) * 0.004),
-			);
+			const dx = e.clientX - this.drag.x;
+			const dy = e.clientY - this.drag.y;
+			if (this.skyward) this.turnHead(dx * 0.005, -dy * 0.004);
+			else {
+				this.yaw -= dx * 0.005;
+				this.held = true;
+				this.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, this.pitch - dy * 0.004));
+			}
 			this.drag = { x: e.clientX, y: e.clientY };
 		};
 		dom.addEventListener("pointermove", turn);
@@ -88,12 +95,30 @@ export class ViewController {
 		return this.drag !== null || this.orbiting;
 	}
 
-	/** Looks round by the keys (the cinema view only): `x` left (+) or right (-), `y` up (+) or down (-), -1 to 1. */
+	/** You lie on your back and see from your own eyes: they look at the sky, and "forward" is not where they look. */
+	get skyward(): boolean {
+		return !!this.me?.lying && (this.view === "eyes" || this.view === "cinema");
+	}
+
+	/**
+	 * Looks round by the keys (the cinema view, and lying on your back in the eyes view): `x` left (+) or right (-),
+	 * `y` up (+) or down (-), -1 to 1.
+	 */
 	turnBy(x: number, y: number, dt: number): void {
+		if (this.skyward) {
+			this.turnHead(-x * LOOK_RATE * dt, y * LOOK_RATE * dt);
+			return;
+		}
 		if (this.view !== "cinema") return;
 		this.yaw += x * LOOK_RATE * dt;
 		this.pitch += y * LOOK_RATE * dt;
 		this.held = true;
+	}
+
+	/** Lying on your back: turns your head to the right (left if negative), and past the top of it (to the feet). */
+	private turnHead(turn: number, nod: number): void {
+		this.lieTurn = Math.max(-LIE_TURN, Math.min(LIE_TURN, this.lieTurn + turn));
+		this.lieNod = Math.max(LIE_NOD_DOWN, Math.min(LIE_NOD_UP, this.lieNod + nod));
 	}
 
 	private lookVector(): THREE.Vector3 {
@@ -118,6 +143,9 @@ export class ViewController {
 	set(view: View, me: AvatarView | null): void {
 		this.view = view;
 		this.me = me;
+		this.lieTurn = 0;
+		this.lieNod = 0;
+		this.scene.camera.up.set(0, 1, 0);
 		this.scene.controls.enabled = view === "orbit";
 		this.cinema.show(view === "cinema");
 		if (me) {
@@ -150,6 +178,12 @@ export class ViewController {
 		now = 0,
 	): void {
 		if (me !== this.me) this.set(this.view, me);
+		// just lain down: looking straight up
+		if (me.lying && !this.wasLying) {
+			this.lieTurn = 0;
+			this.lieNod = 0;
+		}
+		this.wasLying = me.lying;
 		const at = me.root.position;
 		if (this.view === "orbit") {
 			this.scene.follow(at, dt);
@@ -170,12 +204,17 @@ export class ViewController {
 		}
 		const look = this.lookVector();
 		if (this.view === "cinema") {
-			this.cinema.update(me, look, { ...company, moving }, dt, now);
+			const sight = sightBetween(look, lyingSight(me.heading, this.lieTurn, this.lieNod), me.lain);
+			this.cinema.update(me, sight, { ...company, moving }, dt, now);
 			return;
 		}
 		const camera = this.scene.camera;
 		if (this.view === "eyes") {
+			const sight = sightBetween(look, lyingSight(me.heading, this.lieTurn, this.lieNod), me.lain);
 			camera.position.copy(me.eyePosition());
+			camera.up.copy(sight.up);
+			// the eyes look where they face
+			camera.lookAt(camera.position.clone().add(sight.look));
 		} else {
 			const head = at.clone().add(new THREE.Vector3(0, 1.5, 0));
 			const behind = head
@@ -186,16 +225,14 @@ export class ViewController {
 			const ground = this.scene.heightAt(behind.x, behind.z);
 			if (ground !== null) behind.y = Math.max(behind.y, ground + 0.4);
 			camera.position.lerp(behind, Math.min(1, dt * 8));
+			// the drone looks at a point ahead of the avatar's head
+			camera.lookAt(
+				at
+					.clone()
+					.add(new THREE.Vector3(0, 1.4, 0))
+					.addScaledVector(look, 1.5),
+			);
 		}
-		// the eyes look where they face; the drone at a point ahead of the avatar's head
-		camera.lookAt(
-			this.view === "eyes"
-				? camera.position.clone().add(look)
-				: at
-						.clone()
-						.add(new THREE.Vector3(0, 1.4, 0))
-						.addScaledVector(look, 1.5),
-		);
 		// the shadow and the water follow what is looked at (scene.track)
 		this.scene.controls.target.copy(at);
 	}

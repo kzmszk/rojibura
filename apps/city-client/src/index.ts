@@ -1052,6 +1052,8 @@ async function startCity(
 			const look = new THREE.Vector3();
 			view.walkCamera.getWorldDirection(look);
 			look.y = 0;
+			// (lying on your back the eyes look at the sky: forward is the way the body lies, towards its feet)
+			if (view.skyward) look.set(Math.sin(mine.heading), 0, Math.cos(mine.heading));
 			forward = { keys: held, f: look.normalize() };
 		}
 		const f = forward.f.clone();
@@ -1139,7 +1141,7 @@ async function startCity(
 			key: e.key,
 			movement: k,
 			typing: typing(),
-			cinema: view.view === "cinema",
+			shiftLooks: view.view === "cinema" || view.skyward,
 			shiftHeld: keys.has("shift"),
 			flying: flyAlt !== null,
 			panelOpen: panel.open,

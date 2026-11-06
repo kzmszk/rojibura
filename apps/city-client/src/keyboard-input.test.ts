@@ -5,7 +5,7 @@ const base = {
 	key: "",
 	movement: null,
 	typing: false,
-	cinema: false,
+	shiftLooks: false,
 	shiftHeld: false,
 	flying: false,
 	panelOpen: false,
@@ -17,11 +17,11 @@ const base = {
 describe("keyboard intent priority", () => {
 	it("uses movement for Shift and cinema look only for other movement keys", () => {
 		expect(
-			keyboardIntent({ ...base, key: "Shift", movement: "shift", cinema: true, shiftHeld: true }),
+			keyboardIntent({ ...base, key: "Shift", movement: "shift", shiftLooks: true, shiftHeld: true }),
 		).toEqual({ kind: "move", key: "shift" });
-		expect(keyboardIntent({ ...base, key: "ArrowUp", movement: "w", cinema: true, shiftHeld: true })).toEqual(
-			{ kind: "look", key: "w" },
-		);
+		expect(
+			keyboardIntent({ ...base, key: "ArrowUp", movement: "w", shiftLooks: true, shiftHeld: true }),
+		).toEqual({ kind: "look", key: "w" });
 	});
 	it("prioritizes flight over actions, even with the panel open", () => {
 		expect(keyboardIntent({ ...base, key: " ", flying: true, panelOpen: true })).toEqual({
