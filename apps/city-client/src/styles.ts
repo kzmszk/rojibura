@@ -175,6 +175,15 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #bfd6e8; }
 .rj-agent .rj-diary .rj-agent-row button.on { background: #2f6fae; color: #fff; border-color: #2f6fae; }
 .rj-agent .rj-diary .rj-agent-row button:disabled { opacity: .45; cursor: default; }
 .rj-agent .rj-diary select { font-size: 12px; padding: 2px 4px; }
+.rj-agent-list { display: flex; flex-direction: column; gap: 4px; }
+.rj-agent button.rj-agent-item { display: flex; flex-direction: column; gap: 1px; text-align: left; padding: 6px 8px; background: #fff; color: #222; border-color: #d4d8e0; }
+.rj-agent button.rj-agent-item.on { border-color: #2f6fae; box-shadow: inset 0 0 0 1px #2f6fae; background: #f0f6fc; }
+.rj-agent-item-head { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
+.rj-agent-item-trust { font-size: 11px; color: #555; white-space: nowrap; }
+.rj-agent-item-state { font-size: 12px; }
+.rj-agent-item-state.live { color: #1c7a3e; }
+.rj-agent-item-place { font-size: 11px; color: #666; }
+.rj-agent-reason { font-size: 12px; color: #a33; }
 .rj-agent-log { max-height: 180px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
 .rj-command { display: block; margin: 4px 0 6px; padding: 6px 8px; background: #fff; border: 1px solid #dde; border-radius: 6px; font-size: 12px; white-space: pre-wrap; word-break: break-all; user-select: all; }
 .rj-report textarea, .rj-report input, .rj-report select { font: inherit; padding: 8px; border-radius: 6px; border: 1px solid #ccd; }

@@ -1,10 +1,13 @@
 import { importPublicKey } from "@rojibura/protocol";
 import {
 	type Account,
+	bannedAmong,
 	cleanName,
+	deleteAgent,
 	getAgent,
+	listAgents,
+	pairedPcsOf,
 	pairPc,
-	pcOf,
 	registerAgent,
 	setAgentPreset,
 	setAgentTrust,
@@ -12,6 +15,7 @@ import {
 	unpairPc,
 } from "./db.ts";
 import { normalizePairCode } from "./pairing.ts";
+import type { RoomCommand } from "./room.ts";
 import { AREA_IDS, DEFAULT_PRESET, PRESETS } from "./world.ts";
 
 function json(data: unknown, status = 200): Response {
@@ -30,6 +34,7 @@ export async function agentRoutes(
 		devAllowed: (request: Request, url: URL) => boolean;
 		freePlay: boolean;
 		room: Env["ROOM"];
+		broadcastCommand: (command: RoomCommand) => Promise<void>;
 	},
 ): Promise<Response | null> {
 	const path = url.pathname;
@@ -65,6 +70,57 @@ export async function agentRoutes(
 		return json({ id: r.id, name: r.name, trust: r.trust }, 201);
 	}
 
+	// 🤖 自分のAI: where each of the owner's AIs is now, in any area, and what the host knows of it. All of them in
+	// one go: each area is asked once, however many AIs there are.
+	if (path === "/api/agents/status" && request.method === "GET") {
+		const account = await deps.currentAccount(request);
+		if (!account) return error(401, "login required");
+		const agents = await listAgents(deps.db, account.id);
+		const ids = agents.map((a) => a.id);
+		const [pcs, banned, areas] = await Promise.all([
+			pairedPcsOf(deps.db, account.id),
+			bannedAmong(deps.db, ids),
+			ids.length === 0
+				? []
+				: Promise.all(
+						AREA_IDS.map(async (area) => {
+							const q = encodeURIComponent(ids.join(","));
+							const r = await deps.room.getByName(area).fetch(new Request(`https://room/present?ids=${q}`));
+							const { present } = (await r.json()) as { present: Record<string, string | null> };
+							return { area, present };
+						}),
+					),
+		]);
+		return json({
+			agents: ids.map((id) => {
+				const at = areas.find((a) => Object.hasOwn(a.present, id));
+				return {
+					id,
+					paired: pcs.has(id),
+					pairedAt: pcs.get(id) ?? null,
+					area: at?.area ?? null,
+					runsOn: at?.present[id] ?? null,
+					banned: banned.has(id),
+				};
+			}),
+		});
+	}
+
+	// the owner removes an AI from their list: out of the city first, so its life is not saved after it is gone
+	const one = path.match(/^\/api\/agents\/(a_[A-Za-z0-9_-]+)$/);
+	if (one?.[1] && request.method === "DELETE") {
+		const account = await deps.currentAccount(request);
+		if (!account) return error(401, "login required");
+		const agent = await getAgent(deps.db, one[1]);
+		if (!agent || agent.owner_id !== account.id) return error(404, "no such agent");
+		// deleting must not be a way out of a ban
+		if ((await bannedAmong(deps.db, [agent.id])).size > 0)
+			return error(409, "利用停止中のAIは削除できません");
+		await deps.broadcastCommand({ op: "kick", id: agent.id, message: "オーナーがこのAIを削除しました" });
+		await deleteAgent(deps.db, agent.id);
+		return json({ ok: true });
+	}
+
 	// an AI on its owner's PC (docs/prd.md 3.5.1): 🤖 自分のAI shows a one-time code, the PC sends it with its key
 	const pcPath = path.match(/^\/api\/agents\/(a_[A-Za-z0-9_-]+)\/(pair|pc|look)$/);
 	if (pcPath?.[1]) {
@@ -83,21 +139,6 @@ export async function agentRoutes(
 			if (typeof preset !== "string" || !Object.hasOwn(PRESETS, preset)) return error(400, "bad preset");
 			await setAgentPreset(deps.db, agent.id, preset);
 			return json({ ok: true, preset });
-		}
-		if (pcPath[2] === "pc" && request.method === "GET") {
-			// inCity: the AI is in some area now (from the PC, or another tab), so the tab does not start it
-			const [pc, here] = await Promise.all([
-				pcOf(deps.db, agent.id),
-				Promise.all(
-					AREA_IDS.map((a) =>
-						deps.room
-							.getByName(a)
-							.fetch(new Request(`https://room/present?id=${encodeURIComponent(agent.id)}`))
-							.then((r) => r.json() as Promise<{ here: boolean }>),
-					),
-				),
-			]);
-			return json({ paired: pc !== null, pairedAt: pc?.paired_at ?? null, inCity: here.some((h) => h.here) });
 		}
 		if (pcPath[2] === "pc" && request.method === "DELETE") {
 			await unpairPc(deps.db, agent.id);

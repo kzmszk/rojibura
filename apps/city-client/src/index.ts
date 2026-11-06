@@ -380,8 +380,8 @@ async function startCity(
 	const myAi = el("button", "rj-secondary", "パネルを開く");
 	myAi.type = "button";
 	const agentPanel = new AgentPanel({ area: area.id, at: params.get("at") ?? undefined }, (running) => {
-		myAi.textContent = running ? "このタブで街にいます" : "パネルを開く";
-		myAi.classList.toggle("on", running);
+		myAi.textContent = running > 0 ? `${running}体がこのタブで街にいます` : "パネルを開く";
+		myAi.classList.toggle("on", running > 0);
 	});
 	myAi.onclick = fromSettings(() => agentPanel.show());
 	if (openAi) agentPanel.show();

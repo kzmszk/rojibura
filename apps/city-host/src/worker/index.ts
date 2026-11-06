@@ -19,6 +19,7 @@ import {
 import { agentRoutes } from "./agent-routes.ts";
 import {
 	type Account,
+	AGENTS_PER_OWNER,
 	addTrialCall,
 	cleanName,
 	ensureSchema,
@@ -291,6 +292,7 @@ async function wsGateway(request: Request, areaId: string): Promise<Response> {
 				ownerName: owner.display_name,
 				trust: agent.trust,
 				ownerAgentLimit: owner.agent_concurrency,
+				runsOn: agent.runtime,
 				...(life ? { life } : {}),
 			},
 		};
@@ -402,6 +404,9 @@ async function api(request: Request, url: URL): Promise<Response> {
 			role: account.role,
 			allowAiApproach: account.allow_ai_approach === 1,
 			agents: agents.map((a) => ({ id: a.id, name: a.name, runtime: a.runtime, trust: a.trust })),
+			// null: no limit (free play, docs/prd.md 3.7)
+			agentLimit: FREE_PLAY ? null : AGENTS_PER_OWNER,
+			agentsAtOnce: FREE_PLAY ? null : account.agent_concurrency,
 			relations: await relationsOf(DB, account.id).then((r) => ({ mutes: r.mutes, blocks: r.blocks })),
 		});
 	}
@@ -412,6 +417,7 @@ async function api(request: Request, url: URL): Promise<Response> {
 		devAllowed,
 		freePlay: FREE_PLAY,
 		room: env.ROOM,
+		broadcastCommand,
 	});
 	if (agent) return agent;
 

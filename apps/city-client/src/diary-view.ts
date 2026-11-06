@@ -90,15 +90,20 @@ export class DiaryView {
 		this.send = send;
 	}
 
-	/** The AI this panel is about (null: none yet). Its diary is asked for again when shown. */
+	/** The AI this panel is about (null: none). Its diary is asked for at once if open, else when opened. */
 	setAi(id: string | null): void {
 		if (id === this.aiId) return;
 		this.aiId = id;
 		this.known = [];
 		this.shown = null;
+		// what was on its way was the other AI's
+		this.parts = [];
+		this.done();
+		this.page.replaceChildren();
 		this.page.hidden = true;
 		this.status.textContent = "";
 		this.renderNav();
+		if (this.el.open) this.ask();
 	}
 
 	/** A part of the answer (DIARY): shown once all of it is here. */

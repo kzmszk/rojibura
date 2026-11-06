@@ -476,10 +476,10 @@ export class RoomCore<C> {
 		return !!(this.relations.get(a)?.blocks.has(b) || this.relations.get(b)?.blocks.has(a));
 	}
 
-	kick(id: AvatarId, reason = "kicked"): boolean {
+	kick(id: AvatarId, reason = "kicked", message = "モデレーターにより退出しました"): boolean {
 		const conn = this.connectionFor(id);
 		if (conn === undefined) return false;
-		this.transport.send(conn, { t: "NOTICE", kind: "rejected", message: "モデレーターにより退出しました" });
+		this.transport.send(conn, { t: "NOTICE", kind: "rejected", message });
 		this.removeMember(conn, "kicked");
 		this.transport.close(conn, CLOSE_KICKED, reason);
 		return true;

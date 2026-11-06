@@ -220,6 +220,31 @@ export function pcOf(
 		.first<{ public_key: string; paired_at: number }>();
 }
 
+/** Which of an owner's AIs are paired with a PC, and since when. */
+export async function pairedPcsOf(db: D1Database, ownerId: string): Promise<Map<string, number | null>> {
+	const r = await db
+		.prepare(
+			"SELECT p.agent_id, p.paired_at FROM agent_pc p JOIN agents a ON a.id = p.agent_id WHERE a.owner_id = ? AND p.public_key IS NOT NULL",
+		)
+		.bind(ownerId)
+		.all<{ agent_id: string; paired_at: number | null }>();
+	return new Map(r.results.map((p) => [p.agent_id, p.paired_at]));
+}
+
+/**
+ * Removes an AI for good, and what the host keeps of it. Reports and bans about it stay: they are the
+ * moderators' record, not the AI's. Its place in the owner's limit is free again.
+ */
+export async function deleteAgent(db: D1Database, id: string): Promise<void> {
+	await db.batch([
+		db.prepare("DELETE FROM agent_pc WHERE agent_id = ?").bind(id),
+		db.prepare("DELETE FROM agent_life WHERE agent_id = ?").bind(id),
+		db.prepare("DELETE FROM wallets WHERE id = ?").bind(id),
+		db.prepare("DELETE FROM relations WHERE target_id = ?").bind(id),
+		db.prepare("DELETE FROM agents WHERE id = ?").bind(id),
+	]);
+}
+
 /** Forgets the PC (and any code not yet used): only the browser's key lets the agent in again. */
 export async function unpairPc(db: D1Database, agentId: string): Promise<void> {
 	await db.prepare("DELETE FROM agent_pc WHERE agent_id = ?").bind(agentId).run();
@@ -243,6 +268,21 @@ export async function isBanned(db: D1Database, subjectIds: string[], now = Date.
 		.bind(...subjectIds, now)
 		.first();
 	return row !== null;
+}
+
+/** Those of `subjectIds` under a ban now. */
+export async function bannedAmong(
+	db: D1Database,
+	subjectIds: string[],
+	now = Date.now(),
+): Promise<Set<string>> {
+	if (subjectIds.length === 0) return new Set();
+	const marks = subjectIds.map(() => "?").join(",");
+	const r = await db
+		.prepare(`SELECT subject_id FROM bans WHERE subject_id IN (${marks}) AND (until IS NULL OR until > ?)`)
+		.bind(...subjectIds, now)
+		.all<{ subject_id: string }>();
+	return new Set(r.results.map((b) => b.subject_id));
 }
 
 // ---- moderation (docs/prd.md 4.2) ----------------------------------------------
