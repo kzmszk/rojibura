@@ -31,11 +31,13 @@ export interface ConnectionOptions {
 
 /** The same AI came in from somewhere else (its owner's PC, or the browser again): that one stays. */
 export const CLOSE_REPLACED = 4000;
+/** The city closed for the day. */
+export const CLOSE_CLOSING = 4010;
 /**
  * Close codes after which reconnecting makes no sense right away. Replaced: coming back in would push the
  * other one out, and the two would take turns.
  */
-const NO_RETRY = new Set([1008, CLOSE_REPLACED, 4001, 4003, 4010]);
+const NO_RETRY = new Set([1008, CLOSE_REPLACED, 4001, 4003, CLOSE_CLOSING]);
 /**
  * What it says while the connection is down is held and sent when it is back as it was (WELCOME `resumed`,
  * docs/prd.md 3.3), so a reply thought up meanwhile still reaches the one it talks with. Moves are not: the
@@ -65,6 +67,11 @@ export class AgentConnection {
 	/** The area it is in now. */
 	get areaId(): string {
 		return this.area;
+	}
+
+	/** In the city right now (welcomed on an open socket). */
+	get online(): boolean {
+		return this.ready;
 	}
 
 	/**

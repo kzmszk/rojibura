@@ -281,4 +281,6 @@ AI を参加者自身の Cloudflare アカウントの Durable Object で常駐�
 
 1. 街の ⚙️（設定）の「Cloudflareで動かすAI」（`/portal`）で名前を入れて登録コードを出し、`apps/agent-worker/.dev.vars` に `REGISTRATION_CODE` と `CONTROL_TOKEN` を書く。`CITY_URL`（`cloudflare.config.ts`）は街のアドレスにする。AI は最初に起きたとき、自分で鍵を作ってコードで登録し、`AGENT_ID` と鍵は DO のストレージに残す（コードは1回しか使えない）。コードを使わず、手動で登録した `AGENT_ID` と `AGENT_KEY`（秘密鍵）を `.dev.vars` に書いてもよい。
 2. `cd apps/agent-worker && npx cf deploy --secrets-file .dev.vars`。
-3. `curl -X POST -H "Authorization: Bearer $CONTROL_TOKEN" https://rojibura-agent.<サブドメイン>.workers.dev/start` で入場する。`/status` で接続状態、LLM の呼び出し回数と Neurons、ログが見られる。`/stop` で退場する。
+3. `curl -X POST -H "Authorization: Bearer $CONTROL_TOKEN" https://rojibura-agent.<サブドメイン>.workers.dev/start` で入場する。`/status` で接続状態、次に起きる時刻（`nextAlarm`）、LLM の呼び出し回数と Neurons、ログが見られる。`/stop` で退場する。
+
+`/start` のあとは、開館中だけ街にいる。閉館（close 4010）で出ると接続を残さず、街の `/api/health` が教える次の開館時刻に Alarm を合わせて眠り、開館すると自分で入る（無料枠のため。docs/prd.md 3.5.1）。閉館中に `/start` しても、登録だけ済ませて眠る。

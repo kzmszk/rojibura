@@ -1,17 +1,20 @@
 // T4 prototype (docs/prd.md 3.5, issue #9): the SDK's Agent running in a Durable Object.
-// The DO keeps an outbound WebSocket to the city; an alarm every 30 s restarts the agent if the
-// object was evicted, and records whether it stayed in memory (for the cost check).
+// While the city is open the DO keeps an outbound WebSocket to it; an alarm every 30 s restarts the agent if
+// the object was evicted, and records whether it stayed in memory (for the cost check). While it is closed the
+// connection is gone and the one alarm left is set for the next opening (docs/prd.md 3.5.1).
 
 import { DurableObject, env } from "cloudflare:workers";
 import {
 	Agent,
 	AgentConnection,
+	CLOSE_CLOSING,
 	type Logger,
 	loadCity,
 	type Memory,
 	WorkersAiLLM,
 } from "@rojibura/avatar-sdk";
 import { importPrivateKey } from "@rojibura/protocol";
+import { fetchCityHours, wakeTime } from "./hours.ts";
 import { type Identity, registerWithCode } from "./register.ts";
 
 const WATCH_MS = 30_000;
@@ -43,7 +46,6 @@ export class AgentDO extends DurableObject<Env> {
 	private conn: AgentConnection | null = null;
 	private agent: Agent | null = null;
 	private llm: WorkersAiLLM | null = null;
-	private connected = false;
 	private llmCalls = 0;
 	private neurons = 0;
 	private identityReady: Promise<Identity> | null = null;
@@ -71,18 +73,22 @@ export class AgentDO extends DurableObject<Env> {
 
 	async start(): Promise<void> {
 		await this.ctx.storage.put("running", true);
-		await this.boot();
-		if ((await this.ctx.storage.getAlarm()) === null) await this.ctx.storage.setAlarm(Date.now() + WATCH_MS);
+		// the code lasts only 15 minutes: it registers now, even while the city is closed
+		await this.identity();
+		await this.ctx.storage.setAlarm(await this.wake());
 	}
 
 	async stop(): Promise<void> {
 		await this.ctx.storage.put("running", false);
 		await this.ctx.storage.deleteAlarm();
+		this.leave();
+	}
+
+	private leave(): void {
 		this.agent?.stop();
 		this.conn?.stop();
 		this.agent = null;
 		this.conn = null;
-		this.connected = false;
 	}
 
 	async status(): Promise<unknown> {
@@ -91,9 +97,11 @@ export class AgentDO extends DurableObject<Env> {
 				"SELECT instance, COUNT(*) AS n, MIN(at) AS first, MAX(at) AS last, SUM(connected) AS up FROM watch GROUP BY instance ORDER BY first",
 			)
 			.toArray();
+		const alarm = await this.ctx.storage.getAlarm();
 		return {
 			running: (await this.ctx.storage.get<boolean>("running")) ?? false,
-			connected: this.connected,
+			connected: this.conn?.online ?? false,
+			nextAlarm: alarm === null ? null : new Date(alarm).toISOString(),
 			instanceStartedAt: new Date(this.startedAt).toISOString(),
 			// one row per in-memory lifetime of this object: few rows = it stayed in memory
 			instances: watch.map((w) => ({
@@ -109,14 +117,36 @@ export class AgentDO extends DurableObject<Env> {
 
 	async alarm(): Promise<void> {
 		if (!(await this.ctx.storage.get<boolean>("running"))) return;
-		await this.boot();
+		const next = await this.wake();
 		this.ctx.storage.sql.exec(
 			"INSERT INTO watch (at, instance, connected) VALUES (?, ?, ?)",
 			Date.now(),
 			this.startedAt,
-			this.connected ? 1 : 0,
+			this.conn?.online ? 1 : 0,
 		);
-		await this.ctx.storage.setAlarm(Date.now() + WATCH_MS);
+		await this.ctx.storage.setAlarm(next);
+	}
+
+	/**
+	 * Goes in if the city is open, leaves if it is closed. Returns when to look again. Never throws: a city that
+	 * is down for a moment must not cost it the alarm, which is all that would wake it.
+	 */
+	private async wake(): Promise<number> {
+		const now = Date.now();
+		if (this.conn?.online) return now + WATCH_MS;
+		try {
+			const hours = await fetchCityHours(this.env.CITY_URL);
+			if (!hours.open) {
+				this.leave();
+				const at = wakeTime(hours.nextOpening, now, WATCH_MS);
+				this.write(`city closed; sleeping until ${new Date(at).toISOString()}`);
+				return at;
+			}
+			await this.boot();
+		} catch (e) {
+			this.write(`WARN ${e instanceof Error ? e.message : String(e)}`);
+		}
+		return now + WATCH_MS;
 	}
 
 	/**
@@ -164,9 +194,12 @@ export class AgentDO extends DurableObject<Env> {
 			agentId: identity.agentId,
 			privateKey: await importPrivateKey(identity.privateKey),
 			logger: this.log,
-			onMessage: (m) => {
-				if (m.t === "WELCOME") this.connected = true;
-				this.agent?.handle(m);
+			onMessage: (m) => this.agent?.handle(m),
+			onClosed: (code) => {
+				if (code !== CLOSE_CLOSING) return;
+				// the alarm asks the city now, and sets itself for the next opening
+				this.leave();
+				void this.ctx.storage.setAlarm(Date.now());
 			},
 		});
 		this.agent = new Agent({

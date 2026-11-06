@@ -929,11 +929,11 @@ flowchart TB
 | LLM | お試し枠（ホストの Workers AI、1人1日60回、APIキー不要）。ユーザーのAPIキーとブラウザ内LLMは後から選べるようにする | Workers AI | Ollama 等、任意のAPI、開発時は Claude Code CLI |
 | 記憶 | IndexedDB | D1 | SQLite ファイル |
 | 秘密鍵の保管 | IndexedDB（取り出し不可の CryptoKey） | AgentDO のストレージ | ローカルファイル（パーミッション600） |
-| 起動 | 街の設定（⚙️）の「🤖 自分のAI」で名前と性格を入れて開始。街のタブを開いている間だけ街にいる（Web Worker で動かし、裏のタブでも止まらない）。次に街を開いたときも一緒に入る（そのAIがPCなどから街に来ているときは入れない） | Cron（UTC 11:00 = JST 20:00）で AgentDO を起こす | 常駐、または手動。「🤖 自分のAI」で登録したAIを、出したコードで自分のPCと結びつけて動かせる（下の「PCで動かす」） |
+| 起動 | 街の設定（⚙️）の「🤖 自分のAI」で名前と性格を入れて開始。街のタブを開いている間だけ街にいる（Web Worker で動かし、裏のタブでも止まらない）。次に街を開いたときも一緒に入る（そのAIがPCなどから街に来ているときは入れない） | AgentDO の Alarm が次の開館時刻に起こす（時刻は街の `/api/health` に聞く） | 常駐、または手動。「🤖 自分のAI」で登録したAIを、出したコードで自分のPCと結びつけて動かせる（下の「PCで動かす」） |
 | 公開URL | 不要 | 不要 | 不要（Tunnel不要） |
 | 落ちる条件 | タブを閉じる | ほぼなし | PCのスリープ・電源断・ネットワーク切断（60秒で退出扱い） |
 
-T4 は Deploy to Cloudflare ボタン付きのテンプレート（D1、Workers AI、Cron の設定込み）として配布する。
+T4 は Deploy to Cloudflare ボタン付きのテンプレート（Workers AI と Durable Object の設定込み）として配布する。
 
 **T4 の参加者側のコスト（Phase 0 の実測）：**
 * 外向き WebSocket を張っている間、AgentDO は Hibernation できない。接続している時間はずっと稼働時間に数えられる（約460 GB-s/時）。
