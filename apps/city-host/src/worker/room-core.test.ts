@@ -10,6 +10,7 @@ import {
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { AWAY_GRACE_MS, RoomCore } from "./room-core.ts";
 import type { JoinInfo, Member, Walkable, WalletStore, World } from "./room-types.ts";
+import { PRODUCTION_RULES } from "./rules.ts";
 
 // 40 x 40 m square with a 10 x 10 m building in the middle (x, z in [-5, 5]).
 const inBuilding = (p: Vec2) => Math.abs(p[0]) < 5 && Math.abs(p[1]) < 5;
@@ -534,6 +535,81 @@ describe("a dropped connection", () => {
 });
 
 describe("conversation", () => {
+	test("a person speaking to everyone is heard as speaking to them by their own AIs close by, each of them", () => {
+		const h = conn("h");
+		const mine = [conn("mine0"), conn("mine1"), conn("mine2")] as const;
+		const far = conn("far");
+		const theirs = conn("theirs");
+		const other = conn("other");
+		place(h, human("alice"), [-10, -10]);
+		for (const [i, c] of mine.entries())
+			place(c, ai(`mine${i}`, "alice", { ownerAgentLimit: 5 }), [-10 + i, -9]);
+		place(far, ai("far", "alice", { ownerAgentLimit: 5 }), [10, 10]);
+		place(theirs, ai("theirs", "bob"), [-11, -9]);
+		place(other, human("bob"), [-12, -10]);
+		ctx.room.handle(h, { t: "SAY", text: "みんな、こんばんは" });
+		// the line itself goes out once, to nobody in particular
+		expect(last(other)).toMatchObject({ t: "SAID", id: "h_alice", text: "みんな、こんばんは" });
+		expect(other.inbox).toHaveLength(1);
+		expect(last(other)).not.toHaveProperty("to");
+		for (const c of mine)
+			expect(last(c)).toMatchObject({
+				t: "ADDRESSED",
+				from: "h_alice",
+				text: "みんな、こんばんは",
+				everyone: true,
+				turn: 1,
+				maxTurns: null,
+			});
+		const ids = mine.map((c) => (last(c) as Extract<HostToClient, { t: "ADDRESSED" }>).convId);
+		expect(new Set(ids).size).toBe(3);
+		// an AI further off, and someone else's, do not take it as said to them
+		expect(far.inbox.map((m) => m.t)).not.toContain("ADDRESSED");
+		expect(theirs.inbox.map((m) => m.t)).not.toContain("ADDRESSED");
+		// an answer goes back to its owner in that conversation
+		h.inbox.length = 0;
+		ctx.room.handle(mine[0], { t: "SAY", text: "こんばんは！", convId: ids[0] as string });
+		expect(last(h)).toMatchObject({ t: "SAID", id: "a_mine0", to: "h_alice", convId: ids[0] });
+		// said again, it goes on in the same conversations
+		ctx.room.handle(h, { t: "SAY", text: "元気？" });
+		expect(last(mine[1])).toMatchObject({ t: "ADDRESSED", convId: ids[1], turn: 2, everyone: true });
+	});
+
+	test("speaking to one of them is only for that one", () => {
+		const h = conn("h");
+		const one = conn("one");
+		const two = conn("two");
+		place(h, human("alice"), [-10, -10]);
+		place(one, ai("one", "alice"), [-10, -9]);
+		place(two, ai("two", "alice"), [-9, -9]);
+		ctx.room.handle(h, { t: "SAY", text: "ねえ", to: "a_one" });
+		expect(last(one)).toMatchObject({ t: "ADDRESSED", from: "h_alice", turn: 1 });
+		expect(last(one)).not.toHaveProperty("everyone");
+		expect(two.inbox.map((m) => m.t)).not.toContain("ADDRESSED");
+	});
+
+	test("an AI speaking to everyone addresses nobody; too much said to one AI stops only reaching it", () => {
+		const h = conn("h");
+		const one = conn("one");
+		const two = conn("two");
+		place(h, human("alice"), [-10, -10]);
+		place(one, ai("one", "alice"), [-10, -9]);
+		place(two, ai("two", "alice"), [-9, -9]);
+		ctx.room.handle(one, { t: "SAY", text: "やあ" });
+		expect(two.inbox.map((m) => m.t)).not.toContain("ADDRESSED");
+		const limit = PRODUCTION_RULES.humanToSameAiPerMin as number;
+		for (let i = 0; i < limit; i++) {
+			ctx.clock.advance(1100);
+			ctx.room.handle(h, { t: "SAY", text: `その${i}` });
+		}
+		expect(last(one)).toMatchObject({ t: "ADDRESSED", text: `その${limit - 1}` });
+		ctx.clock.advance(1100);
+		h.inbox.length = 0;
+		ctx.room.handle(h, { t: "SAY", text: "もう一度" });
+		expect(last(one)).toMatchObject({ t: "SAID", text: "もう一度" });
+		expect(h.inbox.map((m) => m.t)).toEqual(["SAID"]);
+	});
+
 	test("human talks to AI: SAID for everyone, ADDRESSED with context for the AI", () => {
 		const h = conn("h");
 		const bot = conn("bot");

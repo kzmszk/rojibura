@@ -109,6 +109,30 @@ describe("prompt", () => {
 });
 
 describe("Agent", () => {
+	test("said to everyone, the prompt says so", async () => {
+		const users: string[] = [];
+		const llm: LLM = {
+			name: "fake",
+			complete: async (req) => {
+				users.push(req.user);
+				return { reply: "はーい", motion: "none", goTo: "stay", endConversation: false };
+			},
+		};
+		const { agent, sent } = setup(llm);
+		agent.handle({
+			t: "ADDRESSED",
+			from: "h_k",
+			text: "みんな",
+			convId: "c1",
+			turn: 1,
+			maxTurns: null,
+			everyone: true,
+			context: { area: "", pos: [0, 0], nearbyAvatars: [], nearbyLandmarks: [] },
+		});
+		await vi.waitFor(() => expect(sent).toContainEqual({ t: "SAY", text: "はーい", convId: "c1" }));
+		expect(users[0]).toContain("相手の発言: 「みんな」（そばにいるAIみんなに向かって言った）");
+	});
+
 	test("replies to ADDRESSED with SAY, ACTION and a walk, and remembers", async () => {
 		const llm: LLM = {
 			name: "fake",

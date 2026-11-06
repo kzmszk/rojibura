@@ -35,6 +35,8 @@ export function systemPrompt(p: Persona): string {
 export interface PromptInput {
 	from: { id: string; name: string; kind: "human" | "ai"; distance: number | null };
 	text: string;
+	/** Said to all of the owner's AIs close by, not to this one alone. */
+	everyone?: boolean;
 	context: SpatialContext;
 	memory: string[];
 	history: string[];
@@ -63,7 +65,7 @@ export function userPrompt(input: PromptInput): string {
 		`話しかけてきた相手: ${clean(input.from.name, 24)}（${who(input.from.kind)}${input.from.distance !== null ? `、${input.from.distance}m` : ""}）`,
 		`この相手について覚えていること: ${input.memory.map((m) => clean(m, 120)).join(" / ") || "初対面"}`,
 		`この会話の流れ: ${input.history.map((h) => clean(h, 120)).join(" / ") || "（最初の発言）"}`,
-		`相手の発言: 「${clean(input.text, 200)}」`,
+		`相手の発言: 「${clean(input.text, 200)}」${input.everyone ? "（そばにいるAIみんなに向かって言った）" : ""}`,
 		"</city_input>",
 	];
 	if (input.turn && input.maxTurns) {

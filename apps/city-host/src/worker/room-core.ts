@@ -15,6 +15,7 @@ import {
 	type Item,
 	type LeaveReason,
 	MAX_PATH_LENGTH,
+	OWN_AIS_HEAR,
 	PRESENCE_TIMEOUT_MS,
 	polylineLength,
 	RATE_VIOLATIONS_BEFORE_CLOSE,
@@ -153,6 +154,7 @@ export class RoomCore<C> {
 			blockedBetween: (a, b) => this.blockedBetween(a, b),
 			broadcastAbout: (m, msg, except, target, speech) => this.broadcastAbout(m, msg, except, target, speech),
 			contextFor: (m, now) => this.contextFor(m, now),
+			ownAisNear: (owner, now) => this.ownAisNear(owner, now),
 			notice: (conn, kind, message) => this.notice(conn, kind, message),
 		});
 		this.world = world;
@@ -909,6 +911,13 @@ export class RoomCore<C> {
 
 	memberById(id: AvatarId): Member | undefined {
 		return this.participants.get(id)?.member;
+	}
+
+	private ownAisNear(owner: Member, now: number): Member[] {
+		const at = this.positionOf(owner, now);
+		return [...this.memberValues()].filter(
+			(m) => m.kind === "ai" && m.ownerId === owner.id && dist(this.positionOf(m, now), at) <= OWN_AIS_HEAR,
+		);
 	}
 
 	memberFor(conn: C): Member | undefined {

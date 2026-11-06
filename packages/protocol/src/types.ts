@@ -426,6 +426,8 @@ export type HostToClient =
 			/** null when the other side is a human (no turn limit). */
 			maxTurns: number | null;
 			context: SpatialContext;
+			/** Its owner said it to everyone (みんなへ), not to it alone: all their AIs close by hear this too. */
+			everyone?: boolean;
 	  }
 	| { t: "CONV_END"; convId: string; reason: ConvEndReason }
 	| { t: "STATUS_CHANGED"; id: AvatarId; status: Status }

@@ -72,6 +72,7 @@ interface Pending {
 	context: SpatialContext;
 	turn: number;
 	maxTurns: number | null;
+	everyone?: boolean;
 }
 
 const WANDER_FACTOR: Record<BudgetLevel, number | null> = { 0: 1, 1: 3, 2: null, 3: null, 4: null };
@@ -244,6 +245,7 @@ export class Agent {
 					context: msg.context,
 					turn: msg.turn,
 					maxTurns: msg.maxTurns,
+					...(msg.everyone ? { everyone: true } : {}),
 				});
 				return;
 			case "CONV_END": {
@@ -530,6 +532,7 @@ export class Agent {
 						distance: me && there ? Math.round(dist(me, there) * 10) / 10 : null,
 					},
 					text: p.text,
+					...(p.everyone ? { everyone: true } : {}),
 					context: p.context,
 					memory: await this.o.memory.recall(p.from),
 					history: history.slice(0, -1),

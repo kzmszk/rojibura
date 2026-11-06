@@ -32,6 +32,8 @@ interface ConversationPort<C> {
 		speech?: boolean,
 	): void;
 	contextFor(member: Member, now: number): SpatialContext;
+	/** The person's own AIs close enough to hear them speak to everyone. */
+	ownAisNear(owner: Member, now: number): Member[];
 	notice(conn: C, kind: "rate_limited" | "rejected", message: string): void;
 }
 
@@ -155,10 +157,7 @@ export class RoomConversations<C> {
 				return "ignored";
 			}
 			// both sides may start at the same moment: join the open conversation instead of making a second one
-			const tid = target.id;
-			conv = [...this.convs.values()].find(
-				(c) => (c.a === m.id && c.b === tid) || (c.a === tid && c.b === m.id),
-			);
+			conv = this.convBetween(m.id, target.id);
 		}
 		if (!conv && msg.to && target) {
 			const err = this.canStartConv(m, target, now);
@@ -166,16 +165,7 @@ export class RoomConversations<C> {
 				this.port.notice(conn, "rejected", err);
 				return "ignored";
 			}
-			const aiPair = m.kind === "ai" && target.kind === "ai";
-			conv = {
-				id: `c_${this.port.newId()}`,
-				a: m.id,
-				b: target.id,
-				turn: 0,
-				maxTurns: aiPair ? this.port.rules.aiConvMaxTurns : null,
-				lastAt: now,
-			};
-			this.convs.set(conv.id, conv);
+			conv = this.openConv(m, target, now);
 		}
 
 		if (conv && target) {
@@ -209,22 +199,61 @@ export class RoomConversations<C> {
 		if (this.log.length > CHAT_LOG_MAX) this.log.splice(0, this.log.length - CHAT_LOG_MAX);
 
 		if (conv && target) {
-			if (target.kind === "ai") {
-				const targetConn = this.port.connectionFor(target.id);
-				if (targetConn !== undefined)
-					this.port.transport.send(targetConn, {
-						t: "ADDRESSED",
-						from: m.id,
-						text: msg.text,
-						convId: conv.id,
-						turn: conv.turn,
-						maxTurns: conv.maxTurns,
-						context: this.port.contextFor(target, now),
-					});
-			}
+			if (target.kind === "ai") this.address(conv, m, target, msg.text, now);
 			if (conv.maxTurns !== null && conv.turn >= conv.maxTurns) this.endConv(conv, "max_turns");
 		}
+		if (!target && m.kind === "human") this.addressOwnAis(m, msg.text, now);
 		return "ignored";
+	}
+
+	private convBetween(a: AvatarId, b: AvatarId): Conv | undefined {
+		return [...this.convs.values()].find((c) => (c.a === a && c.b === b) || (c.a === b && c.b === a));
+	}
+
+	private openConv(from: Member, to: Member, now: number): Conv {
+		const aiPair = from.kind === "ai" && to.kind === "ai";
+		const conv: Conv = {
+			id: `c_${this.port.newId()}`,
+			a: from.id,
+			b: to.id,
+			turn: 0,
+			maxTurns: aiPair ? this.port.rules.aiConvMaxTurns : null,
+			lastAt: now,
+		};
+		this.convs.set(conv.id, conv);
+		return conv;
+	}
+
+	/** The AI hears `from` speak to it (or, `everyone`, to all those AIs of theirs close by), and takes its turn. */
+	private address(conv: Conv, from: Member, ai: Member, text: string, now: number, everyone = false): void {
+		const conn = this.port.connectionFor(ai.id);
+		if (conn === undefined) return;
+		this.port.transport.send(conn, {
+			t: "ADDRESSED",
+			from: from.id,
+			text,
+			convId: conv.id,
+			turn: conv.turn,
+			maxTurns: conv.maxTurns,
+			context: this.port.contextFor(ai, now),
+			...(everyone ? { everyone: true } : {}),
+		});
+	}
+
+	/**
+	 * A person spoke to everyone (みんなへ): their own AIs close by take it as said to them, each in its conversation
+	 * with them, so nobody has to pick them one by one (docs/prd.md 3.4.12). What an AI has heard too often is just not
+	 * passed on to it: the line itself went out to everyone.
+	 */
+	private addressOwnAis(m: Member, text: string, now: number): void {
+		for (const ai of this.port.ownAisNear(m, now)) {
+			if (this.port.blockedBetween(m.id, ai.id) || !this.countHumanToAi(m.id, ai.id, now)) continue;
+			const conv = this.convBetween(m.id, ai.id) ?? this.openConv(m, ai, now);
+			conv.turn++;
+			conv.lastAt = now;
+			this.syncConvs(conv.a, conv.b);
+			this.address(conv, m, ai, text, now, true);
+		}
 	}
 
 	private canStartConv(from: Member, to: Member, now: number): string | null {
