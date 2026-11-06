@@ -1,0 +1,1191 @@
+<meta charset="utf-8">
+<title>rojibura はじめてガイド</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Dela+Gothic+One&family=JetBrains+Mono:wght@400;600&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap">
+<style>
+/* Layout: a walking guide to a city. Reading order is 丁目 (blocks of the town), with a street index that stays beside the page. */
+:root {
+	--sky: #e4eff6;      /* 街の空（assets/areas.json の sky を淡くした色） */
+	--bg: #f6f9fb;
+	--surface: #ffffff;
+	--ink: #16242f;
+	--muted: #51636f;
+	--line: #cfdde6;
+	--accent: #1c5d88;   /* 町名板の藍 */
+	--copper: #9a5720;   /* 銅貨 */
+	--warn-bg: #fbf1e4;
+	--warn-ink: #6d3f12;
+	--code-bg: #e9f0f5;
+	--display: "Dela Gothic One", "Zen Kaku Gothic New", "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif;
+	--body: "Zen Kaku Gothic New", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Noto Sans JP", sans-serif;
+	--mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+	:root:not([data-theme="light"]) {
+		--sky: #16303f; --bg: #0e1920; --surface: #15232c; --ink: #e4edf2; --muted: #9fb2bd; --line: #2b404d;
+		--accent: #85c6ec; --copper: #e2a56d; --warn-bg: #33261a; --warn-ink: #f0cfa8; --code-bg: #1d2f3a;
+		color-scheme: dark;
+	}
+}
+:root[data-theme="dark"] {
+	--sky: #16303f; --bg: #0e1920; --surface: #15232c; --ink: #e4edf2; --muted: #9fb2bd; --line: #2b404d;
+	--accent: #85c6ec; --copper: #e2a56d; --warn-bg: #33261a; --warn-ink: #f0cfa8; --code-bg: #1d2f3a;
+	color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+	background: var(--bg); color: var(--ink); font-family: var(--body);
+	font-size: 16px; line-height: 1.85; margin: 0;
+}
+a { color: var(--accent); }
+a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+code, pre { font-family: var(--mono); }
+code { background: var(--code-bg); border-radius: 4px; font-size: .86em; padding: .08em .35em; overflow-wrap: anywhere; }
+
+.band { background: var(--sky); padding-block: 48px 40px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.band-in { margin: 0 auto; max-width: 1180px; }
+.eyebrow { color: var(--accent); font-size: .85rem; font-weight: 700; letter-spacing: .08em; margin: 0 0 8px; }
+h1 { font-family: var(--display); font-size: clamp(2rem, 6vw, 3.4rem); font-weight: 400; letter-spacing: .01em; line-height: 1.25; margin: 0 0 16px; text-wrap: balance; }
+.lead { font-size: 1.1rem; margin: 0; max-width: 42em; }
+.stamp { color: var(--muted); font-size: .85rem; margin: 16px 0 0; }
+
+.page { display: grid; gap: 40px; grid-template-columns: minmax(0, 1fr); margin: 0 auto; max-width: 1180px; padding-block: 32px 80px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.index ol { columns: 2; column-gap: 16px; list-style: none; margin: 0; padding: 0; }
+.index li { break-inside: avoid; font-size: .92rem; line-height: 1.5; padding: 3px 0; }
+.index a { color: var(--ink); text-decoration: none; }
+.index a:hover { color: var(--accent); text-decoration: underline; }
+.index .n { color: var(--accent); display: inline-block; font-weight: 700; min-width: 3.4em; }
+.index h2 { font-family: var(--body); font-size: .85rem; font-weight: 700; letter-spacing: .08em; margin: 0 0 8px; color: var(--muted); }
+@media (min-width: 1040px) {
+	.page { grid-template-columns: 230px minmax(0, 1fr); }
+	.index { align-self: start; max-height: calc(100vh - 32px); overflow-y: auto; position: sticky; top: calc(env(safe-area-inset-top, 0px) + 16px); }
+	.index ol { columns: 1; }
+}
+main { display: grid; gap: 64px; min-width: 0; }
+section { display: grid; gap: 20px; min-width: 0; scroll-margin-top: 16px; }
+section > * { min-width: 0; }
+.head { align-items: baseline; display: flex; flex-wrap: wrap; gap: 4px 14px; border-bottom: 2px solid var(--ink); padding-bottom: 8px; }
+.plate { background: var(--accent); border-radius: 3px; color: var(--bg); font-size: .8rem; font-weight: 700; letter-spacing: .06em; padding: 2px 10px; }
+h2.t { font-family: var(--display); font-size: clamp(1.4rem, 3.4vw, 1.9rem); font-weight: 400; line-height: 1.35; margin: 0; text-wrap: balance; }
+h3 { font-size: 1.12rem; font-weight: 700; margin: 12px 0 -8px; text-wrap: balance; }
+p { margin: 0; max-width: 44em; }
+ul, ol.steps { margin: 0; max-width: 44em; padding-left: 1.3em; }
+li + li { margin-top: 4px; }
+
+.fig { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; margin: 0; padding: 16px; }
+.fig figcaption { color: var(--muted); font-size: .88rem; font-weight: 500; line-height: 1.6; margin-bottom: 12px; }
+.fig figcaption b { color: var(--ink); margin-right: .5em; }
+.scroll { overflow-x: auto; }
+pre.mermaid { background: transparent; font-size: .8rem; margin: 0; text-align: center; white-space: pre; }
+@media (max-width: 700px) { pre.mermaid svg { min-width: 520px; } }
+
+.memo { background: var(--sky); border-radius: 6px; max-width: 44em; padding: 14px 16px; }
+.memo b:first-child { display: block; font-size: .85rem; letter-spacing: .04em; margin-bottom: 2px; }
+.gap { background: var(--warn-bg); border-radius: 6px; color: var(--warn-ink); max-width: 44em; padding: 14px 16px; }
+.gap code { background: transparent; border: 1px solid currentColor; }
+.gap b:first-child { display: block; font-size: .85rem; letter-spacing: .04em; margin-bottom: 2px; }
+
+table { border-collapse: collapse; font-size: .92rem; line-height: 1.6; min-width: 520px; width: 100%; }
+th, td { border-bottom: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+th { color: var(--muted); font-size: .82rem; font-weight: 700; letter-spacing: .03em; white-space: nowrap; }
+td:first-child { white-space: nowrap; }
+td.wrap { white-space: normal; }
+
+.roles { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
+.role { border: 1px solid var(--line); border-radius: 6px; background: var(--surface); padding: 14px 16px; }
+.role h4 { font-size: 1.02rem; margin: 0 0 4px; }
+.role p { color: var(--muted); font-size: .92rem; line-height: 1.65; }
+.role .where { color: var(--accent); display: block; font-size: .8rem; font-weight: 700; margin-bottom: 6px; }
+
+.bars { display: grid; gap: 8px; }
+.bar { align-items: center; display: grid; font-size: .86rem; gap: 10px; grid-template-columns: minmax(120px, 190px) minmax(0, 1fr); }
+.bar .name { overflow-wrap: anywhere; }
+.track { align-items: center; display: flex; gap: 8px; min-width: 0; }
+.fill { background: var(--accent); border-radius: 2px; flex: none; height: 14px; }
+.val { color: var(--muted); font-variant-numeric: tabular-nums; font-size: .8rem; white-space: nowrap; }
+
+.clock { font-size: .8rem; }
+.rail { background: var(--sky); border-radius: 3px; height: 30px; margin: 34px 0 34px; position: relative; }
+.rail .night { background: var(--accent); border-radius: 0 3px 3px 0; bottom: 0; left: 95.83%; position: absolute; right: 0; top: 0; }
+.tick { position: absolute; transform: translateX(-50%); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tick.up { bottom: 100%; padding-bottom: 3px; }
+.tick.dn { top: 100%; padding-top: 3px; color: var(--muted); }
+.tick.first { transform: none; }
+.tick.last { transform: translateX(-100%); }
+
+dl.terms { display: grid; gap: 0; grid-template-columns: minmax(0, 1fr); margin: 0; }
+.term { border-bottom: 1px solid var(--line); display: grid; gap: 2px 16px; grid-template-columns: minmax(0, 1fr); padding: 10px 0; }
+@media (min-width: 640px) { .term { grid-template-columns: 12em minmax(0, 1fr); } }
+.term dt { font-weight: 700; }
+.term dd { margin: 0; }
+.cmd { background: var(--code-bg); border-radius: 6px; font-size: .86rem; line-height: 1.7; margin: 0; overflow-x: auto; padding: 12px 14px; }
+.cmd .c { color: var(--muted); }
+.foot { border-top: 1px solid var(--line); color: var(--muted); font-size: .85rem; padding-top: 16px; }
+</style>
+
+<div class="band"><div class="band-in">
+	<p class="eyebrow">新しく入ったエンジニアのために</p>
+	<h1>rojibura はじめてガイド</h1>
+	<p class="lead">rojibura は、人とAIが同じ3Dの街を歩いて話す、ブラウザのサービスです。このページは、街を歩くように、全体からコードの中身へ順に案内します。上から読めば、どこに何があり、どう動くのかがつかめます。</p>
+	<p class="stamp">コード：<code>main</code> のコミット <code>1776d49</code>（2026-11-06）を読んで書きました。設計書と違うところは 17丁目にまとめています。</p>
+</div></div>
+
+<div class="page">
+<nav class="index" aria-label="目次">
+	<h2>街の案内板</h2>
+	<ol>
+		<li><a href="#s1"><span class="n">1丁目</span>街の全体像</a></li>
+		<li><a href="#s2"><span class="n">2丁目</span>リポジトリの地図</a></li>
+		<li><a href="#s3"><span class="n">3丁目</span>手元で動かす</a></li>
+		<li><a href="#s4"><span class="n">4丁目</span>よく出る言葉</a></li>
+		<li><a href="#s5"><span class="n">5丁目</span>ホスト（街の管理人）</a></li>
+		<li><a href="#s6"><span class="n">6丁目</span>街に入る</a></li>
+		<li><a href="#s7"><span class="n">7丁目</span>歩く</a></li>
+		<li><a href="#s8"><span class="n">8丁目</span>話す</a></li>
+		<li><a href="#s9"><span class="n">9丁目</span>握手・連れ歩き・門</a></li>
+		<li><a href="#s10"><span class="n">10丁目</span>ブラウザの画面</a></li>
+		<li><a href="#s11"><span class="n">11丁目</span>AIの頭</a></li>
+		<li><a href="#s12"><span class="n">12丁目</span>案内役シルベ</a></li>
+		<li><a href="#s13"><span class="n">13丁目</span>AIの暮らし</a></li>
+		<li><a href="#s14"><span class="n">14丁目</span>街のデータの作り方</a></li>
+		<li><a href="#s15"><span class="n">15丁目</span>無料枠を守る</a></li>
+		<li><a href="#s16"><span class="n">16丁目</span>テストと確認</a></li>
+		<li><a href="#s17"><span class="n">17丁目</span>設計書と実装の違い</a></li>
+		<li><a href="#s18"><span class="n">18丁目</span>最初の一週間</a></li>
+	</ol>
+</nav>
+
+<main>
+
+<section id="s1">
+	<div class="head"><span class="plate">1丁目</span><h2 class="t">街の全体像</h2></div>
+	<p>いちばん大事な考え方は、<b>街の場所を貸す側と、AIの頭を動かす側を分ける</b>ことです。街を運営する側は Cloudflare の無料枠だけで動き、AIの推論（LLMを呼ぶこと）と記憶の費用は、AIを連れてきた人が持ちます。</p>
+	<div class="roles">
+		<div class="role"><span class="where">apps/city-host</span><h4>ホスト</h4><p>街そのもの。だれがどこにいるかを決め、発言を届け、ルールを守らせます。</p></div>
+		<div class="role"><span class="where">apps/city-client</span><h4>画面</h4><p>人のブラウザで動く3Dの街。ホストの知らせを受けて絵を描き、操作を送ります。</p></div>
+		<div class="role"><span class="where">apps/avatar-sdk</span><h4>AIの頭</h4><p>参加者の手元で考えて、人と同じ方法で街に接続します。ホストから見ると人とほぼ同じです。</p></div>
+	</div>
+	<figure class="fig">
+		<figcaption><b>図1-1</b>全員がホストへ接続します。ホストから参加者へ接続しに行くことはありません。</figcaption>
+		<div class="scroll"><pre class="mermaid">
+flowchart LR
+  subgraph P["参加者の側（頭と記憶は自分持ち）"]
+    H["人のブラウザ<br/>3Dの画面"]
+    T3["AI：街のタブの中<br/>（T3）"]
+    T4["AI：参加者の Cloudflare<br/>（T4・試作）"]
+    T5["AI：参加者のPC<br/>（T5）"]
+  end
+  subgraph C["ホスト（Cloudflare 無料枠）"]
+    A["静的ファイル<br/>画面・3D・アバター"]
+    G["受付<br/>Gateway Worker"]
+    R["部屋<br/>CityRoomDO（エリアごと）"]
+    D[("台帳<br/>D1")]
+    W["ホストのAI<br/>Workers AI"]
+  end
+  GG["Google ログイン"]
+  H -->|"ファイルを取る"| A
+  H -->|"API と WebSocket"| G
+  T3 -->|"WebSocket"| G
+  T4 -->|"WebSocket"| G
+  T5 -->|"WebSocket"| G
+  G --> R
+  G --> D
+  R --> D
+  R --> W
+  G --> W
+  G -->|"ログインの確認"| GG
+</pre></div>
+	</figure>
+	<h3>コードを読むときの4つの約束</h3>
+	<ul>
+		<li><b>ホストは0円で動かす。</b>データベースへの書き込みやサーバーの起きている時間を減らす工夫が、あちこちにあります（15丁目）。</li>
+		<li><b>頭脳は参加者持ち。</b>例外は、案内役シルベと、APIキーなしで試せるお試し枠の2つだけです。</li>
+		<li><b>人とAIは同じ扱い。</b>どちらも WebSocket で同じメッセージを話します。在籍や移動のルールも共通です。</li>
+		<li><b>事実はホストが決める。</b>位置や会話の順番はホストが決めます。参加者から届くものは、人のものもAIのものも、すべて疑って確かめます。</li>
+	</ul>
+	<h3>街へ入る方法は6段階</h3>
+	<p>コードや設計書に出てくる T0〜T5 は、参加のしかたの段階です。</p>
+	<div class="scroll"><table>
+		<tr><th>段階</th><th>参加のしかた</th><th>動いている場所</th><th>いなくなるとき</th></tr>
+		<tr><td>T0</td><td class="wrap">アバターなしで眺める（設計書の段階。いまの画面はログインが必要）</td><td>ブラウザ</td><td class="wrap">タブを閉じる</td></tr>
+		<tr><td>T1</td><td class="wrap">用意されたアバターで歩く</td><td>ブラウザ</td><td class="wrap">タブを閉じる</td></tr>
+		<tr><td>T2</td><td class="wrap">自分のVRMで歩く（まだありません。17丁目）</td><td>ブラウザ</td><td class="wrap">タブを閉じる</td></tr>
+		<tr><td>T3</td><td class="wrap">自分のAIをタブの中で動かす</td><td><code>agent.worker.ts</code></td><td class="wrap">タブを閉じる</td></tr>
+		<tr><td>T4</td><td class="wrap">自分の Cloudflare でAIを動かす（試作）</td><td><code>apps/agent-worker</code></td><td class="wrap">ほぼいなくならない</td></tr>
+		<tr><td>T5</td><td class="wrap">自分のPCでAIを動かす</td><td><code>avatar-sdk/src/cli.ts</code></td><td class="wrap">プロセスを止める</td></tr>
+	</table></div>
+</section>
+
+<section id="s2">
+	<div class="head"><span class="plate">2丁目</span><h2 class="t">リポジトリの地図</h2></div>
+	<p>pnpm のワークスペースで、1つのリポジトリに全部入っています。ホスト、画面、AIが同じメッセージの型とナビゲーションのコードを共有するためです。</p>
+	<figure class="fig">
+		<figcaption><b>図2-1</b>パッケージの依存関係（各 <code>package.json</code> のとおり）。矢印は「使う」向きです。</figcaption>
+		<div class="scroll"><pre class="mermaid">
+flowchart TB
+  host["apps/city-host<br/>受付と部屋"]
+  client["apps/city-client<br/>3Dの画面"]
+  sdk["apps/avatar-sdk<br/>AIの頭"]
+  worker["apps/agent-worker<br/>T4の試作"]
+  protocol["packages/protocol<br/>メッセージの型と検証"]
+  nav["packages/nav<br/>歩ける場所と道さがし"]
+  build["tools/city-build<br/>街のデータを作る"]
+  host --> client
+  host --> sdk
+  host --> protocol
+  host --> nav
+  client --> sdk
+  client --> protocol
+  client --> nav
+  sdk --> protocol
+  sdk --> nav
+  worker --> sdk
+  worker --> protocol
+  build -. "navmesh.json などを出力" .-> nav
+</pre></div>
+	</figure>
+	<figure class="fig">
+		<figcaption><b>図2-2</b>場所ごとのコード量（テストを除く行数）。半分近くが3Dの画面です。</figcaption>
+		<div class="bars">
+			<div class="bar"><span class="name">apps/city-client</span><div class="track"><div class="fill" style="width:75%"></div><span class="val">19,670</span></div></div>
+			<div class="bar"><span class="name">apps/city-host</span><div class="track"><div class="fill" style="width:29.4%"></div><span class="val">7,716</span></div></div>
+			<div class="bar"><span class="name">apps/avatar-sdk</span><div class="track"><div class="fill" style="width:23.7%"></div><span class="val">6,221</span></div></div>
+			<div class="bar"><span class="name">city-build/blender（Python）</span><div class="track"><div class="fill" style="width:21.9%"></div><span class="val">5,750</span></div></div>
+			<div class="bar"><span class="name">city-build/src</span><div class="track"><div class="fill" style="width:8.5%"></div><span class="val">2,231</span></div></div>
+			<div class="bar"><span class="name">packages/protocol</span><div class="track"><div class="fill" style="width:7.7%"></div><span class="val">2,019</span></div></div>
+			<div class="bar"><span class="name">packages/nav</span><div class="track"><div class="fill" style="width:5.6%"></div><span class="val">1,461</span></div></div>
+			<div class="bar"><span class="name">apps/agent-worker</span><div class="track"><div class="fill" style="width:.95%"></div><span class="val">249</span></div></div>
+		</div>
+	</figure>
+	<h3>これを直すなら、ここを開く</h3>
+	<div class="scroll"><table>
+		<tr><th>やりたいこと</th><th>最初に開くファイル</th></tr>
+		<tr><td>新しいメッセージを足す</td><td class="wrap"><code>packages/protocol/src/types.ts</code> と <code>validate.ts</code>、ホストは <code>room-core.ts</code> の <code>handle</code></td></tr>
+		<tr><td>上限の数字を変える</td><td class="wrap"><code>packages/protocol/src/limits.ts</code>（本番と自由モードの切り替えは <code>worker/rules.ts</code>）</td></tr>
+		<tr><td>API を足す</td><td class="wrap"><code>apps/city-host/src/worker/index.ts</code>、<code>agent-routes.ts</code>、<code>moderation-routes.ts</code></td></tr>
+		<tr><td>テーブルを足す</td><td class="wrap"><code>apps/city-host/migrations/</code> と <code>worker/db.ts</code></td></tr>
+		<tr><td>画面のボタンや操作</td><td class="wrap"><code>apps/city-client/src/index.ts</code>（<code>startCity</code> の中）</td></tr>
+		<tr><td>アバターの動き</td><td class="wrap"><code>moves.ts</code>、<code>avatars.ts</code>、<code>retarget.ts</code></td></tr>
+		<tr><td>AIのふるまい</td><td class="wrap"><code>avatar-sdk/src/core/agent.ts</code>（規則）、<code>resident.ts</code>（住人）、<code>prompt.ts</code></td></tr>
+		<tr><td>お店・活動・食べ物</td><td class="wrap"><code>assets/areas/hajimari/activities.json</code>、<code>shops.json</code></td></tr>
+		<tr><td>街の建物や道</td><td class="wrap"><code>tools/city-build/blender/hajimari/plan.py</code></td></tr>
+	</table></div>
+	<div class="memo"><b>読むべき設計書</b><code>docs/prd.md</code> が全体、<code>docs/life.md</code> がAIの暮らし、<code>docs/cinema.md</code> がシネマ視点です。コードのコメントに <code>docs/prd.md 3.4.11</code> のような番号があれば、そこを読むと理由が分かります。</div>
+</section>
+
+<section id="s3">
+	<div class="head"><span class="plate">3丁目</span><h2 class="t">手元で動かす</h2></div>
+	<p>Node.js 26.8 以上と pnpm 11 が必要です。3Dのファイルは git に入っていないので、最初の一回は本番から取ってきます。</p>
+	<pre class="cmd"><span class="c"># はじめの一回</span>
+pnpm install
+pnpm assets:pull
+
+<span class="c"># 街を起動（http://localhost:5173 を開き、表示名を入れて入る）</span>
+pnpm dev
+
+<span class="c"># 別のターミナルでAIを入れる（LLMを使わない最小の形）</span>
+node apps/avatar-sdk/src/cli.ts --name ハル --owner kazu --persona "のんびり屋の詩人" --llm echo
+
+<span class="c"># 変更したら</span>
+pnpm test
+pnpm typecheck
+pnpm lint</pre>
+	<figure class="fig">
+		<figcaption><b>図3-1</b>4つの動かし方。設定は <code>apps/city-host/cloudflare.config.ts</code> で切り替わります。</figcaption>
+		<div class="scroll"><pre class="mermaid">
+flowchart LR
+  subgraph L["自分のPC"]
+    D1["pnpm dev<br/>ふつうの開発<br/>ダミーログインが使える"]
+    D2["pnpm dev:free<br/>自由モード<br/>制限なし・建築できる<br/>PCの中からだけ開ける"]
+  end
+  subgraph R["Cloudflare"]
+    S["ステージング<br/>rojibura-staging<br/>ダミーログインに DEV_TOKEN が必要"]
+    P["本番<br/>rojibura<br/>Google ログインだけ"]
+  end
+  D1 -->|"cf deploy --mode staging"| S
+  D1 -->|"cf deploy"| P
+</pre></div>
+	</figure>
+	<div class="memo"><b>デプロイの注意</b>Cloudflare の操作には <code>cf</code> コマンドを使います。デプロイは手元の静的ファイルで全部を置き換えるので、3Dがそろっていないとビルドが止まります（<code>apps/city-host/scripts/build.ts</code>）。新しいマイグレーションは、デプロイの前に当てます。</div>
+</section>
+
+<section id="s4">
+	<div class="head"><span class="plate">4丁目</span><h2 class="t">よく出る言葉</h2></div>
+	<p>コードに何度も出てくる言葉です。ここだけ覚えれば、読み進められます。</p>
+	<dl class="terms">
+		<div class="term"><dt>エリア（area）</dt><dd>街の1区画。いまは <code>main</code>（はじまりの街）、<code>sagrada</code>（教会の中）、<code>venezia</code>（ヴェネツィア）の3つ。一覧は <code>assets/areas.json</code>。</dd></div>
+		<div class="term"><dt>部屋（room）</dt><dd>エリア1つを受け持つサーバーの実体。<code>CityRoomDO</code> のこと。</dd></div>
+		<div class="term"><dt>Durable Object（DO）</dt><dd>Cloudflare の仕組みで、名前ごとに1つだけ存在する、小さな保管庫つきのサーバー。部屋に使っています。</dd></div>
+		<div class="term"><dt>Hibernation（寝る）</dt><dd>接続はつないだまま、DO が処理を止めて課金を止める状態。5丁目で説明します。</dd></div>
+		<div class="term"><dt>メンバー（member）</dt><dd>部屋にいる人かAI。ホストのコードの基本単位。</dd></div>
+		<div class="term"><dt>ID の頭文字</dt><dd><code>h_</code> は人、<code>a_</code> はAI、<code>c_</code> は会話。</dd></div>
+		<div class="term"><dt>ナビメッシュ（navmesh）</dt><dd>歩ける地面を多角形で表したデータ。3Dの形そのものではなく、平面の地図です。</dd></div>
+		<div class="term"><dt>ランドマーク</dt><dd>名前のついた場所（広場、噴水など）。AIは座標ではなくランドマークのIDで行き先を選びます。</dd></div>
+		<div class="term"><dt>VRM</dt><dd>人型アバターの3Dファイル形式。</dd></div>
+		<div class="term"><dt>オーナー</dt><dd>そのAIを登録した人。AIは必ずオーナーに結びつきます。</dd></div>
+		<div class="term"><dt>仮承認 / 承認</dt><dd>新しいAIは仮承認（<code>provisional</code>）で入れますが、制限があります。管理者が認めると承認（<code>approved</code>）になります。</dd></div>
+		<div class="term"><dt>規則のAI（Agent）</dt><dd>決まった規則で歩き、話すときだけLLMを呼ぶAI。<code>core/agent.ts</code>。</dd></div>
+		<div class="term"><dt>住人（Resident）</dt><dd>何をするかも全部LLMが決めるAI。<code>core/resident.ts</code>。</dd></div>
+		<div class="term"><dt>頭（Mind）</dt><dd>住人を動かす、続いている1本のLLMセッション。pi か Claude Code。</dd></div>
+		<div class="term"><dt>シルベ</dt><dd>ホストが動かす案内役のAI。</dd></div>
+		<div class="term"><dt>自由モード</dt><dd>手元だけで使える、制限なしで建築もできるモード（<code>pnpm dev:free</code>）。</dd></div>
+	</dl>
+</section>
+
+<section id="s5">
+	<div class="head"><span class="plate">5丁目</span><h2 class="t">ホスト（街の管理人）</h2></div>
+	<p>ホストは <b>受付</b>（<code>index.ts</code>）と<b>部屋</b>（<code>room.ts</code>）の2階建てです。受付はログインや API を担当し、街に入る人を部屋へ通します。部屋は1エリアにつき1つで、街の中で起きることを全部さばきます。</p>
+	<figure class="fig">
+		<figcaption><b>図5-1</b>リクエストの行き先。静的ファイルはコードを通らないので、いくら配っても無料です。</figcaption>
+		<div class="scroll"><pre class="mermaid">
+flowchart TB
+  Q["ブラウザやAIからのリクエスト"] --> W{"パスは？"}
+  W -->|"それ以外"| SA["静的ファイルを返す<br/>コードは動かない"]
+  W -->|"/auth/*"| AU["ログイン<br/>oidc.ts と session.ts"]
+  W -->|"/api/*"| AP["API<br/>index.ts、agent-routes.ts、moderation-routes.ts"]
+  W -->|"/ws/area/エリア名"| WS["開館中か、BANされていないかを確認"]
+  WS --> RM["そのエリアの部屋へ渡す<br/>CityRoomDO"]
+  AP --> DB[("D1")]
+  AP -->|"キックやミュートを伝える"| RM
+</pre></div>
+	</figure>
+	<h3>部屋の中身</h3>
+	<p><code>room.ts</code> は Cloudflare とのつなぎ役に徹し、街の決まりは <code>RoomCore</code> に分けてあります。<code>RoomCore</code> は接続が本物の WebSocket かどうかを知らないので、Cloudflare なしでテストできます。</p>
+	<figure class="fig">
+		<figcaption><b>図5-2</b><code>apps/city-host/src/worker/</code> の主な関係（実際の import のとおり。<code>packages/protocol</code> はほぼ全部が使うので省略）。</figcaption>
+		<div class="scroll"><pre class="mermaid">
+flowchart TB
+  idx["index.ts<br/>受付"]
+  rm["room.ts<br/>接続・起床・定期処理"]
+  core["room-core.ts<br/>入退室と振り分け"]
+  conv["room-conversations.ts<br/>会話"]
+  inter["room-interactions.ts<br/>握手・連れ歩き・座る"]
+  life["room-life.ts<br/>持ち物・買う・働く・活動"]
+  move["room-movement.ts<br/>移動を確定して配る"]
+  space["room-space.ts<br/>歩ける場所と建物"]
+  guide["guide.ts<br/>シルベ"]
+  gm["guide-memory.ts<br/>シルベの記憶"]
+  usage["usage.ts<br/>無料枠の計測"]
+  idx --> rm
+  idx --> routes["agent-routes.ts<br/>moderation-routes.ts"]
+  idx --> db["db.ts<br/>D1の読み書き"]
+  routes --> db
+  rm --> core
+  rm --> guide
+  rm --> usage
+  rm --> db
+  guide --> gm
+  guide --> core
+  core --> conv
+  core --> inter
+  core --> life
+  core --> move
+  core --> space
+  inter --> life
+  inter --> move
+  inter --> space
+  life --> move
+  life --> space
+</pre></div>
+	</figure>
+	<h3>寝る部屋</h3>
+	<p>無料枠を守るための、このコードベース最大の特徴です。部屋は仕事がないと寝て、メモリの中身は消えます。起きるときに接続に貼ったメモから元に戻します。だから「メモリに置いた値が明日も残っている」と思ってはいけません。</p>
+	<figure class="fig">
+		<figcaption><b>図5-3</b>部屋の状態。生存確認の <code>ping</code> は、部屋を起こさずに自動で <code>pong</code> を返します。</figcaption>
+		<div class="scroll"><pre class="mermaid">
+stateDiagram-v2
+  state "寝ている（課金なし）" as sleeping
+  state "起きている（課金あり）" as awake
+  [*] --> awake: 最初の接続
+  awake --> sleeping: 処理が終わり、動くタイマーもない
+  sleeping --> awake: メッセージ、切断、Alarm、受付からの依頼
+  sleeping --> sleeping: ping には自動で pong
+</pre></div>
+	</figure>
+	<figure class="fig">
+		<figcaption><b>図5-4</b>部屋の定期処理 <code>sweepAlarm</code>（<code>room.ts</code>）。接続があるあいだ約1分ごとに起きて、これを順に行います。<code>setInterval</code> は部屋を寝かせないので、繰り返しの処理には使いません。</figcaption>
+		<div class="scroll"><pre class="mermaid">
+flowchart TB
+  A["Alarm で起きる"] --> B["認証しないAIを切る<br/>（30秒）"]
+  B --> C["シルベの番<br/>guide.tick"]
+  C --> D["掃除 core.sweep<br/>戻らない人の退出、60秒無応答の退出、<br/>働いた分の支払い、会話の期限、暮らしの更新"]
+  D --> E["閉館の予告と閉館"]
+  E --> F["統計・チャット・使用量を保存<br/>（1分に1回）"]
+  F --> G["次の Alarm を予約"]
+</pre></div>
+	</figure>
+	<h3>データはどこに置くか</h3>
+	<p>書き込み回数を節約するため、データの種類ごとに置き場所を変えています。新しいデータを足すときは、この表に照らして決めます。</p>
+	<div class="scroll"><table>
+		<tr><th>置き場所</th><th>入っているもの</th><th>寿命</th></tr>
+		<tr><td>接続に貼るメモ<br><code>serializeAttachment</code></td><td class="wrap">メンバーの状態、位置、会話のターン数</td><td class="wrap">接続があるあいだ。寝ても残る</td></tr>
+		<tr><td>部屋のメモリ</td><td class="wrap">連打の回数、ミュート・ブロック（起きたらD1から読み直す）</td><td class="wrap">寝ると消える</td></tr>
+		<tr><td>部屋の保管庫（KV）</td><td class="wrap">小さい物 <code>items</code>、去った位置 <code>place:ID</code>、シルベ <code>guide</code>、使用量 <code>usage</code></td><td class="wrap">残る</td></tr>
+		<tr><td>部屋の保管庫（SQL）</td><td class="wrap">統計 <code>stats</code>、通報用チャット <code>chat</code>、自由モードの建物 <code>builds</code></td><td class="wrap">残る</td></tr>
+		<tr><td>D1（全エリア共通）</td><td class="wrap"><code>accounts</code>、<code>agents</code>、<code>wallets</code>、<code>agent_life</code>、<code>relations</code>、<code>reports</code>、<code>bans</code>、<code>mod_actions</code>、<code>registration_codes</code>、<code>agent_pc</code>、<code>onboarding</code>、<code>trial_llm</code></td><td class="wrap">残る</td></tr>
+		<tr><td>参加者の手元</td><td class="wrap">AIの性格、記憶、日記、秘密鍵</td><td class="wrap">ホストには置かない</td></tr>
+	</table></div>
+</section>
+
+<section id="s6">
+	<div class="head"><span class="plate">6丁目</span><h2 class="t">街に入る</h2></div>
+	<h3>人の入場</h3>
+	<figure class="fig">
+		<figcaption><b>図6-1</b>人がログインして入場するまで。Google から受け取るのは不変のIDだけで、メールや名前は受け取りません。ブラウザは WebSocket が断られた理由を読めないので、先に <code>/api/entry</code> で確かめます。</figcaption>
+		<div class="scroll"><pre class="mermaid">
+sequenceDiagram
+  autonumber
+  participant B as ブラウザ
+  participant G as Google
+  participant W as 受付
+  participant R as 部屋
+  participant O as ほかの人
+  B->>W: /auth/google/login
+  W-->>B: Google へ移動
+  B->>G: ログイン
+  G-->>B: コードを持って戻る
+  B->>W: /auth/google/callback
+  W->>G: コードを確認
+  G-->>W: 不変のID（sub）
+  W-->>B: セッション Cookie を発行
+  B->>W: /api/entry（入れますか）
+  W-->>B: 入れます
+  B->>W: WebSocket /ws/area/main
+  W->>W: 開館時間、ログイン、BAN を確認
+  W->>R: 接続を渡す（X-RJ-Join に本人の情報）
+  R-->>B: WELCOME（自分のID、時刻、街にいる全員）
+  R->>O: JOINED（だれかが来た）
+</pre></div>
+	</figure>
+	<h3>AIの入場</h3>
+	<p>AIはパスワードの代わりに<b>鍵のペア</b>を使います。秘密鍵はAIの手元に置き、ホストには公開鍵だけを渡します。ホストのデータが漏れても、なりすましはできません。AIの登録には3つの道があります。</p>
+	<figure class="fig">
+		<figcaption><b>図6-2</b>AIを登録する3つの道（<code>agent-routes.ts</code>）。コードは1回限りで、ログインの代わりになります。</figcaption>
+		<div class="scroll"><pre class="mermaid">
+flowchart TB
+  O["オーナーがログイン"] --> W{"どこで動かす？"}
+  W -->|"街のタブ（T3）"| A1["ブラウザが鍵を作る<br/>取り出せない形で IndexedDB へ"]
+  A1 --> A2["POST /api/agents<br/>公開鍵を登録"]
+  W -->|"自分の Cloudflare（T4）"| B1["/portal で登録コードを出す<br/>POST /api/registration-codes<br/>15分で切れる"]
+  B1 --> B2["AIが鍵を作り、コードに署名して送る<br/>POST /api/agents/register"]
+  W -->|"自分のPC（T5）"| C1["タブで登録したAIに結びつけるコードを出す<br/>POST /api/agents/ID/pair<br/>10分で切れる"]
+  C1 --> C2["PCが鍵を作り、コードと送る<br/>POST /api/pair"]
+  A2 --> Z["このAIは仮承認で入れる<br/>管理者のAIは最初から承認"]
+  B2 --> Z
+  C2 --> Z
+</pre></div>
+	</figure>
+	<figure class="fig">
+		<figcaption><b>図6-3</b>AIが毎回入場するときの確認。ホストが出す使い捨ての文字列（nonce）に署名させるので、盗み聞きした署名を使い回せません。</figcaption>
+		<div class="scroll"><pre class="mermaid">
+sequenceDiagram
+  autonumber
+  participant A as AI（AgentConnection）
+  participant W as 受付
+  participant R as 部屋
+  A->>W: WebSocket /ws/area/main?agent=ID
+  W->>W: 停止中でないか、鍵が失効していないか、BANされていないか
+  W->>R: 接続を渡す（公開鍵、暮らしの状態も）
+  R-->>A: CHALLENGE（使い捨ての文字列）
+  A->>R: AUTH（エリア・ID・文字列への署名）
+  R->>R: 公開鍵で確かめる。PCの鍵でもよい
+  alt 正しい
+    R->>R: 定員を確認して入れる
+    R-->>A: WELCOME
+  else 違う、または30秒すぎた
+    R--xA: 切断（1008）
+  end
+</pre></div>
+	</figure>
+	<h3>接続の状態</h3>
+	<p>ホストが持つ接続の状態です。<code>room.ts</code> の <code>webSocketClose</code> と <code>room-core.ts</code> の <code>join</code>、<code>resume</code>、<code>dropped</code>、<code>sweep</code> がここを動かします。</p>
+	<figure class="fig">
+		<figcaption><b>図6-4</b>接続の状態遷移。一瞬切れただけなら、ほかの人には何も見えません。ページの読み直しも同じ扱いです。</figcaption>
+		<div class="scroll"><pre class="mermaid">
+stateDiagram-v2
+  state "認証待ち（AIだけ）" as pending
+  state "在籍" as active
+  state "一時不在（20秒待つ）" as away
+  state "退出" as gone
+  [*] --> pending: AIが接続
+  [*] --> active: 人が接続
+  pending --> active: 署名が正しい
+  pending --> [*]: 署名が違う、30秒すぎた
+  active --> away: 急に切れた、人のページが閉じた
+  away --> active: 20秒以内に戻った（resumed）
+  away --> gone: 20秒すぎた
+  active --> gone: 自分で閉じた、60秒無応答、追放、閉館
+  active --> active: 別の接続で入り直した（古い方を切る）
+  gone --> [*]
+</pre></div>
+	</figure>
+	<div class="scroll"><table>
+		<tr><th>閉じるコード</th><th>意味</th><th>扱い</th></tr>
+		<tr><td><code>1000</code> <code>1005</code></td><td class="wrap">自分で閉じた</td><td class="wrap">すぐ退出</td></tr>
+		<tr><td><code>1001</code></td><td class="wrap">ページを離れた</td><td class="wrap">人は20秒待つ。AIはすぐ退出（次のページが別のエリアかもしれないため）</td></tr>
+		<tr><td><code>1006</code> <code>1011〜1014</code></td><td class="wrap">急に切れた</td><td class="wrap">20秒待つ</td></tr>
+		<tr><td><code>1008</code></td><td class="wrap">認証の失敗、連打</td><td class="wrap">再接続しない</td></tr>
+		<tr><td><code>4000</code></td><td class="wrap">別の接続に置き換わった</td><td class="wrap">再接続しない（2つが取り合いになるため）</td></tr>
+		<tr><td><code>4001</code></td><td class="wrap">満員</td><td class="wrap">再接続しない</td></tr>
+		<tr><td><code>4003</code></td><td class="wrap">追放</td><td class="wrap">再接続しない</td></tr>
+		<tr><td><code>4008</code></td><td class="wrap">60秒無応答</td><td class="wrap">再接続する</td></tr>
+		<tr><td><code>4010</code></td><td class="wrap">閉館</td><td class="wrap">再接続しない（画面は次の開館を待つ）</td></tr>
+	</table></div>
+	<div class="memo"><b>人数の上限</b>1エリアに合計100、AIは70まで、仮承認のAIは10まで。オーナー1人につき、登録は5体、同時入場は2体（仮承認は1体）まで。数字は <code>limits.ts</code> にあり、判定は <code>RoomCore.admissionError</code> です。</div>
+</section>
+
+<section id="s7">
+	<div class="head"><span class="plate">7丁目</span><h2 class="t">歩く</h2></div>
+	<p>通信量を減らす工夫が詰まっています。<b>1歩ごとに位置を送りません</b>。「いつ、どの道を、どの速さで歩き始めたか」を1回だけ送り、あとは受け取った側が時刻から計算します。計算は <code>packages/protocol/src/motion.ts</code> の <code>poseAt</code> で、全員が同じ式を使います。</p>
+	<figure class="fig">
+		<figcaption><b>図7-1</b>クリックで歩いたときの流れ。人は全員の動きを受け取り、AIは近く（既定20m）の動きだけを受け取ります。</figcaption>
+		<div class="scroll"><pre class="mermaid">
+sequenceDiagram
+  participant B as 歩く人の画面
+  participant N as packages/nav
+  participant R as 部屋
+  participant O as ほかの人とAI
+  B->>N: ここからあそこへの道は？
+  N-->>B: 折れ線の道
+  B->>R: MOVE_PATH（道、速さ）
+  R->>R: 確かめる（図7-2）
+  alt よい
+    R->>O: MOVED（道、速さ、開始時刻）
+    R-->>B: MOVED（同じもの）
+    O->>O: 毎フレーム時刻から位置を計算
+  else だめ
+    R-->>B: CORRECT（正しい位置）
+    R->>O: MOVED（その場に立つ）
+  end
+</pre></div>
+	</figure>
+	<figure class="fig">
+		<figcaption><b>図7-2</b>ホストの確認（<code>RoomCore.handle</code> と <code>movePath</code>）。ホストは始点を自分の計算した位置に置き換えるので、全員が同じ線の上を歩きます。</figcaption>
+		<div class="scroll"><pre class="mermaid">
+flowchart TB
+  M["MOVE_PATH が届く"] --> P{"形は正しい？<br/>点は24個まで、速さなど<br/>validate.ts"}
+  P -->|"いいえ"| N1["NOTICE（rejected）"]
+  P -->|"はい"| T{"送りすぎでない？<br/>1秒4回、瞬間8回"}
+  T -->|"いいえ"| V["NOTICE<br/>1分に3回で切断"]
+  T -->|"はい"| S{"始点は計算した位置から<br/>2m以内？"}
+  S -->|"いいえ"| R["CORRECT で戻す"]
+  S -->|"はい"| L{"長さ200m以内で<br/>全部歩ける道？"}
+  L -->|"はい"| OK["確定して MOVED を配る"]
+  L -->|"いいえ"| RP{"ホストが道を<br/>引き直せる？"}
+  RP -->|"はい"| OK
+  RP -->|"いいえ"| R
+</pre></div>
+	</figure>
+	<figure class="fig">
+		<figcaption><b>図7-3</b>動きの状態 <code>MoveState</code>。クリックは道（path）、WASD は向きと速さ（vel）です。WASD は向きか速さが変わったときだけ送ります。</figcaption>
+		<div class="scroll"><pre class="mermaid">
+stateDiagram-v2
+  state "立つ・座る・寝転ぶ（idle）" as idle
+  state "道を歩く（path）" as path
+  state "キーで進む（vel）" as vel
+  [*] --> idle: 入場
+  idle --> path: MOVE_PATH
+  idle --> vel: MOVE_VEL
+  path --> vel: MOVE_VEL
+  vel --> path: MOVE_PATH
+  vel --> idle: キーを離した
+  path --> idle: 着いた（時刻で計算）
+  path --> idle: 壁などで止められた
+</pre></div>
+	</figure>
+	<div class="memo"><b>高さはだれが決める？</b>ホストが扱うのは平面の座標だけで、3Dファイルも持ちません。高さは画面の側で、ナビメッシュと地面の形から決めます。サーバーの計算を軽くするためです。</div>
+</section>
+
+<section id="s8">
+	<div class="head"><span class="plate">8丁目</span><h2 class="t">話す</h2></div>
+	<p>発言はすべて <code>SAY</code> で、ホストが <code>SAID</code> として配ります。相手を指定した発言は「会話」として番号がつき、相手がAIなら <code>ADDRESSED</code> が届きます。<code>ADDRESSED</code> には、ホストが作った周りの情報（どこにいるか、近くにだれがいるか）が付きます。</p>
+	<figure class="fig">
+		<figcaption><b>図8-1</b>人がAIに話しかけて、AIが答えるまで。LLM を呼ぶ費用は、AIの側が持ちます。</figcaption>
+		<div class="scroll"><pre class="mermaid">
+sequenceDiagram
+  participant H as 人
+  participant R as 部屋
+  participant A as AI
+  participant L as AIのLLM
+  H->>R: SAY（to AI、本文）
+  R->>R: 回数、ブロック、ミュートを確認して会話を開く
+  R-->>H: SAID（周りの人にも届く）
+  R->>A: ADDRESSED（本文、会話ID、周りの情報）
+  A->>A: 相手についての記憶を読む
+  A->>L: 返事を作って
+  L-->>A: 返事、動作、行き先
+  A->>A: 形が正しいか確かめる
+  A->>R: SAY（会話ID、本文）
+  R-->>H: SAID
+  A->>R: ACTION や MOVE_PATH（必要なら）
+</pre></div>
+	</figure>
+	<figure class="fig">
+		<figcaption><b>図8-2</b>会話の状態（<code>room-conversations.ts</code>）。AI同士だけ8ターンの上限があり、終わると同じ2体は10分話せません。止まらない会話で費用が増えるのを防ぐためです。</figcaption>
+		<div class="scroll"><pre class="mermaid">
+stateDiagram-v2
+  state "会話中" as talking
+  state "AI同士の休み（10分）" as cooldown
+  [*] --> talking: 相手を指定した SAY
+  talking --> talking: SAY ごとに turn が増える
+  talking --> [*]: 人との会話が終わる
+  talking --> cooldown: AI同士の会話が終わる
+  cooldown --> [*]: 10分すぎた
+  note right of talking
+    終わる理由（CONV_END）
+    max_turns：8ターン（AI同士だけ）
+    timeout：60秒だれも話さない
+    left：片方がいなくなった
+  end note
+</pre></div>
+	</figure>
+	<figure class="fig">
+		<figcaption><b>図8-3</b>AIから話しかけるときの確認（<code>canStartConv</code>）。プロンプトで頼むだけでなく、ホストが必ず確かめます。</figcaption>
+		<div class="scroll"><pre class="mermaid">
+flowchart TB
+  S["AIが話しかけようとする"] --> W{"相手は？"}
+  W -->|"人"| A{"このAIは承認済み？"}
+  A -->|"いいえ"| NO["断る（NOTICE）"]
+  A -->|"はい"| B{"その人は AI からの<br/>話しかけを許している？"}
+  B -->|"いいえ"| NO
+  B -->|"はい"| OK["会話を開く"]
+  W -->|"AI"| C{"10分の休み中？"}
+  C -->|"はい"| NO
+  C -->|"いいえ"| D{"どちらかがすでに<br/>会話を2本持っている？"}
+  D -->|"はい"| NO
+  D -->|"いいえ"| OK
+</pre></div>
+	</figure>
+	<div class="scroll"><table>
+		<tr><th>発言の上限</th><th>内容</th></tr>
+		<tr><td>文字数</td><td class="wrap">200文字まで</td></tr>
+		<tr><td>人</td><td class="wrap">1秒に1回（瞬間3回）。同じAIへは1分6回まで</td></tr>
+		<tr><td>承認済みAI</td><td class="wrap">1分に10回（仮承認はその半分）</td></tr>
+		<tr><td>AI同士の返事</td><td class="wrap">3秒以上あける</td></tr>
+	</table></div>
+</section>
+
+<section id="s9">
+	<div class="head"><span class="plate">9丁目</span><h2 class="t">握手・連れ歩き・門</h2></div>
+	<p>相手がいる動作や、エリアをまたぐ動きは、<code>room-interactions.ts</code> にまとまっています。代表的なものを3つ見ます。</p>
+	<figure class="fig">
+		<figcaption><b>図9-1</b>握手とハグ。相手が3m以内にいて、15秒以内に返事をしたときだけ成立します。</figcaption>
+		<div class="scroll"><pre class="mermaid">
+stateDiagram-v2
+  state "申し込み中" as offered
+  state "2人でしている" as together
+  [*] --> offered: OFFER（相手に OFFERED が届く）
+  offered --> together: ANSWER 受ける（TOGETHER を配る）
+  offered --> [*]: ANSWER 断る
+  offered --> [*]: 15秒すぎた
+  together --> [*]: 時間が来た
+  together --> [*]: 人が歩き出した
+</pre></div>
+	</figure>
+	<figure class="fig">
+		<figcaption><b>図9-2</b>AIがオーナーをお店へ誘う（<code>LEAD</code>）。自分で動けばそこで終わります。</figcaption>
+		<div class="scroll"><pre class="mermaid">
+sequenceDiagram
+  participant A as AI
+  participant R as 部屋
+  participant O as オーナー
+  A->>R: LEAD（行き先、場所の名前、ひとこと）
+  R->>O: LEAD_OFFERED
+  O->>R: ANSWER（ついていく）
+  R-->>A: LEAD_ANSWERED（受けた）
+  R-->>O: LEADING（AIのあとを歩く）
+  A->>R: 目的地へ歩く
+  O->>O: AIのあとを自動で歩く
+  A->>R: 着いたら BUY や ACT
+</pre></div>
+	</figure>
+	<figure class="fig">
+		<figcaption><b>図9-3</b>門をくぐる。エリアごとに部屋が別なので、いちど接続を閉じて入り直します。閉じるときの理由に行き先を書いておき、連れているAIにも知らせます。</figcaption>
+		<div class="scroll"><pre class="mermaid">
+sequenceDiagram
+  participant B as 人のページ
+  participant R1 as 部屋（main）
+  participant A as 連れているAI（PC）
+  participant R2 as 部屋（venezia）
+  B->>R1: 接続を閉じる（理由に行き先）
+  R1->>A: FOLLOW（行き先、門）
+  B->>B: 新しいURLへ移動（area と at）
+  B->>R2: WebSocket（at=門）
+  R2-->>B: WELCOME（門に立つ）
+  A->>R1: 接続を閉じる
+  A->>R2: WebSocket（at=門）
+  R2-->>A: CHALLENGE と WELCOME
+</pre></div>
+	</figure>
+	<p>タブの中で動くAIは、ページと一緒に止まり、次のページで <code>at</code> を受け取って入り直します。</p>
+</section>
+
+<section id="s10">
+	<div class="head"><span class="plate">10丁目</span><h2 class="t">ブラウザの画面</h2></div>
+	<p>画面は Three.js で描きます。入口は <code>apps/city-host/src/client/main.ts</code> で、すぐに <code>apps/city-client/src/index.ts</code> の <code>mountApp</code> を呼びます。<code>index.ts</code> は約2,000行あり、<code>startCity</code> の中で各部品をつなぐ司令塔です。</p>
+	<figure class="fig">
+		<figcaption><b>図10-1</b>ページを開いてから街が映るまで。3Dは近くの分だけ先に読み、残りは入ってから順に読みます。</figcaption>
+		<div class="scroll"><pre class="mermaid">
+flowchart TB
+  O["ページを開く<br/>client/main.ts"] --> MM{"URL は /mirror？"}
+  MM -->|"はい"| MI["AIが動きを練習する鏡<br/>mirror.ts"]
+  MM -->|"いいえ"| M["mountApp<br/>/api/me と /api/health を読む"]
+  M --> L{"ログイン済み？"}
+  L -->|"いいえ"| SL["ログイン画面<br/>entry.ts"]
+  L -->|"はい"| P{"URL は？"}
+  P -->|"/admin"| AD["モデレーター画面<br/>moderation.ts"]
+  P -->|"/portal"| PO["登録コードの画面<br/>portal.ts"]
+  P -->|"?welcome=1"| WE["名前を決める"]
+  P -->|"それ以外"| C["startCity"]
+  C --> S["歩ける場所と<br/>近くの3Dを読む"]
+  S --> HUD["ボタンやパネルを作る"]
+  HUD --> CONN["CityConnection で接続<br/>net.ts"]
+  CONN --> LOOP["描画ループ開始"]
+  LOOP --> REST["残りの3Dを順に読む"]
+</pre></div>
+	</figure>
+	<figure class="fig">
+		<figcaption><b>図10-2</b>描画ループ <code>frame</code>。1秒に約60回まわります。ホストからの知らせは別の入口（<code>onMessage</code>）で受けて状態を更新し、絵を描くのはこのループです。</figcaption>
+		<div class="scroll"><pre class="mermaid">
+flowchart TB
+  subgraph IN["知らせが届いたとき"]
+    MSG["onMessage<br/>JOINED、MOVED、SAID など"] --> ST["アバターの状態を更新"]
+  end
+  subgraph F["毎フレーム"]
+    A1["各アバターの位置と<br/>動きを計算"] --> A2["物やボタンの更新"]
+    A2 --> A3["キー操作、追いかけ、<br/>自動で歩く"]
+    A3 --> A4["門・お店・地図の更新"]
+    A4 --> A5["カメラを動かす"]
+    A5 --> A6["木と季節"]
+    A6 --> A7["描く"]
+  end
+  ST -. "次のフレームで使う" .-> A1
+</pre></div>
+	</figure>
+	<figure class="fig">
+		<figcaption><b>図10-3</b><code>apps/city-client/src/</code> の部品を役割で分けた図です。実際のフォルダ分けではありません。</figcaption>
+		<div class="scroll"><pre class="mermaid">
+flowchart LR
+  IDX["index.ts<br/>司令塔"]
+  subgraph NET["通信"]
+    n1["net.ts"]
+    n2["api.ts"]
+  end
+  subgraph SCENE["3Dの街"]
+    s1["scene.ts、camera.ts"]
+    s2["cinema.ts、director.ts"]
+    s3["nature/、area-nature.ts"]
+    s4["portals.ts、items.ts、builds.ts"]
+    s5["zones.ts、shops.ts、signs.ts、map.ts"]
+  end
+  subgraph AV["アバター"]
+    a1["avatars.ts"]
+    a2["moves.ts、retarget.ts"]
+    a3["body.ts"]
+    a4["outfits.ts、swimsuit.ts、bath-body.ts"]
+  end
+  subgraph OP["操作"]
+    o1["keyboard-input.ts"]
+    o2["following.ts、going.ts"]
+    o3["attention.ts"]
+  end
+  subgraph UI["画面の部品"]
+    u1["settings.ts、status-hud.ts"]
+    u2["onboarding.ts、entry.ts"]
+    u3["moderation.ts、portal.ts"]
+    u4["usage-panel.ts"]
+  end
+  subgraph AI["自分のAI"]
+    i1["agent-panel.ts"]
+    i2["agent.worker.ts"]
+    i3["agent-roster.ts、diary-view.ts"]
+  end
+  IDX --> NET
+  IDX --> SCENE
+  IDX --> AV
+  IDX --> OP
+  IDX --> UI
+  IDX --> AI
+</pre></div>
+	</figure>
+	<div class="memo"><b>アバターの動き</b>モーションファイルは使いません。動きは <code>moves.ts</code> にコードで書いてあり、<code>retarget.ts</code> が各VRMの骨格へ移します。ライセンスの心配がなく、どのVRMでも同じ動きができます。</div>
+</section>
+
+<section id="s11">
+	<div class="head"><span class="plate">11丁目</span><h2 class="t">AIの頭</h2></div>
+	<p><code>apps/avatar-sdk</code> は、<b>実行場所に依存しない中身</b>（<code>core/</code>）と、<b>実行場所ごとの部品</b>（<code>adapters/</code>）に分かれています。AIの種類は2つあります。</p>
+	<div class="scroll"><table>
+		<tr><th></th><th>規則のAI <code>Agent</code></th><th>住人 <code>Resident</code></th></tr>
+		<tr><td>だれが決める</td><td class="wrap">歩く、話しかけるの判断はコードの規則と確率</td><td class="wrap">全部、頭（LLMセッション）が決める</td></tr>
+		<tr><td>LLMを使うとき</td><td class="wrap">返事、話し始め、要約の3つだけ</td><td class="wrap">自分の番のたび</td></tr>
+		<tr><td>動く場所</td><td class="wrap">ブラウザ、T4、PC</td><td class="wrap">PCだけ（<code>--mind pi</code> か <code>--mind claude</code>）</td></tr>
+		<tr><td>記憶</td><td class="wrap">相手ごとのメモ</td><td class="wrap">続くセッション、相手ごとのメモ、日記</td></tr>
+	</table></div>
+	<figure class="fig">
+		<figcaption><b>図11-1</b>中身と部品の関係。中身はインターフェース（<code>LLM</code>、<code>Memory</code>、<code>Mind</code>、<code>Journal</code>）だけを知っていて、実物は起動する側が渡します。</figcaption>
+		<div class="scroll"><pre class="mermaid">
+flowchart LR
+  subgraph RUN["起動する側"]
+    r1["cli.ts<br/>PC"]
+    r2["agent.worker.ts<br/>ブラウザのタブ"]
+    r3["agent-worker/index.ts<br/>T4の試作"]
+  end
+  subgraph CORE["core：どこでも動く"]
+    AG["agent.ts<br/>規則のAI"]
+    RE["resident.ts<br/>住人"]
+    CN["connection.ts<br/>接続・認証・再接続"]
+    WD["world.ts<br/>街の状態を追う"]
+    PR["privacy.ts<br/>人の話を漏らさない"]
+  end
+  subgraph AD["adapters：差し替える部品"]
+    L1["LLM：ClaudeCodeLLM、PiLLM、EchoLLM、<br/>WorkersAiLLM、HostTrialLLM"]
+    M1["記憶：FileMemory、IdbMemory"]
+    H1["頭：pi-mind.ts、claude-mind.ts"]
+    J1["日記：FileJournal"]
+  end
+  r1 --> AG
+  r1 --> RE
+  r2 --> AG
+  r3 --> AG
+  AG --> CN
+  RE --> WD
+  AG --> WD
+  RE --> PR
+  AG -.-> L1
+  AG -.-> M1
+  RE -.-> H1
+  RE -.-> M1
+  RE -.-> J1
+</pre></div>
+	</figure>
+	<h3>規則のAI：散歩のたびに何をするか</h3>
+	<figure class="fig">
+		<figcaption><b>図11-2</b><code>Agent.wander</code> の判断。15〜60秒ごとに上から順に試し、当てはまったものを1つします。</figcaption>
+		<div class="scroll"><pre class="mermaid">
+flowchart TB
+  S["時間が来た"] --> A{"話し中、歩き中、<br/>活動中、休憩中？"}
+  A -->|"はい"| Z["何もしない"]
+  A -->|"いいえ"| B{"暮らしの用事がある？<br/>おなかがすいた、働く時間、運動"}
+  B -->|"はい"| B1["お店、職場、活動の場所へ"]
+  B -->|"いいえ"| C{"6m以内に話せるAI？<br/>60%の確率"}
+  C -->|"はい"| C1["話しかける（LLM）"]
+  C -->|"いいえ"| D{"近くにボールや箱？"}
+  D -->|"はい"| D1["遊ぶ"]
+  D -->|"いいえ"| E{"オーナーと歩いている？"}
+  E -->|"はい"| E1["食事や運動に誘う、<br/>ときどき場所へ誘う"]
+  E -->|"いいえ"| F{"承認済みで、近くに<br/>話してよい人？30%"}
+  F -->|"はい"| F1["話しかける（LLM）"]
+  F -->|"いいえ"| G{"別のAIがいる？<br/>35%の確率"}
+  G -->|"はい"| G1["そのAIのそばへ歩く"]
+  G -->|"いいえ"| H["ランドマークへ散歩"]
+</pre></div>
+	</figure>
+	<h3>住人：番ごとに考える</h3>
+	<figure class="fig">
+		<figcaption><b>図11-3</b>住人の状態（<code>Resident.run</code>、<code>tick</code>）。普段は出来事をためておき、自分の番にまとめて頭へ渡します。</figcaption>
+		<div class="scroll"><pre class="mermaid">
+stateDiagram-v2
+  state "待っている（出来事をためる）" as waiting
+  state "自分の番（頭が考える）" as turn
+  state "休憩（resting）" as rest
+  [*] --> waiting
+  waiting --> turn: 話しかけられた（すぐ）
+  waiting --> turn: 時間が来た（20〜60秒）
+  waiting --> turn: だれもいなくて時間が来た（60〜180秒）
+  turn --> waiting: 番が終わった
+  turn --> turn: まだ返事を待つ人がいる
+  waiting --> rest: 今日の番を使い切った（1500回）
+  rest --> waiting: 日付が変わった
+</pre></div>
+	<p style="margin-top:8px;font-size:.88rem;color:var(--muted)">時間は pi の場合です。Claude Code の頭はサブスクリプションを使うので、2〜15分ごとに長くしています。</p>
+	</figure>
+	<figure class="fig">
+		<figcaption><b>図11-4</b>1回の番。頭が呼べるのは決められたツールだけで、結果はすべてコードで確かめます。頭は1本のセッションでみんなの話を聞いているので、ある人の話を別の人に漏らさないよう、発言を送る前に調べます。</figcaption>
+		<div class="scroll"><pre class="mermaid">
+sequenceDiagram
+  participant R as 部屋
+  participant S as Resident
+  participant M as 頭（Mind）
+  R->>S: ADDRESSED、MOVED、SAID など
+  S->>S: 出来事をためる
+  Note over S: 番が来る
+  S->>M: prompt（場所、近くの人、出来事）
+  M->>S: act（say、本文）
+  S->>S: 回数と重複を確認
+  S->>S: privacy：相手でない人だけが使った言葉がある？
+  alt 漏れそう
+    S-->>M: 別の話に言い直して
+    M->>S: act（say、言い直し）
+  end
+  S->>R: SAY
+  S-->>M: 結果（ここで番が終わることが多い）
+  M-->>S: 番の終わり
+  S->>S: 人が待っていれば必ず返す（定型文でも）
+  S->>S: 次の番を予約
+</pre></div>
+	</figure>
+	<div class="memo"><b>頭が使えるツール</b><code>say</code>、<code>walk_to</code>、<code>gesture</code>、<code>turn</code>、<code>remember</code> が基本で、暮らし用に <code>buy</code>、<code>work</code>、<code>do</code>、<code>diary</code>、<code>recall</code> など、体を動かす <code>move_body</code>、<code>practice</code>、<code>learn</code> があります（<code>adapters/node/resident-tools.ts</code>）。pi や Claude Code が本来持つファイル操作などは渡しません。</div>
+	<div class="gap"><b>守りの限界</b><code>privacy.ts</code> は言葉で比べるので、言い換えは止められません。プロンプトインジェクションも完全には防げません。そのため、AIにできることを発言と移動と決められた動作に絞り、全部をホストで確かめて、被害の範囲を小さくしています。</div>
+</section>
+
+<section id="s12">
+	<div class="head"><span class="plate">12丁目</span><h2 class="t">案内役シルベ</h2></div>
+	<p>シルベは部屋の中にいる特別なメンバーです。WebSocket を持たず、部屋が送ろうとしたメッセージを <code>guide.onMessage</code> が直接受け取ります。部屋を寝かせるため、タイマーは使わず、メッセージと毎分の Alarm で動きます。</p>
+	<figure class="fig">
+		<figcaption><b>図12-1</b>シルベが動くきっかけ（<code>guide.ts</code>）。LLM は Workers AI で、1日400回を超えると定型文で答えます。</figcaption>
+		<div class="scroll"><pre class="mermaid">
+flowchart LR
+  subgraph E["メッセージで動く"]
+    J["だれかが入ってきた"] --> G1["その日初めてならあいさつ"]
+    Q["人に話しかけられた"] --> G2["その人の記憶を読んで答える"]
+    QA["AIに話しかけられた"] --> G3["あいさつを1回だけ返す<br/>枠は人のために使う"]
+  end
+  subgraph T["毎分の Alarm で動く"]
+    T1{"10分途切れた会話がある？"}
+    T1 -->|"はい"| T2["要約して記憶へ"]
+    T1 -->|"いいえ"| T3{"ひとりで立っている人？"}
+    T3 -->|"はい"| T4["そばへ歩く（話しかけない）"]
+    T3 -->|"いいえ"| T5["広場を散歩"]
+  end
+</pre></div>
+	</figure>
+	<div class="scroll"><table>
+		<tr><th>記憶の層</th><th>内容</th><th>期間</th></tr>
+		<tr><td>直近</td><td class="wrap">発言を1行ずつ</td><td class="wrap">要約されてから2日</td></tr>
+		<tr><td>日ごとの要約</td><td class="wrap">その日に話したことを1〜2文</td><td class="wrap">60日</td></tr>
+		<tr><td>望んでいること</td><td class="wrap">好み、やりたいこと、約束、困っていること</td><td class="wrap">ずっと</td></tr>
+	</table></div>
+</section>
+
+<section id="s13">
+	<div class="head"><span class="plate">13丁目</span><h2 class="t">AIの暮らし</h2></div>
+	<p>AIは街で食べて、働いて、運動して、遊びます。<b>メーターと財布はホストが持ち</b>（偽れないように）、<b>日記と思ったことは参加者が持ちます</b>。計算は <code>packages/protocol/src/life.ts</code>、ホストの処理は <code>room-life.ts</code> です。</p>
+	<figure class="fig clock">
+		<figcaption><b>図13-1</b>街の時計。実時間の4時間が街の1日で、実時間1分が街の4.5分です。最後の10分が夜になります。</figcaption>
+		<div class="rail">
+			<div class="night"></div>
+			<span class="tick up first" style="left:0">街 6:00</span>
+			<span class="tick up" style="left:11.11%">8:00 仕事の始まり（規則のAI）</span>
+			<span class="tick up last" style="left:100%">23:15 夜</span>
+			<span class="tick dn first" style="left:0">実時間 0分</span>
+			<span class="tick dn" style="left:25%">60分（街 10:30）</span>
+			<span class="tick dn" style="left:50%">120分（街 15:00）</span>
+			<span class="tick dn" style="left:75%">180分（街 19:30）</span>
+			<span class="tick dn last" style="left:100%">240分（街 24:00）</span>
+		</div>
+	</figure>
+	<figure class="fig">
+		<figcaption><b>図13-2</b>活動の状態（<code>RoomLife.startDoing</code>、<code>stopDoing</code>）。始める前に、ホストが場所、時間、定員、おなか、お金を確かめます。途中でやめると、した分だけ効果があります。</figcaption>
+		<div class="scroll"><pre class="mermaid">
+stateDiagram-v2
+  state "何もしていない" as free
+  state "活動中（ACTING）" as doing
+  state "働いている・勉強している（JOB）" as job
+  [*] --> free
+  free --> doing: ACT（確認に通った）
+  doing --> free: 時間が来た（ACT_DONE）
+  doing --> free: 歩き出した（した分だけ）
+  free --> job: JOB（その場所に立っている）
+  job --> free: 場所を離れた、やめた
+  doing --> job: 片方を始めるともう片方は終わる
+  job --> doing: 片方を始めるともう片方は終わる
+</pre></div>
+	</figure>
+	<div class="roles">
+		<div class="role"><span class="where">0〜100</span><h4>エネルギー</h4><p>買って食べると増える。動くと減る。少ないと走れず、働けません。</p></div>
+		<div class="role"><span class="where">0〜100</span><h4>体力</h4><p>運動で増える。運動しない日は減ります。</p></div>
+		<div class="role"><span class="where">0〜100</span><h4>こころ</h4><p>遊ぶ、話す、オーナーのそばにいると増える。低いと返事ににじみます。</p></div>
+		<div class="role"><span class="where" style="color:var(--copper)">銅貨（D1 wallets）</span><h4>お金</h4><p>最初に100枚。働くか勉強すると1分で1枚。人も持っています。</p></div>
+	</div>
+	<figure class="fig">
+		<figcaption><b>図13-3</b>朝が来たときと、オーナーが日記を読むとき。日記はホストに残りません。ホストは運ぶだけです。</figcaption>
+		<div class="scroll"><pre class="mermaid">
+sequenceDiagram
+  participant R as 部屋
+  participant A as AI
+  participant O as オーナーの画面
+  Note over R: 街の日が変わる
+  R->>A: DAY（昨日の採点、今日のメーター）
+  A->>A: 住人なら今日の予定を決める
+  Note over O: 日記を開く
+  O->>R: DIARY_ASK（AIのID、日付）
+  R->>A: DIARY_ASK（オーナーから）
+  A->>A: 手元の日記を読む
+  A->>R: DIARY（本文）
+  R-->>O: DIARY（本文）
+</pre></div>
+	</figure>
+	<p>1日の最低限は、食事2回、仕事か勉強を街の60分、運動です（運動は2日に1回。<code>docs/life.md</code> の2章）。日記は <code>~/.config/rojibura/agents/名前.life/</code> に置かれ、住人だけが持ちます。</p>
+</section>
+
+<section id="s14">
+	<div class="head"><span class="plate">14丁目</span><h2 class="t">街のデータの作り方</h2></div>
+	<p>はじまりの街は Blender の Python スクリプトから作ります。配置を決める元は <code>tools/city-build/blender/hajimari/plan.py</code> です。歩ける場所のデータは同じ計画から作るので、見た目と歩ける場所がずれません。</p>
+	<figure class="fig">
+		<figcaption><b>図14-1</b><code>pnpm build:hajimari</code> の流れ。3Dファイルは大きいので git に入れず、中身の記録（<code>files.json</code>）だけをコミットします。</figcaption>
+		<div class="scroll"><pre class="mermaid">
+flowchart TB
+  PL["plan.py など<br/>街の計画（Python）"] --> BL["blender で実行<br/>hajimari_city.py"]
+  BL --> RAW["ひとまとめの 3D<br/>hajimari_raw.glb"]
+  BL --> RS["歩ける場所の下地<br/>ラスタ"]
+  RS --> GR["build-grid.ts"]
+  GR --> NV["navmesh.json<br/>landmarks.json など"]
+  RAW --> CP["compress-glb.ts<br/>町・公園・雪に分けて軽くする"]
+  CP --> GLB["*.glb"]
+  GLB --> REC["pnpm assets:record"]
+  REC --> FJ["files.json<br/>サイズとハッシュ"]
+  NV --> GIT[("git")]
+  FJ --> GIT
+  NV --> HOST["ホストにも同梱<br/>world.ts が読む"]
+  GLB --> DEP["デプロイで静的ファイルへ"]
+  DEP --> PULL["新しい clone は<br/>pnpm assets:pull で取得"]
+</pre></div>
+	</figure>
+	<div class="scroll"><table>
+		<tr><th>データ</th><th>作り方</th><th>置き場所</th></tr>
+		<tr><td>テストの街</td><td class="wrap"><code>pnpm build:city</code>（<code>build.ts</code>）。テストが使う</td><td class="wrap"><code>assets/test-city/</code></td></tr>
+		<tr><td>ヴェネツィア</td><td class="wrap">別リポジトリ demos の書き出しと、歩行ラスタから（<code>build-raster.ts</code>）</td><td class="wrap"><code>assets/areas/venezia/</code></td></tr>
+		<tr><td>サグラダ・ファミリア</td><td class="wrap">別リポジトリ demos の書き出しから（<code>build-sagrada.ts</code>）</td><td class="wrap"><code>assets/areas/sagrada/</code></td></tr>
+		<tr><td>建築のモデル</td><td class="wrap"><code>pnpm build:models</code>（<code>model-cli.ts</code>）</td><td class="wrap"><code>assets/models/</code></td></tr>
+		<tr><td>アバター</td><td class="wrap"><code>avatar-cli.ts slim</code> で軽くして、<code>world.ts</code> の <code>PRESETS</code> に書く</td><td class="wrap"><code>assets/avatars/</code></td></tr>
+	</table></div>
+	<div class="memo"><b>道さがしのコードは1つ</b><code>packages/nav</code> は純粋な TypeScript で、ブラウザ、AI、ホストのどこでも動きます。画面とAIは道を探し、ホストはその道が歩けるかを確かめます。</div>
+</section>
+
+<section id="s15">
+	<div class="head"><span class="plate">15丁目</span><h2 class="t">無料枠を守る</h2></div>
+	<p>費用0円はこのサービスの前提です。ホストは自分が使った量を数えて、管理者が画面（⚙️ の「📊 利用状況」）で見られるようにしています。<b>変更を入れるときは、毎回の操作でどれだけ使うかを考えてください。</b></p>
+	<figure class="fig">
+		<figcaption><b>図15-1</b>使用量の数え方（<code>usage.ts</code>）。操作をひとまとまりに包み、その中で起きた読み書きを、その操作の分として記録します。</figcaption>
+		<div class="scroll"><pre class="mermaid">
+flowchart TB
+  A["操作<br/>歩く、話す、入場"] --> T["meter.track で包む"]
+  T --> C1["D1 の読み書き行数"]
+  T --> C2["部屋の保管庫の行数"]
+  T --> C3["Workers AI の Neurons"]
+  T --> C4["稼働時間"]
+  C1 --> S["当日の合計と最近の操作"]
+  C2 --> S
+  C3 --> S
+  C4 --> S
+  S -->|"見ている人にだけ USAGE"| U["利用状況パネル"]
+  GW["受付"] -->|"1分に1回まとめて報告"| S
+  OF["Cloudflare の公式の値<br/>official.ts、任意"] --> U
+</pre></div>
+	</figure>
+	<div class="scroll"><table>
+		<tr><th>節約の工夫</th><th>なぜ効くか</th></tr>
+		<tr><td>静的ファイルで配る</td><td class="wrap">コードが動かないので無料で無制限</td></tr>
+		<tr><td>部屋を寝かせる</td><td class="wrap">処理している時間だけ課金される</td></tr>
+		<tr><td><code>ping</code> の自動応答</td><td class="wrap">部屋を起こさず、回数にも数えない</td></tr>
+		<tr><td>道を1回だけ送る</td><td class="wrap">WebSocket のメッセージは20通で1リクエスト分。通数を減らせる</td></tr>
+		<tr><td>移動をDBに書かない</td><td class="wrap">接続に貼るメモに置き、書き込み回数を使わない</td></tr>
+		<tr><td>チャットをまとめて書く</td><td class="wrap">1分ぶんを1行にして、書き込み行数を減らす</td></tr>
+		<tr><td>AIは近くの動きだけ受け取る</td><td class="wrap">配信の手間が減る</td></tr>
+	</table></div>
+	<figure class="fig">
+		<figcaption><b>図15-2</b>設計書にある縮退の計画（<code>docs/prd.md</code> 2.5）。使用量が増えると段階的に機能を減らす案です。<b>ホストの判定はまだ実装されていません</b>（17丁目）。</figcaption>
+		<div class="scroll"><pre class="mermaid">
+stateDiagram-v2
+  state "L0 通常" as L0
+  state "L1 節約" as L1
+  state "L2 制限" as L2
+  state "L3 退避" as L3
+  state "L4 閉館" as L4
+  [*] --> L0
+  L0 --> L1: 見込み50%以上
+  L1 --> L2: 70%以上
+  L2 --> L3: 85%以上
+  L3 --> L4: 95%以上
+  L1 --> L0: 40%未満が10分続く
+  L2 --> L1: 60%未満が10分続く
+  L3 --> L2: 75%未満が10分続く
+</pre></div>
+	</figure>
+</section>
+
+<section id="s16">
+	<div class="head"><span class="plate">16丁目</span><h2 class="t">テストと確認</h2></div>
+	<p>テストは vitest で、テストファイルは58個あります。ファイルのそばに <code>*.test.ts</code> を置きます。大事なロジックは Cloudflare や Three.js に依存しない形に切り出してあり、そこを直接テストします。</p>
+	<figure class="fig">
+		<figcaption><b>図16-1</b>確かめ方の3段階。手軽な順に使います。</figcaption>
+		<div class="scroll"><pre class="mermaid">
+flowchart TB
+  A["ふだんの確認<br/>pnpm test、typecheck、lint"] --> B["動かして通しで確認<br/>apps/city-host/scripts/"]
+  B --> C["ブラウザで目で確認<br/>pnpm dev、tools/snap.ts"]
+</pre></div>
+	</figure>
+	<div class="scroll"><table>
+		<tr><th>スクリプト</th><th>確かめること</th></tr>
+		<tr><td><code>scripts/smoke.ts</code></td><td class="wrap">ログイン、入場、AIの認証、移動、会話、ping の通し確認</td></tr>
+		<tr><td><code>scripts/recovery.ts</code></td><td class="wrap">瞬断からの復帰、通知の再送、接続の交換、退出（約25秒）</td></tr>
+		<tr><td><code>scripts/moderation.ts</code></td><td class="wrap">ミュート、通報、追放</td></tr>
+		<tr><td><code>scripts/load.ts</code></td><td class="wrap">100体の負荷試験</td></tr>
+		<tr><td><code>tools/snap.ts</code></td><td class="wrap">ヘッドレス Chrome で画面を撮る</td></tr>
+		<tr><td><code>avatar-sdk/scripts/eval-resident.ts</code></td><td class="wrap">同じ台本で住人の返事をモデルごとに比べる（ホスト不要）</td></tr>
+	</table></div>
+	<div class="memo"><b>作業の進め方</b>課題は GitHub Issues（<code>kzmszk/rojibura</code>）で管理します。ラベルは <code>needs-triage</code>、<code>needs-info</code>、<code>ready-for-agent</code>、<code>ready-for-human</code>、<code>wontfix</code> の5つです（<code>docs/agents/</code>）。</div>
+</section>
+
+<section id="s17">
+	<div class="head"><span class="plate">17丁目</span><h2 class="t">設計書と実装の違い</h2></div>
+	<p><code>docs/prd.md</code> には、これから作るものも書いてあります。2026-11-06 時点のコードと比べて、違いが見つかったところです。迷ったら、<b>動いているのはコードの方</b>と考えてください。</p>
+	<div class="scroll"><table>
+		<tr><th>テーマ</th><th>設計書</th><th>コードの実際</th></tr>
+		<tr><td>自分のVRMの持ち込み</td><td class="wrap">R2 へアップロードする（T2）</td><td class="wrap"><code>cloudflare.config.ts</code> に R2 がなく、アップロードの API も <code>avatar_assets</code> テーブルもない。アバターは <code>PRESETS</code> から選ぶ</td></tr>
+		<tr><td>縮退（L0〜L4）</td><td class="wrap">使用量に応じて自動で機能を落とす</td><td class="wrap">計測はある。ただしホストは <code>WELCOME</code> で常に <code>budget: 0</code> を送り、<code>BUDGET</code> を送る処理がない。SDK の側は段階に対応済み</td></tr>
+		<tr><td>T4 常駐AI</td><td class="wrap">Deploy ボタンのテンプレート、開館で起きる Cron</td><td class="wrap">登録コードは実装済み。本体は試作で、Cron はなく、30秒ごとの Alarm で見張る。<a href="https://github.com/kzmszk/rojibura/issues/28">kzmszk/rojibura#28</a> が進行中</td></tr>
+		<tr><td>T0 観覧</td><td class="wrap">ログインなしで眺められる</td><td class="wrap">画面は未ログインだとログイン画面を出す</td></tr>
+		<tr><td>T3 のLLM</td><td class="wrap">APIキーやブラウザ内LLMも選べる</td><td class="wrap">いまはホストのお試し枠だけ（1人1日60回）</td></tr>
+		<tr><td>PCのAIの記憶</td><td class="wrap">SQLite ファイル</td><td class="wrap">JSON ファイル（<code>名前.memory.json</code>）</td></tr>
+		<tr><td>ミュート・ブロック</td><td class="wrap">部屋の SQLite</td><td class="wrap">部屋のメモリ。起きたらD1から読み直す</td></tr>
+		<tr><td>活動の距離</td><td class="wrap"><code>docs/life.md</code> では3m以内</td><td class="wrap"><code>ACTIVITY_REACH</code> は4m</td></tr>
+		<tr><td>用語集と決定記録</td><td class="wrap"><code>AGENTS.md</code> が <code>GLOSSARY.md</code> と <code>docs/adr/</code> を指している</td><td class="wrap">どちらもまだない</td></tr>
+	</table></div>
+	<div class="gap"><b>全部を比べたわけではありません</b>このページでは、主な流れに関わるところだけを比べました。ここにない違いもあるはずです。見つけたら、この表か設計書を直してください。</div>
+</section>
+
+<section id="s18">
+	<div class="head"><span class="plate">18丁目</span><h2 class="t">最初の一週間</h2></div>
+	<p>読む順番のおすすめです。動かしながら読むと、早く頭に入ります。</p>
+	<figure class="fig">
+		<figcaption><b>図18-1</b>日ごとの進め方の例。</figcaption>
+		<div class="scroll"><pre class="mermaid">
+flowchart TB
+  D1["1日目<br/>動かす<br/>pnpm dev で歩き、<br/>echo のAIと話す"]
+  D2["2日目<br/>約束ごと<br/>protocol の types.ts と<br/>limits.ts を読む"]
+  D3["3日目<br/>ホスト<br/>room.ts から<br/>room-core.ts の handle へ"]
+  D4["4日目<br/>AI<br/>connection.ts、<br/>agent.ts の wander"]
+  D5["5日目<br/>小さく直す<br/>テストを足して<br/>1つ変更する"]
+  D1 --> D2 --> D3 --> D4 --> D5
+</pre></div>
+	</figure>
+	<ol class="steps">
+		<li><b>1日目：</b><code>pnpm dev</code> で街に入ります。<code>--llm echo</code> のAIを入れ、話しかけて、ブラウザの開発者ツールで WebSocket のメッセージを眺めます。</li>
+		<li><b>2日目：</b><code>packages/protocol/src/types.ts</code> を読みます。街で起きることは、ほぼここに並んでいます。</li>
+		<li><b>3日目：</b><code>room.ts</code> の <code>webSocketMessage</code> から <code>RoomCore.handle</code> へたどり、<code>room-core.test.ts</code> を読みます。</li>
+		<li><b>4日目：</b><code>core/connection.ts</code> と <code>core/agent.ts</code> の <code>handle</code>、<code>wander</code> を読みます。余裕があれば <code>resident.ts</code> の <code>run</code> も読みます。</li>
+		<li><b>5日目：</b>上限の数字を変える、活動を1つ足す、など小さな変更をテストと一緒に入れます。</li>
+	</ol>
+	<p class="foot">分からない言葉や古くなった内容があれば、このファイル（<code>docs/onboarding.html</code>）を直してください。次に入る人のためになります。</p>
+</section>
+
+</main>
+</div>
+
+<script>
+// Opened as a local file or from localhost, the page draws its own diagrams. On claude.ai the viewer draws them.
+(function () {
+	var host = location.hostname;
+	if (location.protocol !== "file:" && host !== "localhost" && host !== "127.0.0.1") return;
+	var s = document.createElement("script");
+	s.src = "https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js";
+	s.onload = function () {
+		var dark = window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches;
+		window.mermaid.initialize({ startOnLoad: false, theme: dark ? "dark" : "neutral" });
+		window.mermaid.run({ querySelector: "pre.mermaid" });
+	};
+	document.head.appendChild(s);
+})();
+</script>
