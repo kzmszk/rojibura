@@ -84,6 +84,7 @@ import { actionBar, Relations, showAdmin } from "./moderation.ts";
 import { SEASONS, type Season } from "./nature/season.ts";
 import { CityConnection, type ConnState } from "./net.ts";
 import { rememberFirstVisit, reportFirstVisit } from "./onboarding.ts";
+import { showPortal } from "./portal.ts";
 import { PortalsView } from "./portals.ts";
 import { CityScene } from "./scene.ts";
 import { SettingsPanel } from "./settings.ts";
@@ -201,6 +202,10 @@ export async function mountApp(root: HTMLElement): Promise<void> {
 	reportFirstVisit();
 	if (location.pathname === "/admin") {
 		await showAdmin(root);
+		return;
+	}
+	if (location.pathname === "/portal") {
+		await showPortal(root);
 		return;
 	}
 	const params = new URLSearchParams(location.search);
@@ -495,6 +500,9 @@ async function startCity(
 		admin.href = "/admin";
 		links.append(admin);
 	}
+	const portal = el("a", "", "Cloudflareで動かすAI");
+	portal.href = "/portal";
+	links.append(portal);
 	const logout = el("a", "", "ログアウト");
 	logout.href = "/auth/logout";
 	links.append(logout);

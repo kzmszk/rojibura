@@ -21,7 +21,9 @@ export default defineConfig(() => ({
 			AREA: bindings.text("main"),
 			AGENT_NAME: bindings.text("ミナト"),
 			PERSONA: bindings.text("港町育ちで世話好き。話し方は気さくで、少しだけ江戸っ子っぽい。"),
-			/** Registered agent ID and its Ed25519 private key (from the owner portal or dev registration). */
+			/** The one-time code the owner made on /portal: the AI registers itself with it on its first start. */
+			REGISTRATION_CODE: bindings.secret(),
+			/** Or an AI registered by hand: its ID and Ed25519 private key (used when no code is given). */
 			AGENT_ID: bindings.secret(),
 			AGENT_KEY: bindings.secret(),
 			/** Bearer token for /start, /stop and /status. */

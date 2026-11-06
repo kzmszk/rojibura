@@ -12,6 +12,7 @@ import {
 	WorkersAiLLM,
 } from "@rojibura/avatar-sdk";
 import { importPrivateKey } from "@rojibura/protocol";
+import { type Identity, registerWithCode } from "./register.ts";
 
 const WATCH_MS = 30_000;
 const LOG_LINES = 50;
@@ -45,6 +46,7 @@ export class AgentDO extends DurableObject<Env> {
 	private connected = false;
 	private llmCalls = 0;
 	private neurons = 0;
+	private identityReady: Promise<Identity> | null = null;
 
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env);
@@ -117,9 +119,34 @@ export class AgentDO extends DurableObject<Env> {
 		await this.ctx.storage.setAlarm(Date.now() + WATCH_MS);
 	}
 
+	/**
+	 * Who this AI is: what it kept from registering, else the ID and key the owner put in by hand, else a new
+	 * registration with the owner's one-time code (docs/prd.md 2.2.4). Kept at once, so a code is never spent twice.
+	 */
+	private identity(): Promise<Identity> {
+		this.identityReady ??= (async () => {
+			const kept = await this.ctx.storage.get<Identity>("identity");
+			if (kept) return kept;
+			const env = this.env;
+			if (env.AGENT_ID && env.AGENT_KEY) return { agentId: env.AGENT_ID, privateKey: env.AGENT_KEY };
+			if (!env.REGISTRATION_CODE)
+				throw new Error("no identity: set REGISTRATION_CODE (from /portal), or AGENT_ID and AGENT_KEY");
+			const made = await registerWithCode(env.CITY_URL, env.REGISTRATION_CODE);
+			await this.ctx.storage.put("identity", made);
+			this.write(`registered as ${made.agentId}`);
+			return made;
+		})().catch((e) => {
+			// try again at the next alarm (the code may have been put in meanwhile)
+			this.identityReady = null;
+			throw e;
+		});
+		return this.identityReady;
+	}
+
 	private async boot(): Promise<void> {
 		if (this.conn) return;
 		const env = this.env;
+		const identity = await this.identity();
 		const city = await loadCity(env.CITY_URL);
 		const llm = new WorkersAiLLM(env.AI);
 		this.llm = llm;
@@ -134,8 +161,8 @@ export class AgentDO extends DurableObject<Env> {
 		this.conn = new AgentConnection({
 			baseUrl: env.CITY_URL.replace(/^http/, "ws"),
 			areaId: env.AREA,
-			agentId: env.AGENT_ID,
-			privateKey: await importPrivateKey(env.AGENT_KEY),
+			agentId: identity.agentId,
+			privateKey: await importPrivateKey(identity.privateKey),
 			logger: this.log,
 			onMessage: (m) => {
 				if (m.t === "WELCOME") this.connected = true;
@@ -143,7 +170,7 @@ export class AgentDO extends DurableObject<Env> {
 			},
 		});
 		this.agent = new Agent({
-			persona: { name: env.AGENT_NAME, personality: env.PERSONA },
+			persona: { name: identity.name ?? env.AGENT_NAME, personality: env.PERSONA },
 			llm,
 			memory: new StorageMemory(this.ctx.storage),
 			nav: city.nav,

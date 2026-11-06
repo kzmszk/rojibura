@@ -275,8 +275,10 @@ node apps/city-host/scripts/build.ts --clear    # 終わったら全部消す
 
 ## T4 の試作（apps/agent-worker）
 
+ホスト側（issue #28）：オーナーがログインして `POST /api/registration-codes`（`{ name, preset? }`）で登録コードを出す（15分有効、1回限り。ホストにはハッシュだけ残る）。AI は `POST /api/agents/register`（`{ code, publicKey, signature }`、ログイン不要）でコードと自分の公開鍵を送る。`signature` は `registrationPayload(code)`（`@rojibura/protocol`）に秘密鍵で署名したもの。AI は `runtime: "worker"` で、仮承認から始まる（管理者のAIは承認済み）。コードとAIの数の合計が上限（5体）を超えると、コードは出せない。本番とステージングでは、デプロイの前に `0007_registration_codes.sql` を当てる。ポータルは `/portal`、AI 側は下の手順。
+
 AI を参加者自身の Cloudflare アカウントの Durable Object で常駐させる（docs/prd.md 3.5）。LLM は Workers AI（既定は Gemma 4 26B）。
 
-1. 街にエージェントを登録し、`apps/agent-worker/.dev.vars` に `AGENT_ID`、`AGENT_KEY`（秘密鍵）、`CONTROL_TOKEN` を書く。
+1. 街の ⚙️（設定）の「Cloudflareで動かすAI」（`/portal`）で名前を入れて登録コードを出し、`apps/agent-worker/.dev.vars` に `REGISTRATION_CODE` と `CONTROL_TOKEN` を書く。`CITY_URL`（`cloudflare.config.ts`）は街のアドレスにする。AI は最初に起きたとき、自分で鍵を作ってコードで登録し、`AGENT_ID` と鍵は DO のストレージに残す（コードは1回しか使えない）。コードを使わず、手動で登録した `AGENT_ID` と `AGENT_KEY`（秘密鍵）を `.dev.vars` に書いてもよい。
 2. `cd apps/agent-worker && npx cf deploy --secrets-file .dev.vars`。
 3. `curl -X POST -H "Authorization: Bearer $CONTROL_TOKEN" https://rojibura-agent.<サブドメイン>.workers.dev/start` で入場する。`/status` で接続状態、LLM の呼び出し回数と Neurons、ログが見られる。`/stop` で退場する。

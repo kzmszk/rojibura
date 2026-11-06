@@ -150,6 +150,11 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #bfd6e8; }
 .rj-report-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .rj-admin-page button { font: inherit; padding: 6px 12px; border-radius: 8px; border: 1px solid #bbc; background: #fff; color: #222; cursor: pointer; }
 .rj-admin-page button[type="submit"] { background: #2f6fae; border-color: #2f6fae; color: #fff; }
+.rj-portal-form { display: flex; gap: 8px; }
+.rj-portal-form input { flex: 1; font: inherit; padding: 6px 8px; border-radius: 6px; border: 1px solid #bbc; }
+.rj-portal-result { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.rj-portal-code { width: 100%; box-sizing: border-box; font: 13px monospace; padding: 8px; border-radius: 6px; border: 1px solid #bbc; resize: none; }
+.rj-portal-error { color: #b33; }
 .rj-admin-page input:disabled { background: #f0f1f3; color: #555; }
 .rj-agent { position: fixed; top: 52px; right: 12px; width: 340px; max-width: calc(100vw - 24px); max-height: calc(100vh - 220px); overflow-y: auto; box-sizing: border-box;
   display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: 10px; background: rgba(255,255,255,.96); color: #222; font-size: 13px;

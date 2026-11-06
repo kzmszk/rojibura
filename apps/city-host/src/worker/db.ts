@@ -7,6 +7,7 @@ import {
 	START_COINS,
 	sanitizeText,
 	textLength,
+	toBase64Url,
 } from "@rojibura/protocol";
 import init from "../../migrations/0001_init.sql?raw";
 import moderation from "../../migrations/0002_moderation.sql?raw";
@@ -14,9 +15,10 @@ import onboarding from "../../migrations/0003_onboarding.sql?raw";
 import pc from "../../migrations/0004_pc.sql?raw";
 import wallets from "../../migrations/0005_wallets.sql?raw";
 import life from "../../migrations/0006_life.sql?raw";
+import registrationCodes from "../../migrations/0007_registration_codes.sql?raw";
 import { newPairCode, PAIR_CODE_TTL_MS } from "./pairing.ts";
 
-const MIGRATIONS = [init, moderation, onboarding, pc, wallets, life];
+const MIGRATIONS = [init, moderation, onboarding, pc, wallets, life, registrationCodes];
 
 export const AGENTS_PER_OWNER = 5;
 
@@ -189,6 +191,82 @@ export async function saveLife(db: D1Database, agentId: string, life: LifeState)
 		)
 		.bind(agentId, JSON.stringify(life), Date.now())
 		.first();
+}
+
+// ---- an AI in its owner's own Cloudflare account (docs/prd.md 2.2.4, issue #28) ----
+
+export const REGISTRATION_CODE_TTL_MS = 15 * 60_000;
+
+async function hashCode(code: string): Promise<string> {
+	return toBase64Url(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(code)));
+}
+
+/**
+ * A one-time code for registering an AI (T4). The owner puts it into the Worker as a Secret, and the AI sends it
+ * with its own key. The owner's AIs and the codes still open count against the limit, so codes cannot be stockpiled.
+ */
+export async function issueRegistrationCode(
+	db: D1Database,
+	ownerId: string,
+	input: { name: string; preset?: string | null },
+	/** Agents one account may have; null for no limit (free play, docs/prd.md 3.7). */
+	limit: number | null = AGENTS_PER_OWNER,
+	now = Date.now(),
+): Promise<{ code: string; expiresAt: number } | string> {
+	const count = await db
+		.prepare(
+			"SELECT (SELECT COUNT(*) FROM agents WHERE owner_id = ?1) + (SELECT COUNT(*) FROM registration_codes WHERE owner_id = ?1 AND used_at IS NULL AND expires_at >= ?2) AS n",
+		)
+		.bind(ownerId, now)
+		.first<{ n: number }>();
+	if (limit !== null && (count?.n ?? 0) >= limit) return `AIは1人${limit}体まで登録できます`;
+	const code = `rjreg_${randomToken(24)}`;
+	const expiresAt = now + REGISTRATION_CODE_TTL_MS;
+	await db
+		.prepare(
+			"INSERT INTO registration_codes (code_hash, owner_id, name, preset_id, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
+		)
+		.bind(await hashCode(code), ownerId, input.name, input.preset ?? null, now, expiresAt)
+		.run();
+	return { code, expiresAt };
+}
+
+/**
+ * Registers the AI whose code this is, with the key it brought. The code is spent whether or not the AI fits: a
+ * code used once is never used again. Null if the code is unknown, used or late.
+ */
+export async function redeemRegistrationCode(
+	db: D1Database,
+	code: string,
+	publicKey: string,
+	limit: number | null = AGENTS_PER_OWNER,
+	now = Date.now(),
+): Promise<Agent | string | null> {
+	const row = await db
+		.prepare(
+			"UPDATE registration_codes SET used_at = ? WHERE code_hash = ? AND used_at IS NULL AND expires_at >= ? RETURNING owner_id, name, preset_id",
+		)
+		.bind(now, await hashCode(code), now)
+		.first<{ owner_id: string; name: string; preset_id: string | null }>();
+	if (!row) return null;
+	const owner = await db
+		.prepare("SELECT role FROM accounts WHERE id = ?")
+		.bind(row.owner_id)
+		.first<{ role: string }>();
+	if (!owner) return null;
+	return registerAgent(
+		db,
+		row.owner_id,
+		{
+			name: row.name,
+			publicKey,
+			runtime: "worker",
+			preset: row.preset_id,
+			// admins are the ones who approve: theirs need no one's approval (docs/prd.md 2.2.2)
+			trust: owner.role === "admin" ? "approved" : "provisional",
+		},
+		limit,
+	);
 }
 
 // ---- an AI on its owner's PC (docs/prd.md 3.5.1) ----
