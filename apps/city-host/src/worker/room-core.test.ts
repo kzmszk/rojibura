@@ -1601,6 +1601,21 @@ describe("walking with your AIs", () => {
 		);
 	});
 
+	test("the owner letting go of the keys, the AI stops by them, however close to its place it is by then", () => {
+		for (const walked of [300, 700, 1000, 1500, 2000, 3000, 3500, 5000, 8000]) {
+			ctx = setup();
+			const { a, bots, ids } = company([-11, -10]);
+			const bot = bots[0] as Conn;
+			ctx.room.handle(a, { t: "COMPANION", ids });
+			ctx.clock.advance(3000);
+			ctx.room.handle(a, { t: "MOVE_VEL", pos: posOf(a), dir: [0, 1], speed: 1.4, seq: 1 });
+			ctx.clock.advance(walked);
+			ctx.room.handle(a, { t: "MOVE_VEL", pos: posOf(a), dir: [0, 0], speed: 0, seq: 2 });
+			ctx.clock.advance(20_000);
+			expect(dist(posOf(bot), posOf(a))).toBeLessThan(1.5);
+		}
+	});
+
 	test("a step of its own is refused if another of the owner's AIs is right there", () => {
 		const { a, bots, ids } = company([-11, -10], [-9, -10]);
 		ctx.room.handle(a, { t: "COMPANION", ids });
