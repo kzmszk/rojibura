@@ -6,6 +6,7 @@ import {
 	getAgent,
 	listAgents,
 	listOnboarding,
+	listProvisionalAgents,
 	listReports,
 	logModAction,
 	resolveReport,
@@ -54,6 +55,7 @@ export async function moderationRoutes(
 	if (path === "/api/relations" && request.method === "POST") return relations(request, deps);
 	if (path === "/api/reports" && request.method === "POST") return submitReport(request, deps);
 	if (path === "/api/mod/reports") return moderatorReports(request, url, deps);
+	if (path === "/api/mod/agents" && request.method === "GET") return provisionalAgents(request, deps);
 	if (path === "/api/mod/action" && request.method === "POST") return moderationAction(request, deps);
 	if (path === "/api/dev/role" && request.method === "POST" && deps.devAllowed(request, url))
 		return devRole(request, deps);
@@ -141,6 +143,22 @@ async function moderatorReports(request: Request, url: URL, deps: ModerationDeps
 	);
 }
 
+/** The AIs an admin can approve (only admins approve them, moderationAction). */
+async function provisionalAgents(request: Request, deps: ModerationDeps): Promise<Response> {
+	const account = await deps.currentAccount(request);
+	if (account?.role !== "admin") return error(403, "admins approve agents");
+	const agents = await listProvisionalAgents(deps.db);
+	return json(
+		agents.map((a) => ({
+			id: a.id,
+			name: a.name,
+			runtime: a.runtime,
+			owner: { id: a.owner_id, name: a.owner_name },
+			createdAt: a.created_at,
+		})),
+	);
+}
+
 async function moderationAction(request: Request, deps: ModerationDeps): Promise<Response> {
 	const account = await deps.currentAccount(request);
 	if (!account || !isModerator(account)) return error(403, "moderators only");
@@ -202,9 +220,14 @@ async function moderationAction(request: Request, deps: ModerationDeps): Promise
 			await setAgentTrust(deps.db, subject, "suspended");
 			await deps.broadcastCommand({ op: "kick", id: subject });
 			break;
-		case "approve":
+		case "approve": {
+			const agent = await getAgent(deps.db, subject);
+			if (!agent) return error(404, "no such agent");
+			// approving must not lift a suspension (a page opened before it was suspended, say)
+			if (agent.trust === "suspended") return error(409, "停止中のAIは承認できません");
 			await setAgentTrust(deps.db, subject, "approved");
 			break;
+		}
 		case "resolve":
 			break;
 		default: {
