@@ -14,7 +14,8 @@ export function keyboardIntent(input: {
 	key: string;
 	movement: string | null;
 	typing: boolean;
-	cinema: boolean;
+	/** Shift with the movement keys looks round instead of walking (the cinema view; lying down in your own eyes). */
+	shiftLooks: boolean;
 	shiftHeld: boolean;
 	flying: boolean;
 	panelOpen: boolean;
@@ -22,10 +23,20 @@ export function keyboardIntent(input: {
 	motion: Motion | undefined;
 	followTarget: string | null;
 }): KeyboardIntent {
-	const { key, movement, typing, cinema, shiftHeld, flying, panelOpen, flyAllowed, motion, followTarget } =
-		input;
+	const {
+		key,
+		movement,
+		typing,
+		shiftLooks,
+		shiftHeld,
+		flying,
+		panelOpen,
+		flyAllowed,
+		motion,
+		followTarget,
+	} = input;
 	const lower = key.toLowerCase();
-	if (movement && movement !== "shift" && !typing && cinema && shiftHeld)
+	if (movement && movement !== "shift" && !typing && shiftLooks && shiftHeld)
 		return { kind: "look", key: movement };
 	if (movement && !typing) return { kind: "move", key: movement };
 	if (key === "Enter" && !typing) return { kind: "focus" };

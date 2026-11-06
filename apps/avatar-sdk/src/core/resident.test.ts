@@ -304,6 +304,18 @@ describe("Resident", () => {
 		expect(s.prompts[0]).toContain("街に入った。");
 	});
 
+	test("what its owner says to everyone close by comes once, as said to the AIs there", async () => {
+		const s = setup([{ calls: [["say", { text: "はーい。" }]] }]);
+		current = s.resident;
+		const line = "みんな、聞いて";
+		s.resident.handle({ t: "SAID", id: "h_saki", text: line, at: Date.now() });
+		s.resident.handle({ ...addressed("h_saki", line), everyone: true } as HostToClient);
+		await until(() => s.sent.some((m) => m.t === "STATUS" && m.status === "active"));
+		expect(s.prompts[0]).toContain(`そばにいるAIみんなに話しかけた: 「${line}」`);
+		expect(s.prompts[0]).not.toContain("みんなに向かって言った");
+		expect(says(s.sent)).toEqual([{ t: "SAY", text: "はーい。", convId: "c_h_saki" }]);
+	});
+
 	test("a say without `to` goes to the only one waiting, and only once per turn", async () => {
 		const s = setup([
 			{
@@ -428,12 +440,12 @@ describe("Resident", () => {
 		current = s.resident;
 		s.resident.handle(addressed("a_mina", "ひとつめ"));
 		await until(() => s.prompts.length === 1);
-		s.resident.handle({ t: "SAID", id: "h_saki", text: "みんな、こんばんは", at: Date.now() });
+		s.resident.handle({ t: "SAID", id: "a_mina", text: "みんな、こんばんは", at: Date.now() });
 		s.resident.handle(addressed("a_mina", "ふたつめ"));
 		release();
 		await until(() => s.prompts.length === 2);
 		expect(s.prompts[1]).toContain(
-			"サキ（id h_saki、人間、2m、前）がみんなに向かって言った: 「みんな、こんばんは」",
+			"ミナ（id a_mina、AI、3m、前）がみんなに向かって言った: 「みんな、こんばんは」",
 		);
 		expect(s.prompts[1]).toContain("「ふたつめ」");
 		expect(s.prompts[1]).not.toContain("ひとつめ");

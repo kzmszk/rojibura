@@ -412,7 +412,7 @@ describe("walking with its owner (docs/life.md 2)", () => {
 		room.join(owner, human());
 		room.join(c, ai({ life: { ...newLife(SEVEN), mood: 0 } }));
 		const mood = () => of(owner, "LIFE").at(-1)?.life.mood;
-		room.handle(owner, { t: "COMPANION", on: true });
+		room.handle(owner, { t: "COMPANION", ids: ["a_mina"] });
 		advance(COMPANY_MOOD_MS * 3 + 1000);
 		room.sweep(() => now());
 		expect(mood()).toBe(3);
@@ -422,7 +422,7 @@ describe("walking with its owner (docs/life.md 2)", () => {
 		room.sweep(() => now());
 		expect(mood()).toBe(4);
 		// on its own again: no more
-		room.handle(owner, { t: "COMPANION", on: false });
+		room.handle(owner, { t: "COMPANION", ids: [] });
 		advance(COMPANY_MOOD_MS * 5);
 		room.sweep(() => now());
 		expect(mood()).toBe(4);
@@ -435,7 +435,7 @@ describe("walking with its owner (docs/life.md 2)", () => {
 		const c = conn("mina");
 		const owner = conn("kazu");
 		room.join(owner, human());
-		room.handle(owner, { t: "COMPANION", on: true });
+		room.handle(owner, { t: "COMPANION", ids: ["a_mina"] });
 		advance(COMPANY_MOOD_MS * 10);
 		room.join(c, ai({ life: { ...newLife(now()), mood: 0 } }));
 		advance(COMPANY_MOOD_MS + 1000);
@@ -449,7 +449,7 @@ describe("walking with its owner (docs/life.md 2)", () => {
 		const owner = conn("kazu");
 		room.join(owner, human());
 		room.join(c, ai({ life: { ...newLife(SEVEN), mood: 99.5 } }));
-		room.handle(owner, { t: "COMPANION", on: true });
+		room.handle(owner, { t: "COMPANION", ids: ["a_mina"] });
 		advance(COMPANY_MOOD_MS * 3);
 		room.sweep(() => now());
 		expect(of(owner, "LIFE").at(-1)?.life.mood).toBe(100);

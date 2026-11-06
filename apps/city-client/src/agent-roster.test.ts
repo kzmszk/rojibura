@@ -4,9 +4,12 @@ import {
 	type AiFacts,
 	carryOverWanted,
 	closeMessage,
+	companyOf,
 	describeAi,
+	setCompany,
 	setWanted,
 	staysOutAfter,
+	syncCompany,
 	wantedAgents,
 } from "./agent-roster.ts";
 
@@ -112,5 +115,47 @@ describe("which AIs come in with the owner", () => {
 		localStorage.setItem("rj.agent.on", "1");
 		carryOverWanted("h_a", "a_old");
 		expect(wantedAgents("h_a")).toEqual(["a_old"]);
+	});
+});
+
+describe("which AIs stay by the owner", () => {
+	beforeEach(() => {
+		const data = new Map<string, string>();
+		vi.stubGlobal("localStorage", {
+			getItem: (k: string) => data.get(k) ?? null,
+			setItem: (k: string, v: string) => data.set(k, v),
+		});
+	});
+
+	test("each is set by itself, and accounts on one browser stay apart; a new one is free", () => {
+		expect(companyOf("h_a")).toEqual([]);
+		setCompany("h_a", "a_1", true);
+		setCompany("h_a", "a_2", true);
+		setCompany("h_a", "a_1", false);
+		expect(companyOf("h_a")).toEqual(["a_2"]);
+		expect(companyOf("h_b")).toEqual([]);
+	});
+
+	test("the one setting of earlier versions, if on, carries over to all of the owner's AIs, once", () => {
+		localStorage.setItem("rj.companion", "1");
+		expect(syncCompany("h_a", ["a_1", "a_2"])).toBe(true);
+		expect(companyOf("h_a")).toEqual(["a_1", "a_2"]);
+		setCompany("h_a", "a_1", false);
+		expect(syncCompany("h_a", ["a_1", "a_2"])).toBe(false);
+		expect(companyOf("h_a")).toEqual(["a_2"]);
+	});
+
+	test("off, or never set, nothing carries over", () => {
+		localStorage.setItem("rj.companion", "0");
+		expect(syncCompany("h_a", ["a_1"])).toBe(false);
+		expect(companyOf("h_a")).toEqual([]);
+	});
+
+	test("an AI deleted meanwhile is gone from the list", () => {
+		setCompany("h_a", "a_1", true);
+		setCompany("h_a", "a_2", true);
+		expect(syncCompany("h_a", ["a_2"])).toBe(true);
+		expect(companyOf("h_a")).toEqual(["a_2"]);
+		expect(syncCompany("h_a", ["a_2"])).toBe(false);
 	});
 });

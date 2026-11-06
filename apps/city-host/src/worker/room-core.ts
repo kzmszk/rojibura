@@ -15,6 +15,7 @@ import {
 	type Item,
 	type LeaveReason,
 	MAX_PATH_LENGTH,
+	OWN_AIS_HEAR,
 	PRESENCE_TIMEOUT_MS,
 	polylineLength,
 	RATE_VIOLATIONS_BEFORE_CLOSE,
@@ -153,6 +154,7 @@ export class RoomCore<C> {
 			blockedBetween: (a, b) => this.blockedBetween(a, b),
 			broadcastAbout: (m, msg, except, target, speech) => this.broadcastAbout(m, msg, except, target, speech),
 			contextFor: (m, now) => this.contextFor(m, now),
+			ownAisNear: (owner, now) => this.ownAisNear(owner, now),
 			notice: (conn, kind, message) => this.notice(conn, kind, message),
 		});
 		this.world = world;
@@ -291,10 +293,10 @@ export class RoomCore<C> {
 		else for (const ai of this.memberValues()) if (ai.ownerId === member.id) this.life.sendLife(ai, false);
 		if (member.coins !== undefined) this.transport.send(conn, { t: "WALLET", coins: member.coins });
 		this.broadcastAbout(member, { t: "JOINED", avatar: this.toState(member) }, conn);
-		// an AI whose owner is walking with company joins them at once
+		// an AI that stays by its owner joins them at once
 		if (member.kind === "ai") {
 			const owner = this.memberById(member.ownerId);
-			if (owner?.companion) {
+			if (owner && this.interactions.accompanying(member)) {
 				this.transport.send(conn, { t: "COMPANY", owner: owner.id, on: true });
 				// its mood goes up from now on
 				if (member.life) {
@@ -425,6 +427,7 @@ export class RoomCore<C> {
 		}
 		this.conversations.expireConversations(now);
 		this.interactions.settleSeatPlans(now);
+		this.interactions.keepCompany(now);
 		this.life.lifeTick(now);
 		this.conversations.expireCooldowns(now);
 	}
@@ -535,7 +538,7 @@ export class RoomCore<C> {
 				if (m.kind === "human" && off && m.together && now < m.together.until)
 					this.interactions.endTogether(m);
 				msg.t === "MOVE_PATH" ? this.movePath(conn, m, msg, now) : this.moveVel(conn, m, msg, now);
-				if (m.companion) this.interactions.accompany(m, now);
+				if (m.company) this.interactions.accompany(m, now);
 				// walking out of where one works or studies ends it
 				if (m.job && !this.life.inJobZone(m, m.job.zone, now)) this.life.stopJob(m, now);
 				return;
@@ -548,7 +551,7 @@ export class RoomCore<C> {
 				}
 				const err = msg.t === "FLY" ? this.fly(conn, m, msg.alt, now) : this.warp(conn, m, msg.to, now);
 				if (err) this.notice(conn, "rejected", err);
-				if (!err && m.companion) this.interactions.accompany(m, now);
+				if (!err && m.company) this.interactions.accompany(m, now);
 				if (m.job && !this.life.inJobZone(m, m.job.zone, now)) this.life.stopJob(m, now);
 				return;
 			}
@@ -670,7 +673,7 @@ export class RoomCore<C> {
 	get wakeAt(): number | undefined {
 		return this.interactions.wakeAt;
 	}
-	travel(who: Pick<Member, "id" | "kind" | "companion">, to: AreaId, at: string): void {
+	travel(who: Pick<Member, "id" | "kind" | "company">, to: AreaId, at: string): void {
 		this.interactions.travel(who, to, at);
 	}
 
@@ -900,7 +903,7 @@ export class RoomCore<C> {
 		const now = this.clock();
 		this.life.leaveActivity(conn, m, now);
 		// their AIs no longer walk with them
-		if (m.companion) this.interactions.tellCompany(m, false);
+		this.interactions.tellCompany(m, m.company ?? [], false);
 		// what they held stays where they were
 		this.life.dropHeld(m);
 		this.broadcastAbout(m, { t: "LEFT", id: m.id, reason });
@@ -908,6 +911,13 @@ export class RoomCore<C> {
 
 	memberById(id: AvatarId): Member | undefined {
 		return this.participants.get(id)?.member;
+	}
+
+	private ownAisNear(owner: Member, now: number): Member[] {
+		const at = this.positionOf(owner, now);
+		return [...this.memberValues()].filter(
+			(m) => m.kind === "ai" && m.ownerId === owner.id && dist(this.positionOf(m, now), at) <= OWN_AIS_HEAR,
+		);
 	}
 
 	memberFor(conn: C): Member | undefined {

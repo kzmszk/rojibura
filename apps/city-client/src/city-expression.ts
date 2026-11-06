@@ -60,6 +60,10 @@ export function showExpression(
 				attention.said(v.state.id, hostNow());
 			if (heard?.state.kind === "ai" && heard.state.ownerId === m.id)
 				attention.said(heard.state.id, hostNow());
+			// said to everyone: their own AIs close by listen, each of them (docs/prd.md 3.4.12)
+			if (!m.to && v?.state.kind === "human")
+				for (const a of avatars.values())
+					if (a.state.kind === "ai" && a.state.ownerId === m.id) attention.said(a.state.id, hostNow());
 			const to = m.to ? avatars.get(m.to)?.state.name : undefined;
 			addLog(`${v?.state.name ?? "?"}${to ? ` → ${to}` : ""}`, m.text, m.id === myId ? "mine" : "");
 			break;

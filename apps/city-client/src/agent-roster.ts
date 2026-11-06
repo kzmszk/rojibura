@@ -143,13 +143,17 @@ function store(key: string, value: string): void {
 	}
 }
 
-export function wantedAgents(ownerId: string): string[] {
+function storedIds(key: string): string[] {
 	try {
-		const v = JSON.parse(stored(wantedKey(ownerId)) ?? "[]") as unknown;
+		const v = JSON.parse(stored(key) ?? "[]") as unknown;
 		return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
 	} catch {
 		return [];
 	}
+}
+
+export function wantedAgents(ownerId: string): string[] {
+	return storedIds(wantedKey(ownerId));
 }
 
 export function setWanted(ownerId: string, agentId: string, on: boolean): void {
@@ -164,3 +168,36 @@ export function carryOverWanted(ownerId: string, agentId: string): void {
 
 export const selectedAgent = (ownerId: string) => stored(selectedKey(ownerId));
 export const keepSelected = (ownerId: string, agentId: string) => store(selectedKey(ownerId), agentId);
+
+// ---- which AIs stay by the owner, and which are free ----
+
+/** Per owner, like the AIs that come in with them. An AI not listed is free, so a new one starts out free. */
+const companyKey = (ownerId: string) => `rj.agent.company.${ownerId}`;
+/** Earlier versions: one setting for all the AIs of whoever used this browser. */
+const LEGACY_COMPANION_KEY = "rj.companion";
+
+export function companyOf(ownerId: string): string[] {
+	return storedIds(companyKey(ownerId));
+}
+
+export function setCompany(ownerId: string, agentId: string, on: boolean): void {
+	const rest = companyOf(ownerId).filter((id) => id !== agentId);
+	store(companyKey(ownerId), JSON.stringify(on ? [...rest, agentId] : rest));
+}
+
+/**
+ * Brings the list up to date with the owner's AIs: those of the earlier one setting all stay by them if it was on, and
+ * AIs deleted meanwhile are gone from it. True if it changed.
+ */
+export function syncCompany(ownerId: string, agents: string[]): boolean {
+	if (stored(companyKey(ownerId)) === null) {
+		if (stored(LEGACY_COMPANION_KEY) !== "1") return false;
+		store(companyKey(ownerId), JSON.stringify(agents));
+		return agents.length > 0;
+	}
+	const had = companyOf(ownerId);
+	const kept = had.filter((id) => agents.includes(id));
+	if (kept.length === had.length) return false;
+	store(companyKey(ownerId), JSON.stringify(kept));
+	return true;
+}

@@ -139,14 +139,19 @@ export interface Member extends JoinInfo {
 	cooldowns?: Record<AvatarId, number>;
 	/** Watching the usage dashboard: the adapter pushes USAGE to them. */
 	watchUsage?: boolean;
-	/** Humans: their own AIs walk with them (docs/prd.md 3.4.9). */
-	companion?: boolean;
+	/** Humans: those of their AIs that stay by them, whether here or not (docs/prd.md 3.4.9). The others are free. */
+	company?: AvatarId[];
 	/** Humans floating in the air (docs/prd.md 3.4.13): at this height (world Y); they move over everything. */
 	fly?: number;
 	/** Host time of their last WARP (docs/prd.md 3.4.14). */
 	warpedAt?: number;
 	/** Which way the avatar last walked (the host knows no facing): companions keep to its front. */
 	heading?: Vec2;
+	/**
+	 * Humans walking on with keys and company: nothing is heard of them while the keys stay as they are, so at this
+	 * host time their AIs are told how to go on (docs/prd.md 3.4.9).
+	 */
+	companyAgainAt?: number;
 	/** AIs: taking the owner to a place (docs/prd.md 3.4.10); walking with them again after `until` at last. */
 	lead?: { to: Vec2; place: string; until: number };
 	/** AIs: when it last asked its owner to come along (one ask per LEAD_INTERVAL_MS). */

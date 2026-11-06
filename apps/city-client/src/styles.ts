@@ -178,6 +178,8 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #bfd6e8; }
 .rj-agent-list { display: flex; flex-direction: column; gap: 4px; }
 .rj-agent button.rj-agent-item { display: flex; flex-direction: column; gap: 1px; text-align: left; padding: 6px 8px; background: #fff; color: #222; border-color: #d4d8e0; }
 .rj-agent button.rj-agent-item.on { border-color: #2f6fae; box-shadow: inset 0 0 0 1px #2f6fae; background: #f0f6fc; }
+.rj-agent-entry { display: flex; flex-direction: column; gap: 2px; }
+.rj-agent-stay { display: flex; align-items: center; gap: 4px; padding: 0 8px 4px; font-size: 12px; color: #333; cursor: pointer; }
 .rj-agent-item-head { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
 .rj-agent-item-trust { font-size: 11px; color: #555; white-space: nowrap; }
 .rj-agent-item-state { font-size: 12px; }

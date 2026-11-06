@@ -358,6 +358,8 @@ export class AvatarView {
 	/** Gliding down to the ground after floating. */
 	private landing = false;
 	private facing = 0;
+	/** How far down on its back it is lying now: 0 up, 1 flat (it follows the body, for the eyes' camera). */
+	private lainDown = 0;
 	private readonly isMe: boolean;
 	/** In the bath: clothes off and a swimsuit on (made the first time). */
 	private bathing = false;
@@ -943,6 +945,7 @@ export class AvatarView {
 			}
 			this.vrm.update(dt);
 		}
+		this.lainDown += ((this.lying ? this.backOnGround() : 0) - this.lainDown) * Math.min(1, dt * 8);
 		const thinking = this.state.status === "busy" && this.state.kind === "ai";
 		if (thinking && !this.bubble.classList.contains("show")) {
 			this.bubble.textContent = "…";
@@ -1079,15 +1082,39 @@ export class AvatarView {
 		return new THREE.Vector3(Math.sin(a) * Math.cos(down), Math.sin(down), Math.cos(a) * Math.cos(down));
 	}
 
-	/** Where the eyes are (world), for the first-person view. */
+	/** Lying on its back, or going down to (a body that has no such motion shows an emoji, and stands). */
+	get lying(): boolean {
+		const move = this.state.move;
+		return move.kind === "idle" && move.posture === "lie" && !!this.actions.lie;
+	}
+
+	/** How far down on its back it is lying now: 0 up, 1 flat. */
+	get lain(): number {
+		return this.lainDown;
+	}
+
+	/** How far its back has come down, by the bones as they are now: 0 upright, 1 flat. */
+	private backOnGround(): number {
+		const humanoid = this.vrm?.humanoid;
+		const head = humanoid?.getRawBoneNode("head");
+		const hips = humanoid?.getRawBoneNode("hips");
+		if (!head || !hips) return 0;
+		const spine = head.getWorldPosition(new THREE.Vector3()).sub(hips.getWorldPosition(new THREE.Vector3()));
+		const ahead = new THREE.Vector3(Math.sin(this.facing), 0, Math.cos(this.facing));
+		// (the head towards the back of where it faces; a little bent at the neck even when flat)
+		return Math.max(0, Math.min(1, -spine.normalize().dot(ahead) / 0.9));
+	}
+
+	/** Where the eyes are (world), for the first-person view: in front of the head, which is the sky lying on its back. */
 	eyePosition(): THREE.Vector3 {
 		const ahead = new THREE.Vector3(Math.sin(this.facing), 0, Math.cos(this.facing));
 		const head = this.vrm?.humanoid.getRawBoneNode("head");
+		const w = this.lainDown;
 		if (head)
 			return head
 				.getWorldPosition(new THREE.Vector3())
-				.add(new THREE.Vector3(0, 0.07, 0))
-				.addScaledVector(ahead, 0.09);
+				.add(new THREE.Vector3(0, 0.07 * (1 - w) + 0.09 * w, 0))
+				.addScaledVector(ahead, 0.09 * (1 - w) - 0.07 * w);
 		return this.root.position
 			.clone()
 			.add(new THREE.Vector3(0, 1.55, 0))

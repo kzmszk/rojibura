@@ -12,6 +12,7 @@ import {
 	type ClientToHost,
 	COMPANION_FREE,
 	COMPANION_FREE_STEP,
+	COMPANY_GAP,
 	DIARY_ASK_MS,
 	DIARY_TTL_MS,
 	dist,
@@ -23,6 +24,7 @@ import {
 	MAX_PATH_LENGTH,
 	MAX_PATH_POINTS,
 	MAX_SPEED,
+	type MoveState,
 	OFFER_REACH,
 	OFFER_TTL_MS,
 	polylineLength,
@@ -37,10 +39,19 @@ import {
 	type Vec2,
 	WALK_SPEED,
 } from "@rojibura/protocol";
+import {
+	assignPlaces,
+	joinPoint,
+	type Place,
+	placeAt,
+	placesFor,
+	placesToTry,
+	roomOnTheWay,
+} from "./company-formation.ts";
 import type { RoomLife } from "./room-life.ts";
 import type { RoomMovement } from "./room-movement.ts";
 import { type RoomSpace, remainingPath } from "./room-space.ts";
-import type { Member, Transport, World } from "./room-types.ts";
+import type { Member, Transport, Walkable, World } from "./room-types.ts";
 
 interface BodyRuntime {
 	lastBodyAt: number;
@@ -58,8 +69,17 @@ interface InteractionPort<C> {
 	notice(conn: C, kind: "rejected", message: string): void;
 	land(conn: C, member: Member, pos: Vec2, now: number): void;
 }
-const COMPANION_WALKING: Vec2 = [0.3, 0.9];
-const COMPANION_STANDING: Vec2 = [0.15, 0.8];
+/** Walking on with keys: how far on their AI goes at once (seconds), less if the way is not clear that far. */
+const COMPANY_HORIZONS = [30, 12, 6, 4, 2, 1];
+/**
+ * Told how to go on this long before it gets there, so it does not stop (ms); and not sooner than this, each time being
+ * an alarm (with a wall close ahead the owner is about to stop anyway).
+ */
+const COMPANY_AGAIN_EARLY_MS = 300;
+const COMPANY_AGAIN_MS = 2000;
+/** Going beside the owner's way, a leg with something in the way is cut in two up to so many times, down to this (m). */
+const COMPANY_CUTS = 4;
+const COMPANY_PIECE_M = 2;
 const LEAD_GRACE_MS = 2 * 60_000;
 const SEAT_COMPANY_NEAR = 3;
 const SEAT_FRONT = 0.5;
@@ -92,14 +112,27 @@ export class RoomInteractions<C> {
 	leave(id: AvatarId): void {
 		this.leads.delete(id);
 	}
+	/** Which of their AIs stay by them from now on; the others are free. */
 	companion(conn: C, m: Member, msg: Extract<ClientToHost, { t: "COMPANION" }>, now: number): void {
 		if (m.kind !== "human") return;
 		// also how the owner's page says a walk to a place is over (arrived, or they went their own way)
 		this.endLeads(m);
-		if (m.companion !== msg.on) this.tellCompany(m, msg.on);
-		m.companion = msg.on;
+		const had = m.company ?? [];
+		this.tellCompany(
+			m,
+			msg.ids.filter((id) => !had.includes(id)),
+			true,
+		);
+		this.tellCompany(
+			m,
+			had.filter((id) => !msg.ids.includes(id)),
+			false,
+		);
+		if (msg.ids.length > 0) m.company = msg.ids;
+		else delete m.company;
 		this.transport.persist(conn, m);
-		if (msg.on) this.accompany(m, now);
+		if (m.company) this.accompany(m, now);
+		else this.goOnAt(m, undefined);
 	}
 	action(conn: C, m: Member, msg: Extract<ClientToHost, { t: "ACTION" }>, now: number): void {
 		if (msg.target && !this.port.has(msg.target)) return;
@@ -126,7 +159,7 @@ export class RoomInteractions<C> {
 				...(face ? { face } : {}),
 				...(seat !== undefined ? { seat } : {}),
 			});
-			if (seat !== undefined && m.kind === "human" && m.companion) this.seatCompany(m, seat, now);
+			if (seat !== undefined && m.kind === "human" && m.company) this.seatCompany(m, seat, now);
 		}
 		this.port.broadcastAbout(
 			m,
@@ -201,7 +234,7 @@ export class RoomInteractions<C> {
 	}
 
 	/**
-	 * The owner sat on a seat while walking with company: each of their AIs close by walks to the nearest free seat
+	 * The owner sat on a seat: each of their AIs that stay by them walks to the nearest free seat
 	 * next to it and sits there when it arrives (`settleSeatPlans`); with no free seat it just stays beside them.
 	 */
 	private seatCompany(owner: Member, ownerSeat: number, now: number): void {
@@ -214,7 +247,7 @@ export class RoomInteractions<C> {
 			if (o.seatPlan) taken.add(o.seatPlan.seat);
 		}
 		for (const [conn, ai] of this.port.memberEntries()) {
-			if (ai.kind !== "ai" || ai.ownerId !== owner.id || this.togetherNow(ai, now)) continue;
+			if (!this.accompanying(ai) || ai.ownerId !== owner.id || this.togetherNow(ai, now)) continue;
 			const from = this.space.positionOf(ai, now);
 			let best: { i: number; d: number } | undefined;
 			seats.forEach((s, i) => {
@@ -234,11 +267,12 @@ export class RoomInteractions<C> {
 		}
 	}
 
-	/** The host time the next AI is due to sit down (for the alarm), if any. */
+	/** The host time the next AI is due to sit down or be told how to go on (for the alarm), if any. */
 	get wakeAt(): number | undefined {
 		let t: number | undefined;
 		for (const m of this.port.memberValues())
-			if (m.seatPlan && (t === undefined || m.seatPlan.at < t)) t = m.seatPlan.at;
+			for (const at of [m.seatPlan?.at, m.companyAgainAt])
+				if (at !== undefined && (t === undefined || at < t)) t = at;
 		return t;
 	}
 
@@ -396,10 +430,10 @@ export class RoomInteractions<C> {
 	 * Someone goes through a portal to area `to`, arriving at `at` (docs/prd.md 3.8.2): their AIs walking with
 	 * them come along (FOLLOW). `who` may be what a closed connection last persisted (its close says where to).
 	 */
-	travel(who: Pick<Member, "id" | "kind" | "companion">, to: AreaId, at: string): void {
-		if (who.kind !== "human" || !who.companion) return;
+	travel(who: Pick<Member, "id" | "kind" | "company">, to: AreaId, at: string): void {
+		if (who.kind !== "human") return;
 		for (const [ac, ai] of this.port.memberEntries())
-			if (ai.kind === "ai" && ai.ownerId === who.id)
+			if (ai.kind === "ai" && ai.ownerId === who.id && who.company?.includes(ai.id))
 				this.transport.send(ac, { t: "FOLLOW", owner: who.id, to, at });
 	}
 
@@ -466,21 +500,32 @@ export class RoomInteractions<C> {
 		const end = msg.path[msg.path.length - 1] as Vec2;
 		return (
 			polylineLength(msg.path) <= COMPANION_FREE_STEP &&
-			dist(end, this.space.positionOf(owner, now)) <= COMPANION_FREE
+			dist(end, this.space.positionOf(owner, now)) <= COMPANION_FREE &&
+			!this.anotherAiThere(m, end, now)
 		);
+	}
+
+	/** One of `m`'s owner's other AIs is, or is on its way to, right where `m` would stand. */
+	private anotherAiThere(m: Member, spot: Vec2, now: number): boolean {
+		for (const o of this.port.memberValues()) {
+			if (o.id === m.id || o.kind !== "ai" || o.ownerId !== m.ownerId) continue;
+			const there = o.move.kind === "path" ? (o.move.path[o.move.path.length - 1] as Vec2) : null;
+			if (dist(spot, there ?? this.space.positionOf(o, now)) < COMPANY_GAP) return true;
+		}
+		return false;
 	}
 
 	// ---- walking with your AIs (docs/prd.md 3.4.9) ----------------------------
 
-	/** True if `m` is an AI whose owner is here and walking with company. */
+	/** True if `m` is an AI whose owner is here, and it stays by them. */
 	accompanying(m: Member): boolean {
-		return m.kind === "ai" && !!this.port.memberById(m.ownerId)?.companion;
+		return m.kind === "ai" && !!this.port.memberById(m.ownerId)?.company?.includes(m.id);
 	}
 
 	/**
-	 * Moves the owner's AIs to keep beside them, one to each side: along the owner's path shifted sideways (or,
-	 * walking with keys, to where the owner will be a few seconds on), at the speed that gets there when the
-	 * owner does, and, when the owner stops, at their side.
+	 * Moves the owner's AIs to keep beside them, each in a place of its own (company-formation.ts): along the owner's
+	 * path shifted sideways (or, walking with keys, to where the owner will be some seconds on), at the speed that gets
+	 * there when the owner does, and, when the owner stops, at their side.
 	 */
 	accompany(owner: Member, now: number): void {
 		const move = owner.move;
@@ -493,10 +538,9 @@ export class RoomInteractions<C> {
 			owner.heading = move.dir;
 		}
 		const ahead = owner.heading ?? [0, 1];
-		let slot = 0;
+		const walkers: [C, Member][] = [];
 		for (const [conn, ai] of this.port.memberEntries()) {
-			if (ai.kind !== "ai" || ai.ownerId !== owner.id) continue;
-			const side = slot++ % 2 === 0 ? 1 : -1;
+			if (ai.ownerId !== owner.id || !this.accompanying(ai)) continue;
 			delete ai.seatPlan;
 			// taking the owner somewhere: it leads, the owner follows (until it is over, or long past)
 			if (ai.lead && now < ai.lead.until) continue;
@@ -506,37 +550,70 @@ export class RoomInteractions<C> {
 				delete ai.lead;
 				this.transport.persist(conn, ai);
 			}
-			this.companionStep(conn, ai, owner, side, ahead, now);
+			walkers.push([conn, ai]);
 		}
+		const pose = poseAt(move, now);
+		const places = assignPlaces(
+			walkers.map(([, ai]) => this.space.positionOf(ai, now)),
+			pose.pos,
+			pose.moving ? pose.dir : ahead,
+			placesFor(walkers.length, pose.moving ? "walking" : "standing"),
+		);
+		// nobody walks through the owner, or through those already sent on their way
+		const others: MoveState[] = [move];
+		let soonest = Number.POSITIVE_INFINITY;
+		for (const [i, [conn, ai]] of walkers.entries()) {
+			const ms = this.companionStep(conn, ai, owner, places[i] as Place, ahead, now, others);
+			others.push(ai.move);
+			soonest = Math.min(soonest, Math.max(ms - COMPANY_AGAIN_EARLY_MS, COMPANY_AGAIN_MS));
+		}
+		this.goOnAt(owner, move.kind === "vel" && pose.moving && walkers.length > 0 ? now + soonest : undefined);
+	}
+
+	/** At that time the owner's AIs are told how to go on (the alarm wakes the room for it), or not any more. */
+	private goOnAt(owner: Member, at: number | undefined): void {
+		if (at === owner.companyAgainAt) return;
+		if (at === undefined) delete owner.companyAgainAt;
+		else owner.companyAgainAt = at;
+		const conn = this.port.connectionFor(owner.id);
+		if (conn !== undefined) this.transport.persist(conn, owner);
+	}
+
+	/** Owners who have walked on with keys as far as their AIs were told: on from there, beside them. */
+	keepCompany(now: number): void {
+		for (const owner of [...this.port.memberValues()])
+			if (owner.companyAgainAt !== undefined && owner.companyAgainAt <= now) {
+				this.goOnAt(owner, undefined);
+				if (owner.company) this.accompany(owner, now);
+			}
 	}
 
 	/** The owner went somewhere at once (WARP): the AIs walking with them are there beside them too. */
 	bringCompany(owner: Member, now: number): void {
-		if (!owner.companion) return;
+		if (!owner.company) return;
 		this.endLeads(owner);
 		const at = this.space.positionOf(owner, now);
-		let slot = 0;
-		for (const [conn, ai] of this.port.memberEntries()) {
-			if (ai.kind !== "ai" || ai.ownerId !== owner.id) continue;
-			const side = slot++ % 2 === 0 ? 1 : -1;
+		const heading = owner.heading ?? [0, 1];
+		const company = [...this.port.memberEntries()].filter(
+			([, ai]) => ai.ownerId === owner.id && this.accompanying(ai),
+		);
+		const places = placesFor(company.length, "standing");
+		for (const [i, [conn, ai]] of company.entries()) {
+			const walk = this.space.walkOf(ai);
+			const place = places[i] as Place;
+			const there = placesToTry(place)
+				.map((p) => placeAt(at, heading, p))
+				.find((p) => walk.isWalkable(p));
 			this.life.stopDoing(conn, ai, now);
-			const there = this.beside(
-				at,
-				owner.heading ?? [0, 1],
-				side,
-				COMPANION_STANDING,
-				false,
-				this.space.walkOf(ai),
-			);
-			this.port.land(conn, ai, there ?? at, now);
+			this.port.land(conn, ai, there ?? walk.closestPoint(placeAt(at, heading, place)), now);
 		}
 	}
 
-	/** Tells the owner's AIs here that they walk with the owner now, or no longer. */
-	tellCompany(owner: Member, on: boolean): void {
+	/** Tells these of the owner's AIs, those here, that they stay by the owner now, or no longer. */
+	tellCompany(owner: Member, ids: readonly AvatarId[], on: boolean): void {
 		const now = this.port.clock();
 		for (const [conn, ai] of this.port.memberEntries())
-			if (ai.kind === "ai" && ai.ownerId === owner.id) {
+			if (ai.kind === "ai" && ai.ownerId === owner.id && ids.includes(ai.id)) {
 				this.transport.send(conn, { t: "COMPANY", owner: owner.id, on });
 				// its mood goes up from now on (or no more)
 				if (on && ai.life) ai.companyAt = now;
@@ -559,7 +636,7 @@ export class RoomInteractions<C> {
 	askLead(conn: C, m: Member, msg: Extract<ClientToHost, { t: "LEAD" }>, now: number): string | null {
 		const owner = m.kind === "ai" ? this.port.memberById(m.ownerId) : undefined;
 		const oc = owner ? this.port.connectionFor(owner.id) : undefined;
-		if (!owner || oc === undefined || !owner.companion) return "オーナーと歩いているときだけ誘えます";
+		if (!owner || oc === undefined || !this.accompanying(m)) return "オーナーと歩いているときだけ誘えます";
 		if (m.leadAskedAt !== undefined && now - m.leadAskedAt < LEAD_INTERVAL_MS)
 			return "さっき誘ったばかりです";
 		const here = this.space.positionOf(m, now);
@@ -627,95 +704,140 @@ export class RoomInteractions<C> {
 	}
 
 	/**
-	 * Just ahead of `at` facing `ahead`, to the right (side 1) or the left (-1), as far as `slot` says (walking
-	 * or standing); `strict`: there or nowhere.
+	 * Sends one AI to its place: the first way there that keeps clear of `others`, or, if none does, the one that comes
+	 * nearest to it. How long the way takes (ms; 0 if it did not move, or the owner has stopped).
 	 */
-	private beside(
-		at: Vec2,
+	private companionStep(
+		conn: C,
+		ai: Member,
+		owner: Member,
+		place: Place,
 		ahead: Vec2,
-		side: number,
-		slot = COMPANION_WALKING,
-		strict = false,
-		walk = this.space.terrain,
-	): Vec2 | null {
-		// facing +z the right hand is on -x: right = (-ahead.z, ahead.x)
-		const right: Vec2 = [-ahead[1], ahead[0]];
-		const [front, aside] = slot;
-		const p: Vec2 = [
-			at[0] + ahead[0] * front + right[0] * aside * side,
-			at[1] + ahead[1] * front + right[1] * aside * side,
-		];
-		if (walk.isWalkable(p)) return p;
-		return strict ? null : walk.closestPoint(p);
-	}
-
-	private companionStep(conn: C, ai: Member, owner: Member, side: number, ahead: Vec2, now: number): void {
+		now: number,
+		others: MoveState[],
+	): number {
 		const from = this.space.positionOf(ai, now);
-		const om = owner.move;
 		const walk = this.space.walkOf(ai);
-		let path: Vec2[] | null = null;
-		let ms = 0;
-		if (om.kind === "path" && poseAt(om, now).moving) {
-			// the owner's way, shifted aside where that is walkable
-			const rest = remainingPath(om, now);
-			const steps = rest.slice(1).map((p, i) => {
-				const a = rest[i] as Vec2;
-				const d = dist(a, p);
-				const dir: Vec2 = d > 1e-3 ? [(p[0] - a[0]) / d, (p[1] - a[1]) / d] : ahead;
-				const last = i === rest.length - 2;
-				return (
-					(last
-						? this.beside(p, dir, side, COMPANION_WALKING, false, walk)
-						: this.beside(p, dir, side, COMPANION_WALKING, true, walk)) ?? p
-				);
-			});
-			path = [from, ...steps].slice(0, MAX_PATH_POINTS);
-			ms = (polylineLength(rest) / om.speed) * 1000;
-		} else if (om.kind === "vel" && om.speed > 0) {
-			// keys: where the owner will be a few seconds on, sooner if the way there is not clear
-			const walked = (now - om.at) / 1000;
-			for (const s of [6, 4, 2, 1]) {
-				const go = om.speed * (walked + s);
-				// where the owner's own way is still clear that far on
-				const ahead: Vec2 = [om.pos[0] + om.dir[0] * go, om.pos[1] + om.dir[1] * go];
-				if (!this.space.walkOf(owner).validatePath([this.space.positionOf(owner, now), ahead])) continue;
-				const there = this.beside(ahead, om.dir, side, COMPANION_WALKING, false, walk);
-				if (there) {
-					path = [from, there];
-					ms = s * 1000;
-					break;
-				}
-			}
-		} else {
-			// the owner has stopped: it comes to their side
-			const there = this.beside(
-				this.space.positionOf(owner, now),
-				ahead,
-				side,
-				COMPANION_STANDING,
-				false,
-				walk,
+		let best: { path: Vec2[]; ms: number; speed: number; room: number } | null = null;
+		for (const tried of placesToTry(place)) {
+			const way = this.companionWay(from, owner, tried, ahead, walk, now);
+			if (!way) continue;
+			const length = polylineLength(way.path);
+			// there already, as near as it can be
+			if (length < 0.15) return 0;
+			// as long as the owner takes; when the owner has stopped, a walk (a run if far behind)
+			const speed = Math.min(
+				MAX_SPEED,
+				Math.max(0.5, way.ms > 0 ? (length / way.ms) * 1000 : length > 6 ? 4 : WALK_SPEED),
 			);
-			if (there) path = [from, there];
+			const room = roomOnTheWay(way.path, speed, now, others);
+			if (!best || room > best.room) best = { ...way, speed, room };
+			if (room >= COMPANY_GAP) break;
 		}
-		// a fountain or a wall in the way: find a way round it to the same place, there at the same time
-		if (path && path.length >= 2 && !walk.validatePath(path)) {
-			const to = path[path.length - 1] as Vec2;
-			const round = walk.findPath?.(walk.closestPoint(from), walk.closestPoint(to));
-			path = round && round.length >= 2 ? [from, ...round.slice(1)].slice(0, MAX_PATH_POINTS) : null;
+		if (!best) {
+			// nothing fits at all: as near to its place as there is ground
+			const to = walk.closestPoint(placeAt(this.space.positionOf(owner, now), ahead, place));
+			const path = this.wayRound(from, to, walk);
+			if (!path || polylineLength(path) < 0.15) return 0;
+			best = { path, ms: 0, speed: WALK_SPEED, room: 0 };
 		}
-		if (!path || path.length < 2 || polylineLength(path) > MAX_PATH_LENGTH || !walk.validatePath(path))
-			return;
-		const length = polylineLength(path);
-		if (length < 0.15) return;
-		// as long as the owner takes; when the owner has stopped, a walk (a run if far behind)
-		const speed = ms > 0 ? (length / ms) * 1000 : length > 6 ? 4 : WALK_SPEED;
 		this.life.stopDoing(conn, ai, now);
 		this.port.movement.commit(conn, ai, {
 			kind: "path",
-			path,
-			speed: this.life.speedFor(ai, Math.min(MAX_SPEED, Math.max(0.5, speed)), now),
+			path: best.path,
+			speed: this.life.speedFor(ai, best.speed, now),
 			at: now,
 		});
+		return best.ms;
+	}
+
+	/** The way from `from` to a place by the owner, and how long the owner takes to get there (ms), or null if not there. */
+	private companionWay(
+		from: Vec2,
+		owner: Member,
+		place: Place,
+		ahead: Vec2,
+		walk: Walkable,
+		now: number,
+	): { path: Vec2[]; ms: number } | null {
+		const om = owner.move;
+		const here = this.space.positionOf(owner, now);
+		const rest = om.kind === "path" && poseAt(om, now).moving ? remainingPath(om, now) : [];
+		if (om.kind === "path" && rest.length >= 2) {
+			const path = this.shiftedWay(from, rest, place, ahead, walk);
+			return path && { path, ms: (polylineLength(rest) / om.speed) * 1000 };
+		}
+		if (om.kind === "vel" && om.speed > 0) {
+			// keys: where the owner will be some seconds on, sooner if the way there is not clear
+			const walked = (now - om.at) / 1000;
+			for (const s of COMPANY_HORIZONS) {
+				const go = om.speed * (walked + s);
+				const end: Vec2 = [om.pos[0] + om.dir[0] * go, om.pos[1] + om.dir[1] * go];
+				if (!this.space.walkOf(owner).validatePath([here, end])) continue;
+				const there = placeAt(end, om.dir, place);
+				const join = joinPoint(from, here, om.dir, om.speed * s, place);
+				const path = join && walk.isWalkable(join) ? [from, join, there] : [from, there];
+				if (polylineLength(path) <= MAX_PATH_LENGTH && walk.validatePath(path)) return { path, ms: s * 1000 };
+			}
+			return null;
+		}
+		// the owner has stopped: it comes to their side
+		const there = placeAt(here, ahead, place);
+		if (!walk.isWalkable(there)) return null;
+		const path = this.wayRound(from, there, walk);
+		return path && polylineLength(path) <= MAX_PATH_LENGTH ? { path, ms: 0 } : null;
+	}
+
+	/**
+	 * The owner's way shifted to a place beside it: soon out to that side, and beside each of its legs as far as there
+	 * is ground for it. Something in the way on one leg is gone round or through as closely as it takes, out to the side
+	 * again right after it, so that it does not walk in line with the owner all that leg. Null if the end of the way
+	 * has no ground for the place, or there is no way there.
+	 */
+	private shiftedWay(from: Vec2, rest: Vec2[], place: Place, ahead: Vec2, walk: Walkable): Vec2[] | null {
+		const way: Vec2[] = [from];
+		/** Goes beside the owner's way from `a` to `b`, in pieces if it cannot go straight; whether it got to `b`. */
+		const beside = (a: Vec2, b: Vec2, dir: Vec2, cuts: number): boolean => {
+			const spot = placeAt(b, dir, place);
+			const here = way[way.length - 1] as Vec2;
+			const ground = walk.isWalkable(spot);
+			if (ground && walk.validatePath([here, spot]) && way.length < MAX_PATH_POINTS) {
+				way.push(spot);
+				return true;
+			}
+			if (cuts > 0 && dist(a, b) > COMPANY_PIECE_M) {
+				const mid: Vec2 = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+				beside(a, mid, dir, cuts - 1);
+				return beside(mid, b, dir, cuts - 1);
+			}
+			const round = ground ? this.wayRound(here, spot, walk) : null;
+			if (!round || way.length + round.length - 1 > MAX_PATH_POINTS) return false;
+			way.push(...round.slice(1));
+			return true;
+		};
+		const start = rest[0] as Vec2;
+		const next = rest[1] as Vec2;
+		const firstLeg = dist(start, next);
+		const first: Vec2 =
+			firstLeg > 1e-3 ? [(next[0] - start[0]) / firstLeg, (next[1] - start[1]) / firstLeg] : ahead;
+		const join = joinPoint(from, start, first, firstLeg, place);
+		if (join && walk.validatePath([from, join])) way.push(join);
+		let arrived = false;
+		for (let i = 1; i < rest.length; i++) {
+			const a = rest[i - 1] as Vec2;
+			const b = rest[i] as Vec2;
+			const d = dist(a, b);
+			arrived = beside(a, b, d > 1e-3 ? [(b[0] - a[0]) / d, (b[1] - a[1]) / d] : ahead, COMPANY_CUTS);
+		}
+		return arrived && polylineLength(way) <= MAX_PATH_LENGTH ? way : null;
+	}
+
+	/** Straight from `from` to `to`, or round whatever is in the way; null if there is no way. */
+	private wayRound(from: Vec2, to: Vec2, walk: Walkable): Vec2[] | null {
+		if (walk.validatePath([from, to])) return [from, to];
+		const round = walk.findPath?.(walk.closestPoint(from), walk.closestPoint(to));
+		if (!round || round.length < 2) return null;
+		const path = [from, ...round.slice(1)].slice(0, MAX_PATH_POINTS);
+		return walk.validatePath(path) ? path : null;
 	}
 }

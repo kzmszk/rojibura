@@ -14,6 +14,7 @@ import {
 	type BodyPart,
 	type BudgetLevel,
 	COMPANION_FREE,
+	COMPANY_GAP,
 	cannotStart,
 	cityTime,
 	clockText,
@@ -31,6 +32,7 @@ import {
 	MAX_SAY_LENGTH,
 	MOTIONS,
 	type Motion,
+	OWN_AIS_HEAR,
 	pathLeg,
 	polylineLength,
 	SHOP_REACH,
@@ -316,6 +318,8 @@ export class Resident {
 				// talk addressed to the resident comes as ADDRESSED; other people's conversations are not its business
 				if (msg.to) return;
 				const a = this.near(msg.id);
+				// (so does what its owner says to everyone, close by)
+				if (a && msg.id === this.world.self?.ownerId && a.distance <= OWN_AIS_HEAR) return;
 				if (a)
 					this.push(`${this.who(a.avatar, a.distance)}がみんなに向かって言った: 「${clean(msg.text, 200)}」`);
 				return;
@@ -476,7 +480,8 @@ export class Resident {
 		const fresh = this.conversations.recordAddress(msg.from, msg.convId, clean(msg.text, 120));
 		this.privacy.add(msg.from, msg.text);
 		this.known.set(msg.from, name);
-		let line = `${from ? this.who(from, this.distanceTo(msg.from)) : `${name}（id ${msg.from}）`}があなたに話しかけた: 「${clean(msg.text, 200)}」`;
+		const heard = msg.everyone ? "そばにいるAIみんなに話しかけた" : "あなたに話しかけた";
+		let line = `${from ? this.who(from, this.distanceTo(msg.from)) : `${name}（id ${msg.from}）`}が${heard}: 「${clean(msg.text, 200)}」`;
 		if (msg.maxTurns) {
 			const left = msg.maxTurns - msg.turn;
 			line += left <= 1 ? "（この会話は次の返事で終わる）" : `（この会話はあと${left}回ほどで終わる）`;
@@ -1354,11 +1359,11 @@ export class Resident {
 		if (company && to.id !== company) return `いまは${this.nameOf(company)}のそばを歩いている。`;
 		if (company && distance > COMPANION_FREE)
 			return `${this.nameOf(company)}から${COMPANION_FREE}mより離れては立てない。`;
-		const ms = this.approach(to, distance);
+		// (closer than this only to touch them, with move_body: the bodies would overlap)
+		const apart = Math.max(COMPANY_GAP, distance);
+		const ms = this.approach(to, apart);
 		if (typeof ms === "string") return ms;
-		return ms === 0
-			? "もうその距離にいる。"
-			: `${clean(to.name, 24)}から${Math.max(0.3, distance)}mのところへ歩いた。`;
+		return ms === 0 ? "もうその距離にいる。" : `${clean(to.name, 24)}から${apart}mのところへ歩いた。`;
 	}
 
 	// ---- helpers --------------------------------------------------------------

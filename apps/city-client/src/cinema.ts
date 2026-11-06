@@ -6,6 +6,7 @@ import type { Vec2 } from "@rojibura/protocol";
 import * as THREE from "three";
 import type { AvatarView } from "./avatars.ts";
 import { Director, type Looks, type Shot, type Subjects } from "./director.ts";
+import { lyingSight, type Sight, sightBetween, steadyUp } from "./lying-view.ts";
 import type { CityScene } from "./scene.ts";
 
 /** A layer pair: what only the wearer's eyes see, and what only others see (its head). */
@@ -207,26 +208,29 @@ export class Cinema {
 		}
 	}
 
-	/** Places the three cameras for this frame. `look`: where your own eyes look (a unit vector). */
-	update(me: AvatarView, look: THREE.Vector3, company: Company, dt: number, now: number): void {
+	/** Places the three cameras for this frame. `sight`: where your own eyes look. */
+	update(me: AvatarView, sight: Sight, company: Company, dt: number, now: number): void {
 		if (!this.on) return;
 		const pair = this.showEyesOf(company.partner);
 		this.film(me, company, dt, now);
 		this.mine.moveTo(me, dt);
 		me.readyInside(MY_LAYERS);
 		const my = this.mine.camera;
-		my.lookAt(my.position.clone().add(look));
+		my.up.copy(sight.up);
+		my.lookAt(my.position.clone().add(sight.look));
 		const partner = company.partner;
 		if (partner && pair) {
 			partner.readyInside(pair);
 			this.ai.moveTo(partner, dt);
-			const want = partner.sightDirection();
-			if (this.aiLookStarted) this.aiLook.lerp(want, ease(dt, AI_TURN_S)).normalize();
+			// (lying on its back, it looks at the sky too)
+			const want = sightBetween(partner.sightDirection(), lyingSight(partner.heading), partner.lain);
+			if (this.aiLookStarted) this.aiLook.lerp(want.look, ease(dt, AI_TURN_S)).normalize();
 			else {
-				this.aiLook.copy(want);
+				this.aiLook.copy(want.look);
 				this.aiLookStarted = true;
 			}
 			const their = this.ai.camera;
+			their.up.copy(steadyUp(this.aiLook, want.up));
 			their.lookAt(their.position.clone().add(this.aiLook));
 		}
 	}
